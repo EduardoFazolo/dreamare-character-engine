@@ -242,8 +242,9 @@ export function randomize(base) {
   p.clay = rnd(0.1, 0.8);
   p.sag = Math.random() < 0.2 ? rnd(0.5, 1.8) : rnd(0, 0.3);
   p.sleeveLen = Math.random() < 0.7 ? 1 : pick([0.1, 0.35, 0.5]);
-  p.bottomType = Math.random() < 0.25 ? 'skirt' : 'pants';
-  p.pantsLen = Math.random() < 0.8 ? 1 : pick([0.25, 0.5]);
+  p.bottomType = Math.random() < 0.15 ? 'skirt' : 'pants';
+  // skirts mostly knee to mid-calf (a full-length robe reads as fused pants), robes stay possible
+  p.pantsLen = p.bottomType === 'skirt' ? (Math.random() < 0.2 ? 1 : rnd(0.2, 0.65)) : Math.random() < 0.8 ? 1 : pick([0.25, 0.5]);
   p.looseness = Math.random() < 0.2 ? rnd(0.5, 1) : rnd(0, 0.3);
   p.bodyGrime = rnd(0.1, 0.7);
   p.hat = pick(['none', 'none', 'cowboy', 'bowler']);

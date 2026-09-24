@@ -56,8 +56,9 @@ function vnoise(x, y, z, s) {
 // prim: { type: 'cone'|'ellipsoid'|'box', matrix: Matrix4 (joint local -> model), k, soft, ...params }
 export class BodySDF {
   // pad: extra evaluated margin around the body (room for clothing shells); join: limb->torso blend
-  constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18 } = {}) {
-    this.inflate = inflate; this.clay = clay; this.sag = sag; this.seed = seed; this.join = join;
+  // sagFloor: soft tissue can droop down to here but not below (no flesh webbing between the legs)
+  constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18, sagFloor = -Infinity } = {}) {
+    this.inflate = inflate; this.clay = clay; this.sag = sag; this.seed = seed; this.join = join; this.sagFloor = sagFloor;
     const pad = inflate + clay * 0.12 + extra;
     this.prims = prims.map((p) => {
       const inv = p.matrix.clone().invert().elements; // model -> local, column-major
@@ -71,7 +72,9 @@ export class BodySDF {
     for (const p of this.prims) this.bounds.union(p.box);
   }
 
-  evalList(x, y, z, list) {
+  // exclude: a limb group to leave out (each leg is sculpted in a pass where the other doesn't exist)
+  // out: if given, also writes [value without legA, value without legB] from the same evaluation
+  evalList(x, y, z, list, exclude = null, out = null) {
     // torso prims smooth-union together; each limb group smooth-unions with the torso;
     // limb groups combine with a hard min, so left/right legs (and feet) never web together
     let torso = 1e3;
@@ -88,25 +91,39 @@ export class BodySDF {
       else if (p.type === 'ellipsoid') {
         // sag: soft tissue stretches downward below its center, fading out near the ground
         if (p.soft && this.sag && ly < p.c[1]) {
-          const sag = this.sag * Math.min(1, Math.max(0, (y - 0.5) / 1.2));
+          const sag = this.sag * Math.min(1, Math.max(0, (y - 0.5) / 1.2)) * Math.min(1, Math.max(0, (y - this.sagFloor) / 0.4));
           ly = p.c[1] + (ly - p.c[1]) / (1 + sag);
         }
         v = sdEllipsoid(lx, ly, lz, p.c, p.r);
       } else v = sdRoundBox(lx, ly, lz, p.c, p.b, p.round);
-      if (!p.rigid) v -= this.inflate; // feet keep their exact size so soles stay on the ground
+      // fat mostly lands on the torso; limbs get less so legs don't swell into one column
+      // (feet keep their exact size so soles stay on the ground)
+      if (!p.rigid) v -= this.inflate * (!p.group || p.group === 'torso' ? 1 : p.group.startsWith('leg') ? 0.4 : 0.6);
       if (!p.group || p.group === 'torso') torso = smin(torso, v, p.k);
       else groups.set(p.group, smin(groups.has(p.group) ? groups.get(p.group) : 1e3, v, p.k));
     }
-    let d = torso;
-    for (const g of groups.values()) d = Math.min(d, smin(torso, g, this.join));
+    let d = torso, noA = torso, noB = torso;
+    for (const [name, g] of groups) {
+      const v = smin(torso, g, this.join);
+      if (name !== exclude) d = Math.min(d, v);
+      if (name !== 'legA') noA = Math.min(noA, v);
+      if (name !== 'legB') noB = Math.min(noB, v);
+    }
+    let n = 0;
     if (this.clay) {
       const s = this.seed;
-      d += this.clay * Math.min(1, Math.max(0, (y - 0.25) / 0.6)) * (0.09 * (vnoise(x * 1.6, y * 1.6, z * 1.6, s) - 0.5) + 0.035 * (vnoise(x * 5, y * 5, z * 5, s + 7) - 0.5));
+      n = this.clay * Math.min(1, Math.max(0, (y - 0.25) / 0.6)) * (0.09 * (vnoise(x * 1.6, y * 1.6, z * 1.6, s) - 0.5) + 0.035 * (vnoise(x * 5, y * 5, z * 5, s + 7) - 0.5));
     }
-    return d;
+    if (out) { out[0] = noA + n; out[1] = noB + n; }
+    return d + n;
   }
 
   eval(x, y, z) { return this.evalList(x, y, z, this.prims); }
+
+  // the body as seen by one leg's pass
+  view(exclude) {
+    return { eval: (x, y, z) => this.evalList(x, y, z, this.prims, exclude), gradient(x, y, z) { return gradientOf(this, x, y, z); } };
+  }
 
   gradient(x, y, z) { return gradientOf(this, x, y, z); }
 }
@@ -159,8 +176,8 @@ export function polygonize(sdf, cell) {
 }
 
 // derive another field (a garment) on the same grid from the sampled body values
-export function deriveGrid(grid, garment) {
-  const { nx, ny, nz, o, cell, val } = grid, out = new Float32Array(val.length);
+export function deriveGrid(grid, garment, val = grid.val) {
+  const { nx, ny, nz, o, cell } = grid, out = new Float32Array(val.length);
   for (let k = 0, i3 = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, i3++) {
     out[i3] = val[i3] >= 999 ? 1e3 : garment.fromBody(val[i3], o.x + i * cell, o.y + j * cell, o.z + k * cell);
   }
@@ -171,8 +188,9 @@ export function sampleGrid(sdf, cell) {
   const b = sdf.bounds, o = b.min;
   const nx = Math.ceil((b.max.x - o.x) / cell) + 2, ny = Math.ceil((b.max.y - o.y) / cell) + 2, nz = Math.ceil((b.max.z - o.z) / cell) + 2;
   const val = new Float32Array(nx * ny * nz).fill(1e3);
+  const valL = new Float32Array(nx * ny * nz).fill(1e3), valR = new Float32Array(nx * ny * nz).fill(1e3);
   const idx = (i, j, k) => i + nx * (j + ny * k);
-  const B = 8, tmp = new THREE.Box3(), lo = new THREE.Vector3(), hi = new THREE.Vector3();
+  const B = 8, tmp = new THREE.Box3(), lo = new THREE.Vector3(), hi = new THREE.Vector3(), two = [0, 0];
   for (let bk = 0; bk < nz; bk += B) for (let bj = 0; bj < ny; bj += B) for (let bi = 0; bi < nx; bi += B) {
     lo.set(o.x + bi * cell, o.y + bj * cell, o.z + bk * cell);
     hi.set(o.x + (bi + B) * cell, o.y + (bj + B) * cell, o.z + (bk + B) * cell);
@@ -180,13 +198,17 @@ export function sampleGrid(sdf, cell) {
     const list = sdf.prims.filter((p) => p.box.intersectsBox(tmp));
     if (!list.length) continue;
     for (let k = bk; k <= Math.min(bk + B, nz - 1); k++) for (let j = bj; j <= Math.min(bj + B, ny - 1); j++) for (let i = bi; i <= Math.min(bi + B, nx - 1); i++) {
-      val[idx(i, j, k)] = sdf.evalList(o.x + i * cell, o.y + j * cell, o.z + k * cell, list);
+      const at = idx(i, j, k);
+      val[at] = sdf.evalList(o.x + i * cell, o.y + j * cell, o.z + k * cell, list, null, two);
+      valL[at] = two[0]; // left pass (+x): the right leg (legA) doesn't exist
+      valR[at] = two[1]; // right pass (-x): the left leg (legB) doesn't exist
     }
   }
-  return { nx, ny, nz, o, cell, val };
+  return { nx, ny, nz, o, cell, val, valL, valR };
 }
 
-export function surfaceNets(grid, val, field) {
+// keep(x): optional filter on a quad's edge-midpoint x (used to take one body half per pass)
+export function surfaceNets(grid, val, field, keep = null) {
   const { nx, ny, nz, o, cell } = grid;
   const idx = (i, j, k) => i + nx * (j + ny * k);
 
@@ -221,17 +243,67 @@ export function surfaceNets(grid, val, field) {
   };
   for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
     const inside = val[idx(i, j, k)] < 0;
+    const x0 = o.x + i * cell;
     // edge along x from corner (i,j,k): cells sharing it differ in j,k
-    if (inside !== (val[idx(i + 1, j, k)] < 0))
+    if (inside !== (val[idx(i + 1, j, k)] < 0) && (!keep || keep(x0 + cell / 2)))
       quad(cellVert[idx(i, j, k)], cellVert[idx(i, j - 1, k)], cellVert[idx(i, j - 1, k - 1)], cellVert[idx(i, j, k - 1)], inside);
-    if (inside !== (val[idx(i, j + 1, k)] < 0))
+    if (inside !== (val[idx(i, j + 1, k)] < 0) && (!keep || keep(x0)))
       quad(cellVert[idx(i, j, k)], cellVert[idx(i, j, k - 1)], cellVert[idx(i - 1, j, k - 1)], cellVert[idx(i - 1, j, k)], inside);
-    if (inside !== (val[idx(i, j, k + 1)] < 0))
+    if (inside !== (val[idx(i, j, k + 1)] < 0) && (!keep || keep(x0)))
       quad(cellVert[idx(i, j, k)], cellVert[idx(i - 1, j, k)], cellVert[idx(i - 1, j - 1, k)], cellVert[idx(i, j - 1, k)], inside);
   }
   const positions = new Float32Array(verts), indices = new Uint32Array(tris);
   orientOutward(field, positions, indices);
   return { positions, indices };
+}
+
+// Legs sculpted separately: the left half (+x) comes from the pass without the right leg and vice
+// versa, so the two legs can never be bridged by one grid cell. Both passes contain the same torso,
+// so the halves meet at the centerline and are welded there.
+// seamMinY: only the torso needs welding; below it (between the legs) nothing may be joined
+export function splitNets(grid, valLeft, valRight, fieldLeft, fieldRight, seamMinY = -Infinity) {
+  const a = surfaceNets(grid, valLeft, fieldLeft, (x) => x >= 0);
+  const b = surfaceNets(grid, valRight, fieldRight, (x) => x < 0);
+  return weldSeam(a, b, grid.cell, seamMinY);
+}
+
+function weldSeam(a, b, cell, seamMinY) {
+  const na = a.positions.length / 3, tol = cell * 0.75, band = cell * 1.01;
+  const P = new Float32Array(a.positions.length + b.positions.length);
+  P.set(a.positions); P.set(b.positions, a.positions.length);
+  const I = [...a.indices, ...Array.from(b.indices, (v) => v + na)];
+  const used = new Uint8Array(P.length / 3);
+  for (const v of I) used[v] = 1;
+  const key = (y, z) => `${Math.floor(y / tol)},${Math.floor(z / tol)}`;
+  const hash = new Map();
+  for (let v = 0; v < na; v++) {
+    if (!used[v] || Math.abs(P[v * 3]) > band || P[v * 3 + 1] < seamMinY) continue;
+    const k = key(P[v * 3 + 1], P[v * 3 + 2]);
+    (hash.get(k) || hash.set(k, []).get(k)).push(v);
+  }
+  const remap = new Int32Array(P.length / 3).map((_, i) => i);
+  for (let v = na; v < P.length / 3; v++) {
+    if (!used[v] || Math.abs(P[v * 3]) > band || P[v * 3 + 1] < seamMinY) continue;
+    const y = P[v * 3 + 1], z = P[v * 3 + 2];
+    let best = -1, bd = tol * tol;
+    for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      for (const u of hash.get(`${Math.floor(y / tol) + dy},${Math.floor(z / tol) + dz}`) || []) {
+        const d = (P[u * 3] - P[v * 3]) ** 2 + (P[u * 3 + 1] - y) ** 2 + (P[u * 3 + 2] - z) ** 2;
+        if (d < bd) { bd = d; best = u; }
+      }
+    }
+    if (best >= 0) remap[v] = best;
+  }
+  const map = new Map(), pos = [], idx = [];
+  for (let t = 0; t < I.length; t += 3) {
+    const tri = [remap[I[t]], remap[I[t + 1]], remap[I[t + 2]]];
+    if (tri[0] === tri[1] || tri[1] === tri[2] || tri[0] === tri[2]) continue; // collapsed at the seam
+    for (const v of tri) {
+      if (!map.has(v)) { map.set(v, map.size); pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); }
+      idx.push(map.get(v));
+    }
+  }
+  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
 }
 
 // make triangle winding agree with the SDF gradient (outward)

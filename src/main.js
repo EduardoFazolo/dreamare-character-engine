@@ -349,4 +349,4 @@ params = randomize(params);
 syncControls();
 rebuild();
 requestAnimationFrame(loop);
-window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; } };
+window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera };

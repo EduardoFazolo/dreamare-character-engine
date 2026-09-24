@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BodySDF, GarmentField, sampleGrid, surfaceNets, deriveGrid, polygonize, simplify, shade, sdRoundCone } from './sdf.js';
+import { BodySDF, GarmentField, sampleGrid, splitNets, deriveGrid, polygonize, simplify, shade, sdRoundCone } from './sdf.js';
 
 // Sculpted character in layers, all from one sampled grid:
 //   skin body (limbs blend into the torso, never into each other) + two finer-grid hands
@@ -40,8 +40,11 @@ export function regionSpec(body, p, model, outfit) {
     waistY: pos('waist').y,
     collarY: pos('neck').y + 0.05,
     shoulderX: Math.abs(pos('shoulderB').x),
+    shoulderY: pos('shoulderB').y,
+    armBand: 0.45 * p.girth * Math.max(1, p.handSize) + 0.35, // arms are horizontal at shoulder height in the bind pose
     wristX: Math.abs(pos('wristB').x),
     ankleY: pos('ankleB').y + 0.05,
+    toeZ: pos('ankleB').z + 0.42 * p.footSize * (outfit.feet || 1), // where the toes start
     crotchY: pos('hipB').y - 0.25,
     hipZ: pos('pelvis').z,
     neckZ: pos('neck').z,
@@ -57,7 +60,7 @@ export function regionSpec(body, p, model, outfit) {
 export const masks = {
   top(R, x, y, z) {
     const ax = Math.abs(x), len = R.wristX - R.shoulderX;
-    if (ax > R.shoulderX * 0.95) return ((ax - R.shoulderX) / len - Math.min(R.sleeve, 1)) * len;
+    if (ax > R.shoulderX * 0.95 && Math.abs(y - R.shoulderY) < R.armBand) return ((ax - R.shoulderX) / len - Math.min(R.sleeve, 1)) * len;
     // collar = a round hole around the neck (a flat cut would slice off the shoulder tops)
     const hole = R.neckHole - Math.hypot(x, z - R.neckZ);
     return Math.max(R.waistY - 0.15 - y, Math.min(hole, y - (R.collarY - 0.12)));
@@ -107,7 +110,7 @@ export function sculptBody(body, p, model, R, outfit) {
     prims.push({ type: 'cone', ghost: true, matrix: new THREE.Matrix4(), a: top, b: bot, r1, r2, k: 0 });
   }
   const fat = Math.max(0, p.fat);
-  const sdf = new BodySDF(prims, { inflate: fat * 0.28, clay: p.clay, sag: p.sag * 1.5, seed: p.seed, pad: thick + 0.08 });
+  const sdf = new BodySDF(prims, { inflate: fat * 0.28, clay: p.clay, sag: p.sag * 1.5, seed: p.seed, pad: thick + 0.08, sagFloor: R.crotchY + 0.2 });
   const layers = [];
   if (outfit.top !== 'skin') layers.push({ layer: REGION.top, mask: masks.top, thickness: thick, fuzz, share: 0.22 });
   if (outfit.bottom !== 'skin') layers.push({ layer: REGION.bottom, mask: masks.bottom, thickness: thick, fuzz, extra: skirtCone, share: 0.18 });
@@ -119,12 +122,16 @@ export function sculptBody(body, p, model, R, outfit) {
   const covered = (x, y, z) => layers.some((l) => l.mask(R, x, y, z) < -0.06);
 
   const parts = [];
-  const skin = cull(simplify(surfaceNets(grid, grid.val, sdf), Math.round(B * bodyShare)), covered);
+  // each leg sculpted in its own pass (the other leg doesn't exist there), welded at the centerline
+  const left = sdf.view('legA'), right = sdf.view('legB');
+  const seamY = R.crotchY - 0.05;
+  const skin = cull(simplify(splitNets(grid, grid.valL, grid.valR, left, right, seamY), Math.round(B * bodyShare)), covered);
   parts.push({ ...skin, field: sdf, kind: 'body', layer: REGION.skin });
   for (const l of layers) {
-    const field = new GarmentField(sdf, { thickness: l.thickness, mask: (x, y, z) => l.mask(R, x, y, z), extra: l.extra, fuzz: l.fuzz });
-    const mesh = simplify(surfaceNets(grid, deriveGrid(grid, field), field), Math.round(B * l.share));
-    if (mesh.indices.length) parts.push({ ...mesh, field, kind: 'garment', layer: l.layer });
+    const make = (body) => new GarmentField(body, { thickness: l.thickness, mask: (x, y, z) => l.mask(R, x, y, z), extra: l.extra, fuzz: l.fuzz });
+    const fl = make(left), fr = make(right);
+    const mesh = simplify(splitNets(grid, deriveGrid(grid, fl, grid.valL), deriveGrid(grid, fr, grid.valR), fl, fr, seamY), Math.round(B * l.share));
+    if (mesh.indices.length) parts.push({ ...mesh, field: make(sdf), kind: 'garment', layer: l.layer });
   }
   for (const side of ['A', 'B']) {
     const hp = body.sculpt.hands[side].map(toPrim);

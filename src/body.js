@@ -170,6 +170,13 @@ export class BodyRig {
     neck.add(this.headAnchor);
 
     const armLen = p.armLen, ua = 1.7 * armLen, fa = 1.55 * armLen;
+    // stance width: wide enough that thighs (with fat and clothing) and feet (with shoes) never overlap
+    const fs0 = p.footSize * (outfit.feet || 1);
+    const thighInner = Math.max(0.3 * g * L, 0.29 * g * L * (0.9 + 0.18 * m) - 0.06 * g);
+    const pantsT = outfit.bottom !== 'skin' && p.bottomType !== 'skirt' ? 0.035 + 0.15 * p.looseness + 0.5 * (outfit.fuzz || 0) : 0;
+    const hipX = Math.max(hipR * 0.56,
+      thighInner + 0.4 * 0.28 * Math.max(0, p.fat) + pantsT + 0.05,
+      0.18 * fs0 * Math.sqrt(g) + (outfit.shoes !== 'skin' ? 0.06 : 0) + 0.05);
     for (const [side, sx] of [['A', -1], ['B', 1]]) {
       const shoulder = joint('shoulder' + side, waist, sx * sh * 0.8, chestH * 0.8, 0);
       mesh(new THREE.SphereGeometry(0.27 * g, 7, 5), 'top', shoulder);
@@ -187,7 +194,7 @@ export class BodyRig {
       this.hand(wrist, p, sx, mesh, side);
       if (side === 'A' && POSES[p.pose]?.gun) this.revolver(wrist, p.handSize, mesh);
 
-      const hip = joint('hip' + side, pelvis, sx * hipR * 0.56, -0.1, 0);
+      const hip = joint('hip' + side, pelvis, sx * hipX, -0.1, 0);
       const th = 2.1 * p.legLen, shin = 2.0 * p.legLen;
       mesh(limb(0.36 * g, 0.26 * g, th), 'bottom', hip);
       grp = 'leg' + side;
@@ -201,8 +208,12 @@ export class BodyRig {
       const ankle = joint('ankle' + side, knee, 0, -shin, 0);
       const fs = p.footSize * (outfit.feet || 1);
       mesh(new THREE.BoxGeometry(0.36 * fs * Math.sqrt(g), 0.26, 0.85 * fs).translate(0, -0.1, 0.22 * fs), 'shoes', ankle, false);
-      // same outer box as the proxy so the sole stays exactly where ground snapping puts it
-      S(ankle, { type: 'box', c: [0, -0.1, 0.22 * fs], b: [0.18 * fs * Math.sqrt(g), 0.13, 0.425 * fs], round: 0.09, k: 0.1, rigid: true });
+      // shaped foot: heel, arch, wider ball of the foot. Every piece bottoms out at the proxy's sole
+      // height (-0.23) and stays inside its footprint, so ground snapping and contacts don't change.
+      const fw = 0.18 * fs * Math.sqrt(g);
+      S(ankle, { type: 'ellipsoid', c: [0, -0.13, -0.02], r: [fw * 0.72, 0.1, 0.16], k: 0.08, rigid: true });
+      S(ankle, { type: 'box', c: [0, -0.13, 0.2 * fs], b: [fw * 0.8, 0.1, 0.24 * fs], round: 0.08, k: 0.1, rigid: true });
+      S(ankle, { type: 'ellipsoid', c: [0, -0.15, 0.45 * fs], r: [fw, 0.08, 0.2 * fs], k: 0.1, rigid: true });
       grp = 'torso';
     }
   }

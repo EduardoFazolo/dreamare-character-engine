@@ -163,7 +163,7 @@ export class BodyBaker {
         tint2: { value: new THREE.Vector3(0, 1, 1) }, tint3: { value: new THREE.Vector3(0, 1, 1) },
         waistY: { value: 0 }, collarY: { value: 0 }, shoulderX: { value: 1 }, wristX: { value: 2 },
         ankleY: { value: 0 }, crotchY: { value: 0 }, sleeve: { value: 1 }, pants: { value: 1 },
-        skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 },
+        skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
         belt: { value: 0 }, buttons: { value: 0 }, grime: { value: 0 }, tile: { value: 1 / 0.9 },
         bare: { value: new THREE.Vector4() }, // 1 where a region's fabric is just skin
       },
@@ -209,7 +209,7 @@ export class BodyBaker {
     const u = this.mat.uniforms;
     inputs.forEach((inp, i) => { u['tex' + i].value = inp.map; u['tint' + i].value.set(inp.hue, inp.sat, inp.bright); });
     u.bare.value.set(...inputs.map((inp, i) => (i === 3 || inp.map === inputs[3].map ? 1 : 0)));
-    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole']) u[k].value = R[k];
+    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k];
     u.skirt.value = R.skirt ? 1 : 0;
     u.belt.value = R.details.belt ? 1 : 0;
     u.buttons.value = R.details.buttons ? 1 : 0;
@@ -246,7 +246,7 @@ export class BodyBaker {
 const BAKE_FRAG = /* glsl */`
 uniform sampler2D tex0, tex1, tex2, tex3;
 uniform vec3 tint0, tint1, tint2, tint3; // hue degrees, saturation, brightness
-uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole;
+uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, shoulderY, armBand, toeZ;
 uniform vec4 bare;
 varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer;
 
@@ -269,7 +269,7 @@ vec3 tri(sampler2D t, vec3 p, vec3 n){
 // garment masks (negative inside), must match masks in sculpt.js; -mask = distance to the hem
 float maskTop(vec3 p){
   float ax = abs(p.x), len = wristX - shoulderX;
-  if (ax > shoulderX * .95) return ((ax - shoulderX) / len - min(sleeve, 1.)) * len;
+  if (ax > shoulderX * .95 && abs(p.y - shoulderY) < armBand) return ((ax - shoulderX) / len - min(sleeve, 1.)) * len;
   float hole = neckHole - length(vec2(p.x, p.z - neckZ));
   return max(waistY - .15 - p.y, min(hole, p.y - (collarY - .12)));
 }
@@ -307,6 +307,16 @@ void main(){
   if (buttons > .5 && r == 0 && isBare < .5 && p.z > 0. && abs(p.x) < .06) {
     vec2 q = vec2(p.x, mod(p.y - waistY, .45) - .225);
     if (length(q) < .04) c = vec3(.85, .8, .7) * .6;
+  }
+  // shoes: a rubber sole strip along the ground and a darker toe cap
+  if (r == 2 && isBare < .5) {
+    if (p.y < .07) c = vec3(.5, .45, .38) * (.8 + .3 * vnoise(p * 20.));
+    else if (p.z > toeZ - .12) c *= .75;
+  }
+  // bare feet: toe creases on the front of the foot
+  if ((r == 3 || isBare > .5) && p.y < ankleY - .05 && p.z > toeZ - .05) {
+    float crease = abs(fract(abs(p.x) * 9.) - .5);
+    c *= mix(.6, 1., smoothstep(.02, .09, crease));
   }
   // painted light like PS2 textures, baked AO, grime creeping up from the feet
   c *= .9 + .12 * n.y;
