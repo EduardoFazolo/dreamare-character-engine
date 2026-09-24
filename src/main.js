@@ -221,7 +221,17 @@ $('#file').addEventListener('change', (e) => addFiles([...e.target.files]));
 document.body.addEventListener('dragover', (e) => e.preventDefault());
 document.body.addEventListener('drop', (e) => { e.preventDefault(); addFiles([...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'))); });
 
-$('#randomize').onclick = () => { params = randomize(params); syncControls(); rebuild(); };
+$('#randomize').onclick = () => {
+  if ($('#randPhoto').checked && faces.length > 1) {
+    let i;
+    do i = Math.floor(Math.random() * faces.length); while (i === current);
+    current = i;
+    renderFaces();
+  }
+  params = randomize(params);
+  syncControls();
+  rebuild();
+};
 $('#reset').onclick = () => { params = defaults(); syncControls(); rebuild(); };
 $('#export').onclick = () => {
   const a = document.createElement('a');
