@@ -1,0 +1,17 @@
+{
+  "name": "dream-face-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "rm -rf public/wasm && cp -r node_modules/@mediapipe/tasks-vision/wasm public/wasm",
+    "dev": "vite --port 5177",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.0"
+  }
+}

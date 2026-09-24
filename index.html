@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dream Face Lab</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <aside id="panel">
+    <h1>DREAM FACE LAB</h1>
+    <div class="buttons">
+      <button id="randomize">Randomize</button>
+      <button id="roll">Roll 12</button>
+      <button id="reset">Reset</button>
+      <button id="export">Export texture</button>
+    </div>
+    <div id="controls"></div>
+  </aside>
+  <main>
+    <section id="sources">
+      <div id="faces"></div>
+      <label class="drop" id="drop">+ drop / pick face photos<input type="file" id="file" accept="image/*" multiple hidden /></label>
+    </section>
+    <section id="stage">
+      <canvas id="view"></canvas>
+      <div id="atlasBox">
+        <canvas id="atlas"></canvas>
+        <span>face texture (canonical UV)</span>
+      </div>
+    </section>
+    <p id="status">loading face model…</p>
+    <section id="gallery"></section>
+  </main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
