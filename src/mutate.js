@@ -39,6 +39,19 @@ export const SCHEMA = [
     ['legLen', 'Leg length', 0.35, 1.9, 1],
     ['footSize', 'Foot size', 0.5, 2.5, 1],
   ]},
+  { group: 'Body sculpt', items: [
+    ['muscle', 'Muscle', -0.5, 2, 0.3],
+    ['fat', 'Fat / padding', -0.5, 1.5, 0],
+    ['hump', 'Hump', 0, 2, 0],
+    ['lumps', 'Lumps / tumors', 0, 2, 0],
+    ['clay', 'Clay lumpiness', 0, 2, 0.3],
+    ['sag', 'Sag / melt', 0, 2, 0],
+    ['sleeveLen', 'Sleeve length', 0, 1, 1],
+    ['pantsLen', 'Pants / skirt length', 0, 1, 1],
+    ['looseness', 'Clothes looseness', 0, 1, 0.15],
+    ['bodyGrime', 'Body grime', 0, 1, 0.3],
+    ['polyBudget', 'Poly budget (tris)', 400, 6000, 2200],
+  ]},
   { group: 'Outfit color', items: [
     ['outfitHue', 'Outfit hue', -180, 180, 0],
     ['outfitSat', 'Outfit saturation', 0, 2, 1],
@@ -82,7 +95,10 @@ export const CHOICES = {
   atlasRes: { label: 'Texture res', options: [64, 128, 256, 512], def: 128 },
   renderH: { label: 'Render height', options: [224, 240, 320, 448], def: 240 },
   geoSource: { label: 'Head shape', options: ['canonical', 'photo'], def: 'canonical' },
-  view: { label: 'Camera', options: ['medium', 'full', 'portrait'], def: 'medium' },
+  view: { label: 'Camera', options: ['full', 'medium', 'portrait'], def: 'full' },
+  bodyStyle: { label: 'Body style', options: ['sculpted', 'segmented'], def: 'sculpted' },
+  bodyRes: { label: 'Body texture res', options: [128, 256, 512, 1024], def: 512 },
+  bottomType: { label: 'Bottom', options: ['pants', 'skirt'], def: 'pants' },
   pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
   anim: { label: 'Animation', options: ['idle', 'walk', 'pose'], def: 'idle' },
   exportMat: { label: 'Export materials', options: ['lit', 'unlit'], def: 'lit' },
@@ -95,6 +111,7 @@ export function defaults() {
   const p = {};
   for (const g of SCHEMA) for (const [k, , , , d] of g.items) p[k] = d;
   for (const [k, c] of Object.entries(CHOICES)) p[k] = c.def;
+  p.seed = 1;
   return p;
 }
 
@@ -216,6 +233,19 @@ export function randomize(base) {
   p.outfitBright = rnd(0.75, 1.15);
   p.pose = pick(['stand', 'stand', 'stand', 'hunch', 'hunch', 'crouch', 'gunslinger', 'zombie']);
   p.outfit = pick(Object.keys(OUTFITS));
+  // sculpt: mostly subtle, sometimes one thing goes very wrong
+  p.seed = Math.floor(Math.random() * 1e9);
+  p.muscle = rnd(-0.3, 0.9);
+  p.fat = Math.random() < 0.2 ? rnd(0.4, 1.3) : rnd(-0.3, 0.25);
+  p.hump = Math.random() < 0.15 ? rnd(0.6, 2) : 0;
+  p.lumps = Math.random() < 0.15 ? rnd(0.5, 1.8) : 0;
+  p.clay = rnd(0.1, 0.8);
+  p.sag = Math.random() < 0.2 ? rnd(0.5, 1.8) : rnd(0, 0.3);
+  p.sleeveLen = Math.random() < 0.7 ? 1 : pick([0.1, 0.35, 0.5]);
+  p.bottomType = Math.random() < 0.25 ? 'skirt' : 'pants';
+  p.pantsLen = Math.random() < 0.8 ? 1 : pick([0.25, 0.5]);
+  p.looseness = Math.random() < 0.2 ? rnd(0.5, 1) : rnd(0, 0.3);
+  p.bodyGrime = rnd(0.1, 0.7);
   p.hat = pick(['none', 'none', 'cowboy', 'bowler']);
   p.hair = p.hat === 'none' ? pick(['none', 'stringy']) : pick(['none', 'none', 'stringy']);
   return p;

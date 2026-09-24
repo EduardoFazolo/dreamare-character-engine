@@ -7,18 +7,18 @@ import { ps2Material } from './head.js';
 const TILE = 0.9; // texture tile size in head units
 
 export const OUTFITS = {
-  suit: { top: 'Fabric039', bottom: 'Fabric039', shoes: 'Leather026' },
-  undertaker: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026' },
-  gunslinger: { top: 'Fabric042', bottom: 'Fabric022', shoes: 'Leather033C' },
-  fur: { top: 'Carpet011', bottom: 'Carpet011', shoes: 'skin', hue: -35, sat: 1.5, girth: 1.25 },
-  shag: { top: 'Carpet012', bottom: 'Carpet012', shoes: 'skin', girth: 1.2 },
-  denim: { top: 'Fabric022', bottom: 'Fabric023', shoes: 'Leather033C' },
+  suit: { top: 'Fabric039', bottom: 'Fabric039', shoes: 'Leather026', details: { buttons: true, belt: true } },
+  undertaker: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026', details: { buttons: true } },
+  gunslinger: { top: 'Fabric042', bottom: 'Fabric022', shoes: 'Leather033C', details: { belt: true } },
+  fur: { top: 'Carpet011', bottom: 'Carpet011', shoes: 'skin', hue: -35, sat: 1.5, girth: 1.25, fuzz: 0.12 },
+  shag: { top: 'Carpet012', bottom: 'Carpet012', shoes: 'skin', girth: 1.2, fuzz: 0.12 },
+  denim: { top: 'Fabric022', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true } },
   knit: { top: 'Fabric040', bottom: 'Fabric025', shoes: 'Leather037' },
   sweater: { top: 'Fabric018', bottom: 'Fabric039', shoes: 'Leather026' },
-  farmer: { top: 'Fabric054', bottom: 'Fabric023', shoes: 'Leather033C' },
-  clown: { top: 'Fabric055', bottom: 'Fabric076', shoes: 'Leather037', feet: 1.7 },
+  farmer: { top: 'Fabric054', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true } },
+  clown: { top: 'Fabric055', bottom: 'Fabric076', shoes: 'Leather037', feet: 1.7, details: { buttons: true } },
   prisoner: { top: 'Fabric071', bottom: 'Fabric071', shoes: 'Leather026' },
-  velvet: { top: 'Fabric028', bottom: 'Fabric051', shoes: 'Leather026' },
+  velvet: { top: 'Fabric028', bottom: 'Fabric051', shoes: 'Leather026', details: { buttons: true } },
   naked: { top: 'skin', bottom: 'skin', shoes: 'skin' },
 };
 
@@ -130,7 +130,23 @@ export class BodyRig {
       return o;
     };
 
+    // Sculpt primitives (joint-local, head units): the sculpted style smooth-unions these into one
+    // continuous surface. The segment meshes above/below stay as invisible proxies for ground snap.
+    this.sculpt = { body: [], hands: { A: [], B: [] }, dims: { hipR, waistR, chestR, neckR } };
+    const m = p.muscle, bb = Math.max(0, p.belly), L = 1.12; // sculpted limbs a bit chunkier than the proxies
+    // group: limbs smooth-blend into the torso but never into each other (legs/feet stay separate)
+    let grp = 'torso';
+    const S = (j, prim) => this.sculpt.body.push({ joint: j, group: grp, ...prim });
+    const E = (j, c, r, k, soft = true) => S(j, { type: 'ellipsoid', c, r, k, soft });
+    const C = (j, a, b, r1, r2, k) => S(j, { type: 'cone', a, b, r1, r2, k });
+
     const pelvis = joint('pelvis', this.parts, 0, 0, 0);
+    // pelvis ends just below the hip joints so it doesn't web the thighs together
+    E(pelvis, [0, 0.04, -0.04 * g], [hipR * 1.02, 0.3 + 0.08 * g, hipR * 0.78], 0.25);
+    for (const sx of [-1, 1]) E(pelvis, [sx * hipR * 0.42, -0.08, -hipR * 0.4], [hipR * 0.5, 0.3, hipR * 0.42].map((v) => v * (1 + 0.3 * m)), 0.2);
+    E(pelvis, [0, waistY * 0.6, 0], [waistR * 1.02, waistY * 0.62 + 0.18, waistR * 0.74], 0.3);
+    if (p.belly > -0.2) E(pelvis, [0, waistY * 0.5 - 0.12 * bb, waistR * (0.22 + 0.35 * bb)],
+      [waistR * (0.8 + 0.45 * bb), (waistY * 0.45 + 0.2) * (1 + 0.45 * bb), waistR * (0.45 + 0.8 * bb)], 0.35 + 0.1 * bb);
     const abdomen = mesh(lathe([[0.02, -0.28], [hipR * 0.85, -0.22], [hipR, 0.1], [waistR, waistY]], hipR), 'bottom', pelvis);
     abdomen.scale.z = DEPTH;
     belly(abdomen.geometry, p.belly * g, 0, waistY);
@@ -141,9 +157,15 @@ export class BodyRig {
     const chest = mesh(lathe([[waistR, 0], [chestR, chestH * 0.45], [sh * 0.92, chestH * 0.86], [neckR * 1.3, chestH], [0.02, chestH + 0.02]], sh), 'top', waist);
     chest.scale.z = DEPTH;
     belly(chest.geometry, p.belly * g, -waistY, waistY);
+    E(waist, [0, chestH * 0.48, 0], [chestR * 1.02, chestH * 0.56, chestR * 0.7], 0.35, false);
+    for (const sx of [-1, 1]) E(waist, [sx * chestR * 0.42, chestH * 0.62, chestR * 0.4], [chestR * 0.42, chestH * 0.2, chestR * 0.28].map((v) => v * (0.6 + 0.7 * m)), 0.2);
+    C(waist, [-sh * 0.8, chestH * 0.8, -0.02], [sh * 0.8, chestH * 0.8, -0.02], 0.25 * g * (1 + 0.3 * m), 0.25 * g * (1 + 0.3 * m), 0.25);
+    for (const sx of [-1, 1]) C(waist, [sx * sh * 0.4, chestH * 0.84, -0.08], [0, chestH + 0.08, -0.05], 0.17 * g, 0.2 * g, 0.2);
+    if (p.hump > 0) E(waist, [0, chestH * 0.78, -chestR * 0.62], [chestR * 0.6, chestH * 0.35, chestR * 0.45].map((v) => v * (0.5 + 0.7 * p.hump)), 0.3);
 
     const neck = joint('neck', waist, 0, chestH - 0.12, 0);
     mesh(new THREE.CylinderGeometry(neckR, neckR * 1.15, p.neckLen + 0.3, 7, 1, true).translate(0, (p.neckLen + 0.3) / 2, 0), 'skin', neck);
+    C(neck, [0, -0.15, 0], [0, p.neckLen + 0.3, 0], neckR * 1.25, neckR, 0.15);
     this.headAnchor.position.set(0, p.neckLen + 0.2, 0);
     neck.add(this.headAnchor);
 
@@ -152,29 +174,46 @@ export class BodyRig {
       const shoulder = joint('shoulder' + side, waist, sx * sh * 0.8, chestH * 0.8, 0);
       mesh(new THREE.SphereGeometry(0.27 * g, 7, 5), 'top', shoulder);
       mesh(limb(0.26 * g, 0.2 * g, ua), 'top', shoulder);
+      grp = 'arm' + side;
+      C(shoulder, [0, 0.05, 0], [0, -ua, 0], 0.26 * g * L, 0.2 * g * L, 0.18);
+      E(shoulder, [0, -0.1, 0], [0.3 * g, 0.35, 0.3 * g].map((v) => v * L * (0.85 + 0.35 * m)), 0.2);
+      E(shoulder, [0, -ua * 0.45, 0.05], [0.2 * g, ua * 0.28, 0.2 * g].map((v) => v * L * (0.8 + 0.55 * m)), 0.15);
       const elbow = joint('elbow' + side, shoulder, 0, -ua, 0);
       mesh(new THREE.SphereGeometry(0.2 * g, 7, 5), 'top', elbow);
       mesh(limb(0.2 * g, 0.15 * g, fa), 'top', elbow);
+      C(elbow, [0, 0, 0], [0, -fa - 0.02, 0], 0.2 * g * L, 0.15 * g * L, 0.12);
+      E(elbow, [0, -fa * 0.3, 0], [0.2 * g, fa * 0.3, 0.18 * g].map((v) => v * L * (0.85 + 0.35 * m)), 0.1);
       const wrist = joint('wrist' + side, elbow, 0, -fa, 0);
       this.hand(wrist, p, sx, mesh, side);
       if (side === 'A' && POSES[p.pose]?.gun) this.revolver(wrist, p.handSize, mesh);
 
-      const hip = joint('hip' + side, pelvis, sx * hipR * 0.5, -0.1, 0);
+      const hip = joint('hip' + side, pelvis, sx * hipR * 0.56, -0.1, 0);
       const th = 2.1 * p.legLen, shin = 2.0 * p.legLen;
       mesh(limb(0.36 * g, 0.26 * g, th), 'bottom', hip);
+      grp = 'leg' + side;
+      C(hip, [0, 0.1, 0], [0, -th, 0], 0.3 * g * L, 0.25 * g * L, 0.2);
+      E(hip, [sx * 0.06 * g, -th * 0.35, 0.03], [0.29 * g, th * 0.35, 0.33 * g].map((v) => v * L * (0.9 + 0.18 * m)), 0.15);
       const knee = joint('knee' + side, hip, 0, -th, 0);
       mesh(new THREE.SphereGeometry(0.26 * g, 7, 5), 'bottom', knee);
       mesh(limb(0.26 * g, 0.18 * g, shin), 'bottom', knee);
+      C(knee, [0, 0, 0], [0, -shin, 0], 0.26 * g * L, 0.18 * g * L, 0.1);
+      E(knee, [0, -shin * 0.28, -0.07], [0.24 * g, shin * 0.28, 0.22 * g].map((v) => v * L * (0.8 + 0.5 * m)), 0.12);
       const ankle = joint('ankle' + side, knee, 0, -shin, 0);
       const fs = p.footSize * (outfit.feet || 1);
       mesh(new THREE.BoxGeometry(0.36 * fs * Math.sqrt(g), 0.26, 0.85 * fs).translate(0, -0.1, 0.22 * fs), 'shoes', ankle, false);
+      // same outer box as the proxy so the sole stays exactly where ground snapping puts it
+      S(ankle, { type: 'box', c: [0, -0.1, 0.22 * fs], b: [0.18 * fs * Math.sqrt(g), 0.13, 0.425 * fs], round: 0.09, k: 0.1, rigid: true });
+      grp = 'torso';
     }
   }
 
   hand(wrist, p, sx, mesh, side) {
-    const hs = p.handSize;
+    const hs = p.handSize, g = p.girth;
     const palm = new THREE.BoxGeometry(0.34 * hs, 0.42 * hs, 0.13 * hs).translate(0, -0.21 * hs, 0);
     mesh(palm, 'skin', wrist);
+    const H = (j, prim) => this.sculpt.hands[side].push({ joint: j, ...prim });
+    H(wrist, { type: 'box', c: [0, -0.21 * hs, 0], b: [0.17 * hs, 0.21 * hs, 0.065 * hs], round: 0.05 * hs, k: 0.04 * hs });
+    H(wrist, { type: 'cone', a: [0, 0.25, 0], b: [0, -0.06 * hs, 0], r1: 0.15 * g, r2: 0.12 * hs, k: 0.06 });
     const fl = 0.38 * p.fingerLen * hs;
     for (let i = 0; i < 4; i++) {
       const f = new THREE.Group();
@@ -183,6 +222,7 @@ export class BodyRig {
       f.userData.joint = `finger${side}${i}`;
       this.j[f.userData.joint] = f;
       mesh(limb(0.04 * hs, 0.03 * hs, fl * (i === 0 || i === 3 ? 0.85 : 1), 5), 'skin', f);
+      H(f, { type: 'cone', a: [0, 0.03, 0], b: [0, -fl * (i === 0 || i === 3 ? 0.85 : 1), 0], r1: 0.045 * hs, r2: 0.036 * hs, k: 0.025 * hs });
       wrist.add(f);
     }
     const thumb = new THREE.Group();
@@ -191,6 +231,7 @@ export class BodyRig {
     thumb.userData.joint = `thumb${side}`;
     this.j[thumb.userData.joint] = thumb;
     mesh(limb(0.045 * hs, 0.035 * hs, fl * 0.7, 5), 'skin', thumb);
+    H(thumb, { type: 'cone', a: [0, 0.03, 0], b: [0, -fl * 0.7, 0], r1: 0.05 * hs, r2: 0.04 * hs, k: 0.03 * hs });
     wrist.add(thumb);
   }
 

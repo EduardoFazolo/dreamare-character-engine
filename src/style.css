@@ -25,7 +25,7 @@ main { flex: 1; overflow-y: auto; padding: 14px; }
 #stage { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
 #view { width: min(100%, 720px); aspect-ratio: 4 / 3; image-rendering: pixelated; background: #000; cursor: grab; }
 #atlasBox { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
-#atlas { width: 256px; height: 256px; image-rendering: pixelated; background: #000; }
+#atlas, #bodyAtlas { width: 256px; height: 256px; image-rendering: pixelated; background: #000; }
 #status { color: var(--muted); }
 #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
 #gallery img { width: 100%; image-rendering: pixelated; cursor: pointer; border: 1px solid var(--line); }

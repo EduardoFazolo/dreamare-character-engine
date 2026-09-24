@@ -5,6 +5,7 @@ import { AtlasBaker, skinColor } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
 import { BodyRig } from './body.js';
 import { SkinnedCharacter } from './rig.js';
+import { simplifierReady } from './sdf.js';
 import { exportGLB } from './export.js';
 
 THREE.ColorManagement.enabled = false;
@@ -27,9 +28,11 @@ buildEnvironment(scene);
 const body = new BodyRig();
 scene.add(body.root);
 body.parts.visible = false; // the driver rig only poses; what you see is the baked skinned mesh
-const sk = new SkinnedCharacter();
+const sk = new SkinnedCharacter(renderer);
 body.root.add(sk.group);
 const camera = new THREE.PerspectiveCamera(32, 4 / 3, 0.1, 400);
+
+let zoom = 1; // mouse wheel, kept across rebuilds; double-click resets
 
 function frameCamera() {
   const yaw = body.root.rotation.y;
@@ -51,6 +54,12 @@ function frameCamera() {
     target = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     dist = Math.max(size.y / 2, size.x / 2 / camera.aspect) * 1.08 / half + size.z / 2;
+  }
+  dist *= zoom;
+  // zooming in drifts the aim from the body toward the face
+  if (zoom < 1 && params.view !== 'portrait') {
+    const face = rig.group.localToWorld(new THREE.Vector3(0, -0.2, 0));
+    target.lerp(face, Math.min(1, (1 - zoom) / 0.7));
   }
   camera.position.set(target.x, target.y + dist * 0.06, target.z + dist);
   camera.lookAt(target);
@@ -113,6 +122,7 @@ function rebuild() {
   rig.update(deform(base, params, params.geoWarp), texture, params);
   body.update(params, skin, rig.group);
   sk.bake(body, params);
+  showBodyAtlas();
   sk.play(params.anim);
   sk.update(0);
   frameCamera();
@@ -120,6 +130,24 @@ function rebuild() {
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
   PS2.affine.value = params.affine;
   post.uniforms.vhs.value = params.vhs;
+}
+
+function showBodyAtlas() {
+  const c = $('#bodyAtlas');
+  if (params.bodyStyle === 'segmented' || !sk.bodyCanvas) { c.style.display = 'none'; $('#bodyInfo').textContent = ''; return; }
+  c.style.display = '';
+  c.width = c.height = sk.bodyCanvas.width;
+  c.getContext('2d').drawImage(sk.bodyCanvas, 0, 0);
+  const s = sk.stats;
+  $('#bodyInfo').textContent = `body texture (baked) · ${s.tris} tris · ${s.charts} charts · ${s.ms} ms`;
+}
+
+// sliders fire faster than a sculpt rebuild: coalesce to at most one rebuild per frame
+let rebuildQueued = false;
+function requestRebuild() {
+  if (rebuildQueued) return;
+  rebuildQueued = true;
+  requestAnimationFrame(() => { rebuildQueued = false; rebuild(); });
 }
 
 function renderFrame(t) {
@@ -135,6 +163,12 @@ let yaw = 0, dragging = false, lastX = 0, idle = 0;
 canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; canvas.setPointerCapture(e.pointerId); });
 canvas.addEventListener('pointermove', (e) => { if (dragging) { yaw += (e.clientX - lastX) * 0.01; lastX = e.clientX; idle = 0; } });
 canvas.addEventListener('pointerup', () => (dragging = false));
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoom = Math.min(3, Math.max(0.25, zoom * Math.exp(e.deltaY * 0.0015)));
+  frameCamera();
+}, { passive: false });
+canvas.addEventListener('dblclick', () => { zoom = 1; frameCamera(); });
 
 let paused = false, lastT;
 function loop(ms) {
@@ -162,7 +196,7 @@ function buildControls() {
       row.className = 'row';
       row.innerHTML = `<span>${label}</span><input type="range" min="${mn}" max="${mx}" step="${(mx - mn) / 200}"><output></output>`;
       const input = row.querySelector('input'), out = row.querySelector('output');
-      input.addEventListener('input', () => { params[k] = Number(input.value); out.textContent = (+input.value).toFixed(2); rebuild(); });
+      input.addEventListener('input', () => { params[k] = Number(input.value); out.textContent = (+input.value).toFixed(2); requestRebuild(); });
       inputs[k] = { input, out };
       d.appendChild(row);
     }
@@ -244,7 +278,8 @@ $('#export').onclick = () => {
 
 $('#exportGlb').onclick = async () => {
   const name = `character_${faces[current].name.replace(/\.\w+$/, '')}_${params.outfit}`;
-  const { glb, report } = await exportGLB(sk, $('#atlas'), { name, materials: params.exportMat });
+  const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas]]);
+  const { glb, report } = await exportGLB(sk, canvases, { name, materials: params.exportMat });
   const save = (data, file, type) => {
     const a = document.createElement('a');
     a.download = file;
@@ -287,13 +322,13 @@ function roll(n) {
 buildControls();
 syncControls();
 setRes(params.renderH);
-await Promise.all([initLandmarker(), body.preload()]);
+await Promise.all([initLandmarker(), body.preload(), simplifierReady]);
 status('detecting sample faces…');
 for (const name of await (await fetch('/faces/index.json')).json()) await addFace(`/faces/${name}`, name).catch(() => {});
 renderFaces();
-status(`${faces.length} faces loaded. Drag the head to turn it. Drop your own photos anywhere.`);
+status(`${faces.length} faces loaded. Drag to turn, scroll to zoom, double-click to reset. Drop your own photos anywhere.`);
 params = randomize(params);
 syncControls();
 rebuild();
 requestAnimationFrame(loop);
-window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces, get skin() { return lastSkin; }, sk };
+window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; } };

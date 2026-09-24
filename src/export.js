@@ -12,11 +12,17 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 const VRM_REQUIRED = ['hips', 'spine', 'head', 'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'rightUpperLeg', 'rightLowerLeg', 'rightFoot',
   'leftUpperArm', 'leftLowerArm', 'leftHand', 'rightUpperArm', 'rightLowerArm', 'rightHand'];
 
-export async function exportGLB(sk, atlasCanvas, { name = 'character', materials = 'lit' } = {}) {
-  const atlasTex = new THREE.CanvasTexture(atlasCanvas);
-  atlasTex.magFilter = atlasTex.minFilter = THREE.NearestFilter;
+// canvases: render-target texture -> canvas holding its pixels (face atlas, baked body atlas)
+export async function exportGLB(sk, canvases, { name = 'character', materials = 'lit' } = {}) {
+  const baked = new Map();
+  for (const [tex, canvas] of canvases) {
+    if (!tex || !canvas) continue;
+    const t = new THREE.CanvasTexture(canvas);
+    t.magFilter = t.minFilter = THREE.NearestFilter;
+    baked.set(tex, t);
+  }
   const originals = sk.mesh.material;
-  sk.mesh.material = originals.map((m) => exportMaterial(m, atlasTex, materials));
+  sk.mesh.material = originals.map((m) => exportMaterial(m, baked, materials));
 
   // node transforms = T-pose bind, which retargeters read as the rest pose. Save/restore the live
   // pose: the mixer skips unchanged values, so a static clip would not rewrite it on its own.
@@ -37,11 +43,11 @@ export async function exportGLB(sk, atlasCanvas, { name = 'character', materials
   }
 }
 
-function exportMaterial(m, atlasTex, kind) {
+function exportMaterial(m, baked, kind) {
   const u = m.uniforms;
   let map = u.map.value;
   const color = u.color.value.clone();
-  if (map?.isRenderTargetTexture) map = atlasTex;
+  if (map?.isRenderTargetTexture) map = baked.get(map) || null;
   else if (map?.isDataTexture) map = null;
   else if (map && (u.hueShift.value !== 0 || u.satMul.value !== 1 || !color.equals(new THREE.Color(1, 1, 1)))) {
     map = tinted(map, u.hueShift.value, u.satMul.value, color);

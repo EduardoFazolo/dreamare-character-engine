@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { MOTIONS } from './body.js';
+import { MOTIONS, OUTFITS } from './body.js';
+import { ps2Material } from './head.js';
+import { sculptBody, regionSpec, REGION_NAMES } from './sculpt.js';
+import { unwrap, BodyBaker } from './bodybake.js';
 
 // Bakes the driver rig (BodyRig joints + segment meshes) into an engine-agnostic character:
 // one SkinnedMesh + one skeleton (Root -> Hips -> ...), Mixamo-style names, VRM 1.0 humanoid roles,
@@ -10,6 +13,8 @@ import { MOTIONS } from './body.js';
 
 export const METERS = 0.16; // one head unit (face width) in meters
 const ACCESSORY = new Set(['hat', 'hair', 'prop']); // material slots that are not body volume
+const PROXY = new Set(['top', 'bottom', 'shoes', 'skin']); // driver segment meshes (segmented style only)
+const FINGER = /Hand(Thumb|Index|Middle|Ring|Pinky)/;
 const DENSITY = 1000; // kg/m^3, bodies are roughly water
 
 const lerp = (a, b, t) => a.clone().lerp(b, t);
@@ -80,7 +85,9 @@ const arr = (v, k = 1) => [v.x * k, v.y * k, v.z * k].map((x) => +x.toFixed(4));
 const r4 = (x) => +x.toFixed(4);
 
 export class SkinnedCharacter {
-  constructor() {
+  constructor(renderer) {
+    this.bodyBaker = new BodyBaker(renderer);
+    this.regionMats = Object.fromEntries(REGION_NAMES.map((n) => { const m = ps2Material(); m.name = n; return [n, m]; }));
     this.group = new THREE.Group(); // display container, scaled back to head units
     this.content = new THREE.Scene(); // what gets exported (meters); a Scene so its children export as root nodes
     this.group.add(this.content);
@@ -187,9 +194,10 @@ export class SkinnedCharacter {
     for (const [name, , joint, , posFn] of defs) if (joint && !posFn) jointToBone[joint] = name;
     const index = Object.fromEntries(list.map((b, i) => [b.name, i]));
     const byMat = new Map(), boneVerts = {};
+    const sculpted = p.bodyStyle !== 'segmented';
     for (const it of items) {
       const bone = jointToBone[it.joint];
-      if (!bone) continue;
+      if (!bone || (sculpted && PROXY.has(it.mat.name))) continue;
       const g = it.g.clone().scale(METERS, METERS, METERS);
       const n = g.attributes.position.count;
       const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
@@ -203,6 +211,8 @@ export class SkinnedCharacter {
         for (let i = 0; i < n; i++) vs.push(new THREE.Vector3().fromBufferAttribute(g.attributes.position, i));
       }
     }
+    const bodyBoxes = [];
+    if (sculpted) this.sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes);
     const mats = [...byMat.keys()];
     const perMat = mats.map((m) => { const g = mergeGeometries(byMat.get(m)); byMat.get(m).forEach((x) => x.dispose()); return g; });
     const geo = mergeGeometries(perMat, true);
@@ -221,7 +231,10 @@ export class SkinnedCharacter {
     this.skeleton = skeleton;
 
     // ---- creator-known metadata ----
-    this.meta = this.measure(body, p, ctx, items, boneVerts, model, BQ);
+    const renderItems = sculpted ? items.filter((it) => !PROXY.has(it.mat.name)) : items;
+    this.meta = this.measure(body, p, ctx, renderItems, boneVerts, model, BQ, bodyBoxes);
+    this.meta.skinning = sculpted ? { influences: 4, rigid: false, note: 'body smooth-skinned; head/accessories rigid' } : { influences: 1, rigid: true };
+    this.meta.bodyStyle = sculpted ? 'sculpted' : 'segmented';
 
     // ---- clips (driver back in its own pose; T-pose only existed for the bind) ----
     for (const [k, q] of Object.entries(saved)) j[k].quaternion.copy(q);
@@ -249,10 +262,63 @@ export class SkinnedCharacter {
   }
 
   // Everything below is measured once here so games never have to guess it.
-  measure(body, p, ctx, items, boneVerts, model, BQ) {
+  // Sculpted body: SDF mesh -> distance-based skin weights (<= 4 bones) -> unwrap -> baked atlas,
+  // one primitive per clothing region, all sharing that atlas.
+  sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes) {
+    const t0 = performance.now();
+    const outfit = OUTFITS[p.outfit] || OUTFITS.suit;
+    const R = regionSpec(body, p, model, outfit);
+    const parts = sculptBody(body, p, model, R, outfit);
+    const segs = {};
+    for (const [name, , joint] of this.defs) {
+      if (!joint) continue;
+      const a = P[name].clone();
+      const aim = AIM[name];
+      let b;
+      if (typeof aim === 'string') b = P[aim].clone();
+      else if (Array.isArray(aim)) b = a.clone().addScaledVector(new THREE.Vector3(...aim), name === 'Head' ? 1 : 0.3);
+      else b = a.clone().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(BQ[name]), 0.35 * p.fingerLen * p.handSize);
+      segs[name] = [a, b];
+    }
+    for (const part of parts) skinWeights(part, segs, index);
+    const segByIndex = Object.fromEntries(Object.entries(segs).map(([n, s]) => [index[n], s]));
+    const { geo, groups, charts } = unwrap(parts, segByIndex, R, p.bodyRes);
+    const inputs = ['top', 'bottom', 'shoes', 'skin'].map((slot) => {
+      const u = body.mats[slot].uniforms;
+      return { map: u.map.value, hue: u.hueShift.value, sat: u.satMul.value, bright: u.color.value.r };
+    });
+    this.bodyTexture = this.bodyBaker.bake(geo, R, inputs, p.bodyRes, p.bodyGrime);
+    this.bodyCanvas = this.bodyBaker.toCanvas(this.bodyCanvas);
+    geo.deleteAttribute('ao');
+    geo.deleteAttribute('layer'); // bake-only attributes
+    geo.scale(METERS, METERS, METERS);
+    for (const gr of groups) {
+      const sub = subset(geo, gr.start, gr.count);
+      const mat = this.regionMats[gr.name];
+      mat.uniforms.map.value = this.bodyTexture;
+      if (!byMat.has(mat)) byMat.set(mat, []);
+      byMat.get(mat).push(sub);
+    }
+    const names = Object.fromEntries(Object.entries(index).map(([n, i]) => [i, n]));
+    const pos = geo.attributes.position, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
+    const box = new THREE.Box3();
+    for (let i = 0; i < pos.count; i++) {
+      let best = 0;
+      for (let k = 1; k < 4; k++) if (sw.getComponent(i, k) > sw.getComponent(i, best)) best = k;
+      const v = new THREE.Vector3().fromBufferAttribute(pos, i);
+      (boneVerts[names[si.getComponent(i, best)]] ||= []).push(v);
+      box.expandByPoint(v);
+    }
+    bodyBoxes.push(box);
+    geo.dispose();
+    this.stats = { tris: groups.reduce((s, g) => s + g.count / 3, 0), charts, ms: Math.round(performance.now() - t0) };
+  }
+
+  measure(body, p, ctx, items, boneVerts, model, BQ, bodyBoxes = []) {
     const bones = this.bones, R = this.role;
     const pos = (name) => new THREE.Vector3().setFromMatrixPosition(bones[name].matrixWorld);
     const all = new THREE.Box3(), bodyBox = new THREE.Box3();
+    for (const b of bodyBoxes) { all.union(b); bodyBox.union(b); }
     for (const it of items) {
       const b = new THREE.Box3().setFromBufferAttribute(it.g.attributes.position);
       b.min.multiplyScalar(METERS); b.max.multiplyScalar(METERS);
@@ -493,6 +559,52 @@ export class SkinnedCharacter {
     this.content.clear();
     this.mesh = null;
   }
+}
+
+// smooth skinning: inverse-distance to each bone's axis segment, top 4, no cross-body leakage
+function skinWeights(part, segs, index) {
+  const n = part.positions.length / 3;
+  const side = part.kind === 'handLeft' ? 'Left' : part.kind === 'handRight' ? 'Right' : null;
+  const cands = Object.entries(segs).filter(([name]) => (side
+    ? name.startsWith(side) && (name === `${side}ForeArm` || name === `${side}Hand` || FINGER.test(name))
+    : !FINGER.test(name)));
+  const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+  const p = new THREE.Vector3(), ab = new THREE.Vector3(), ap = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    p.fromArray(part.positions, i * 3);
+    const ws = [];
+    for (const [name, [a, b]] of cands) {
+      if (!side && ((name.startsWith('Left') && p.x < -0.05) || (name.startsWith('Right') && p.x > 0.05))) continue;
+      ab.subVectors(b, a); ap.subVectors(p, a);
+      const t = Math.max(0, Math.min(1, ap.dot(ab) / ab.lengthSq()));
+      const d2 = ap.addScaledVector(ab, -t).lengthSq();
+      ws.push([index[name], 1 / (d2 + 4e-4) ** 2]);
+    }
+    ws.sort((x, y) => y[1] - x[1]);
+    let top = ws.slice(0, 4), sum = top.reduce((s, w) => s + w[1], 0);
+    top = top.filter((w) => w[1] / sum >= 0.03);
+    sum = top.reduce((s, w) => s + w[1], 0);
+    top.forEach(([b, w], k) => { si[i * 4 + k] = b; sw[i * 4 + k] = w / sum; });
+  }
+  part.skinIndex = si;
+  part.skinWeight = sw;
+}
+
+// compact copy of an index range (one clothing region) with only the vertices it uses
+function subset(geo, start, count) {
+  const idx = geo.index.array.subarray(start, start + count), map = new Map(), out = new THREE.BufferGeometry();
+  const src = Object.entries(geo.attributes), dst = Object.fromEntries(src.map(([k, a]) => [k, []]));
+  const newIdx = [];
+  for (const v of idx) {
+    if (!map.has(v)) {
+      map.set(v, map.size);
+      for (const [k, a] of src) for (let c = 0; c < a.itemSize; c++) dst[k].push(a.array[v * a.itemSize + c]);
+    }
+    newIdx.push(map.get(v));
+  }
+  for (const [k, a] of src) out.setAttribute(k, new THREE.BufferAttribute(new a.array.constructor(dst[k]), a.itemSize));
+  out.setIndex(newIdx);
+  return out;
 }
 
 function visibleUnder(o, stop) {
