@@ -109,12 +109,12 @@ export class HeadRig {
     this.geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(this.nVerts * 2), 2));
     this.geo.setIndex(idx);
     this.headMat = ps2Material();
-    this.headMat.name = 'Head';
+    this.headMat.name = 'face';
     this.head = new THREE.Mesh(this.geo, this.headMat);
     this.group.add(this.head);
 
     const hatMat = ps2Material({ map: canvasTex(16, 16, noiseFill([30, 26, 24], 25), 2) });
-    hatMat.name = 'Hat';
+    hatMat.name = 'hat';
     this.hats = {
       cowboy: hat(hatMat, 0.95, 0.4, 0.46, 0.42),
       bowler: hat(hatMat, 0.62, 0.43, 0.43, 0.38, true),
@@ -122,7 +122,7 @@ export class HeadRig {
     for (const h of Object.values(this.hats)) this.group.add(h);
 
     this.hairMat = ps2Material({ map: canvasTex(32, 64, drawHair), alphaTest: 0.5, side: THREE.DoubleSide });
-    this.hairMat.name = 'Hair';
+    this.hairMat.name = 'hair';
     this.hair = new THREE.Group();
     this.group.add(this.hair);
     this.flip = null;

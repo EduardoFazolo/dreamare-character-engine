@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { initLandmarker, loadCanonical, makeFace, loadImage } from './face.js';
 import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
-import { AtlasBaker } from './atlas.js';
+import { AtlasBaker, skinColor } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
 import { BodyRig } from './body.js';
 import { SkinnedCharacter } from './rig.js';
@@ -100,20 +100,22 @@ const faces = [];
 let current = 0;
 let params = defaults();
 let texture = null;
+let lastSkin = null;
 
 function rebuild() {
   const face = faces[current];
   if (!face) return;
   const uvW = deform(canonUV, params, params.texWarp);
   texture = baker.bake(face, uvW, params, params.atlasRes);
+  const skin = skinColor(baker.toCanvas($('#atlas')), uvW);
+  lastSkin = skin;
   const base = params.geoSource === 'photo' ? face.geo : canon.pos;
   rig.update(deform(base, params, params.geoWarp), texture, params);
-  body.update(params, texture, rig.skinUV, rig.group);
+  body.update(params, skin, rig.group);
   sk.bake(body, params);
   sk.play(params.anim);
   sk.update(0);
   frameCamera();
-  baker.toCanvas($('#atlas'));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
   PS2.affine.value = params.affine;
@@ -241,11 +243,20 @@ $('#export').onclick = () => {
 };
 
 $('#exportGlb').onclick = async () => {
-  const buf = await exportGLB(sk, $('#atlas'));
-  const a = document.createElement('a');
-  a.download = `character_${faces[current].name.replace(/\.\w+$/, '')}.glb`;
-  a.href = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
-  a.click();
+  const name = `character_${faces[current].name.replace(/\.\w+$/, '')}_${params.outfit}`;
+  const { glb, report } = await exportGLB(sk, $('#atlas'), { name, materials: params.exportMat });
+  const save = (data, file, type) => {
+    const a = document.createElement('a');
+    a.download = file;
+    a.href = URL.createObjectURL(new Blob([data], { type }));
+    a.click();
+  };
+  // the report always ships next to the file; a character with errors is not exported at all
+  save(JSON.stringify(report, null, 2), `${name}.report.json`, 'application/json');
+  if (report.ok) save(glb, `${name}.glb`, 'model/gltf-binary');
+  status(report.ok
+    ? `exported ${name}.glb (${report.warnings.length} warnings)`
+    : `export refused: ${report.errors.map((e) => e.code).join(', ')} (see ${name}.report.json)`);
 };
 
 $('#roll').onclick = () => roll(12);
@@ -285,4 +296,4 @@ params = randomize(params);
 syncControls();
 rebuild();
 requestAnimationFrame(loop);
-window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces };
+window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces, get skin() { return lastSkin; }, sk };

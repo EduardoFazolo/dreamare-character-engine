@@ -39,7 +39,7 @@ export class BodyRig {
     this.loader = new THREE.TextureLoader();
     this.tex = {};
     this.mats = { top: ps2Material(), bottom: ps2Material(), shoes: ps2Material(), skin: ps2Material(), metal: ps2Material({ color: [0.62, 0.62, 0.66] }) };
-    for (const [k, m] of Object.entries(this.mats)) m.name = k[0].toUpperCase() + k.slice(1);
+    for (const [k, m] of Object.entries(this.mats)) m.name = k === 'metal' ? 'prop' : k; // material slots named by purpose
     this.headAnchor = new THREE.Group();
     this.headAnchor.userData.joint = 'head';
     this.j = { head: this.headAnchor };
@@ -54,6 +54,25 @@ export class BodyRig {
     })));
   }
 
+  // small noisy tile in the face's skin tone, for hands, neck and bare skin
+  skinTexture([r, g, b]) {
+    if (!this.skinTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 16;
+      this.skinTex = new THREE.CanvasTexture(c);
+      this.skinTex.wrapS = this.skinTex.wrapT = THREE.RepeatWrapping;
+      this.skinTex.magFilter = this.skinTex.minFilter = THREE.NearestFilter;
+    }
+    const c = this.skinTex.image, ctx = c.getContext('2d');
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const n = 0.9 + Math.random() * 0.2;
+      ctx.fillStyle = `rgb(${[r, g, b].map((v) => Math.min(255, v * n * 255) | 0).join(',')})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+    this.skinTex.needsUpdate = true;
+    return this.skinTex;
+  }
+
   texture(id) {
     if (!this.tex[id]) {
       const t = this.loader.load(`/textures/${id}.jpg`);
@@ -64,23 +83,21 @@ export class BodyRig {
     return this.tex[id];
   }
 
-  update(p, atlas, skinUV, head) {
+  update(p, skin, head) {
     const outfit = OUTFITS[p.outfit] || OUTFITS.suit;
-    this.skinUV = skinUV;
-    this.mats.skin.uniforms.map.value = atlas;
+    const skinTex = this.skinTexture(skin);
+    this.mats.skin.uniforms.map.value = skinTex;
     for (const slot of ['top', 'bottom', 'shoes']) {
       const id = outfit[slot];
       const m = this.mats[slot];
-      if (id === 'skin') { m.uniforms.map.value = atlas; m.uniforms.hueShift.value = 0; m.uniforms.satMul.value = 1; }
+      if (id === 'skin') { m.uniforms.map.value = skinTex; m.uniforms.hueShift.value = 0; m.uniforms.satMul.value = 1; }
       else {
         m.uniforms.map.value = this.texture(id);
         m.uniforms.hueShift.value = (outfit.hue || 0) + (slot === 'shoes' ? 0 : p.outfitHue);
         m.uniforms.satMul.value = (outfit.sat || 1) * (slot === 'shoes' ? 1 : p.outfitSat);
       }
-      m.uniforms.color.value.setScalar(slot === 'shoes' ? 1 : p.outfitBright);
-      m.userData.skin = id === 'skin';
+      m.uniforms.color.value.setScalar(slot === 'shoes' || id === 'skin' ? 1 : p.outfitBright);
     }
-    this.mats.skin.userData.skin = true;
 
     this.build(p, outfit);
     this.pose(p);
@@ -100,8 +117,7 @@ export class BodyRig {
     const DEPTH = 0.62;
     const mesh = (geo, slot, parent, uvScale = true) => {
       const m = new THREE.Mesh(geo, this.mats[slot]);
-      if (this.mats[slot].userData.skin) skinUVs(geo, this.skinUV);
-      else if (uvScale) tileUVs(geo);
+      if (uvScale) tileUVs(geo);
       parent.add(m);
       return m;
     };
@@ -214,14 +230,23 @@ export class BodyRig {
     set('head', -(j.waist.rotation.x + j.neck.rotation.x) * 0.85);
   }
 
-  // Bind pose for export: straight T-pose, feet on the ground.
+  // Bind pose for export: VRM 1.0 T-pose. Standing straight toward +Z, arms along X, palms down
+  // (-Y), four fingers straight along X, thumbs 45 degrees between X and +Z. Call with root yaw 0.
   tPose() {
-    for (const [name, o] of Object.entries(this.j)) {
-      if (name.startsWith('finger') || name.startsWith('thumb')) continue;
-      o.rotation.set(0, 0, 0);
-    }
+    for (const o of Object.values(this.j)) o.rotation.set(0, 0, 0);
     this.j.shoulderA.rotation.z = -Math.PI / 2;
     this.j.shoulderB.rotation.z = Math.PI / 2;
+    // palm faces local +z (fingers curl that way); twisting the wrist about the forearm turns it to -Y
+    this.j.wristA.rotation.y = Math.PI / 2;
+    this.j.wristB.rotation.y = -Math.PI / 2;
+    this.root.updateMatrixWorld(true);
+    const down = new THREE.Vector3(0, -1, 0), q = new THREE.Quaternion();
+    for (const [side, sx] of [['A', -1], ['B', 1]]) {
+      const thumb = this.j['thumb' + side];
+      const target = new THREE.Quaternion().setFromUnitVectors(down, new THREE.Vector3(sx, 0, 1).normalize());
+      thumb.quaternion.copy(thumb.parent.getWorldQuaternion(q).invert().multiply(target));
+    }
+    this.root.updateMatrixWorld(true);
   }
 
   // lowest point of the driver meshes -> ground
@@ -236,7 +261,7 @@ export class BodyRig {
 
 // Animation "sources": functions of time that pose the driver rig.
 export const MOTIONS = {
-  pose: { duration: 1, fps: 2, fn: (body, p) => body.pose(p) },
+  pose: { duration: 1, fps: 2, loop: false, fn: (body, p) => body.pose(p) },
   idle: {
     duration: 4, fps: 15,
     fn: (body, p, t) => {
@@ -295,7 +320,3 @@ function tileUVs(geo) {
   for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * around, uv.getY(i) * along);
 }
 
-function skinUVs(geo, skinUV) {
-  const uv = geo.attributes.uv;
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, skinUV[0] + (i % 5) * 0.004, skinUV[1] - 0.01 - (i % 3) * 0.004);
-}

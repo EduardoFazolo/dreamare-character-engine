@@ -96,6 +96,22 @@ export class AtlasBaker {
   }
 }
 
+// Robust skin tone from the finished (graded) texture: median of several skin landmarks, so hair,
+// brows or painted makeup at any single point can't turn the body's skin black.
+export function skinColor(canvas, uvW) {
+  const g = canvas.getContext('2d', { willReadFrequently: true }), n = canvas.width;
+  const cl = (x) => Math.max(0, Math.min(n - 3, Math.floor(x) - 1));
+  const px = [50, 280, 205, 425, 151, 9, 199, 36, 266].map((i) => {
+    const d = g.getImageData(cl(uvW[i][0] * n), cl((1 - uvW[i][1]) * n), 3, 3).data;
+    const c = [0, 0, 0];
+    for (let k = 0; k < d.length; k += 4) { c[0] += d[k]; c[1] += d[k + 1]; c[2] += d[k + 2]; }
+    return c.map((v) => v / 9 / 255);
+  });
+  const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  const mid = px.sort((a, b) => lum(a) - lum(b)).slice(2, 7);
+  return [0, 1, 2].map((k) => mid.reduce((s, c) => s + c[k], 0) / mid.length);
+}
+
 function boundaryVerts(index) {
   const count = new Map(), key = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
   for (let t = 0; t < index.length; t += 3)

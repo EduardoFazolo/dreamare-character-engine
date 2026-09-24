@@ -20,13 +20,25 @@ Crude jointed body (lathe torso + cylinder limbs, in "head units") with proporti
 
 ## Export (any engine)
 
-**Export GLB** writes a binary glTF 2.0 file. It passes the Khronos glTF validator with 0 errors and 0 warnings.
+**Export GLB** writes `name.glb` plus `name.report.json`. The goal: a character any engine can use with zero guessing (Three.js, Godot, Unity, Unreal, Blender). Everything the creator knows ships in the file.
 
-- The on-screen character is itself the baked asset: the jointed body only drives poses; every rebuild bakes it into one skinned mesh + skeleton (`src/rig.js`).
-- Skeleton: 32 bones with Mixamo-style humanoid names (`Hips`, `Spine`, `Spine1`, `Spine2`, `Neck`, `Head`, `LeftShoulder`, `LeftArm`, `LeftForeArm`, `LeftHand`, thumb + 4 fingers, `LeftUpLeg`, `LeftLeg`, `LeftFoot`, `LeftToeBase`, and the Right side). Each bone's +Y points at its child.
-- Rest/bind pose: T-pose, meters (about 1.5 m tall), +Y up, facing +Z, feet at y = 0.
-- Skinning is rigid: each vertex follows 1 bone (the PS1-style segmented look).
-- Clips: `Pose` (the current static pose), `Idle`, `Walk`.
-- Materials: unlit (`KHR_materials_unlit`), with the grade and outfit tint baked into the textures and nearest filtering. The PS2 shader itself (wobble, dither, fog) is not exported; recreate it per engine.
+**Plain glTF 2.0, valid on its own** (Khronos validator: 0 errors, 0 warnings)
+- Meters, +Y up, facing +Z, soles at y = 0. Top-level nodes are `Root` (identity, the ground point between the feet) and `mesh_Character`.
+- One mesh, one skin, 33 joints (`Root` + 32 humanoid bones with Mixamo-style names). Each material slot is a primitive named by purpose: `face`, `skin`, `top`, `bottom`, `shoes`, `hat`, `hair`, `prop`.
+- Bind pose is the VRM 1.0 T-pose: arms along X, palms down, fingers along X, thumbs 45 degrees forward. Rigid skinning, 1 influence per vertex.
+- Materials are PBR by default (roughness 1) or unlit (`KHR_materials_unlit`) via "Export materials". The grade and outfit tint are baked into the textures; the PS2 shader is not exported.
+- Clips: `Pose`, `Idle`, `Walk`, all in place, same bone set.
 
-Import: Godot 4 and Blender open `.glb` natively, Unreal 5 has a built-in glTF importer, and Unity needs the glTFast package. The bone names are chosen so Unity Humanoid, Godot's humanoid bone map and Unreal's retargeter can auto-map them, which is what lets Mixamo/mocap animations play on these characters.
+**VRM 1.0 (`VRMC_vrm`)**: `meta` plus the `humanoid.humanBones` map, role to node index (hips ... toes, thumb metacarpal, 4 finger proximals). Loads as an avatar in three-vrm, UniVRM, the VRM add-ons for Blender/Godot and VRM4U. Tools that don't know VRM ignore it.
+
+**`extras.character`** (on the glTF root and on the `Root` node), all in meters, with node indices:
+- `humanoid`: role -> bone/node. `hinges`: elbow/knee bend axis (bone-local, positive = bend) plus limits.
+- `landmarks`: height, bodyHeight, eyeHeight, shoulderHeight, hipWidth, leg length per side, feet (heel, toe tip, ball, length, width, ankle and sole height), eyes, grip points plus axes, center of mass.
+- `nodes`: landmark/socket empties parented to bones (`lm_*`, `socket_*Grip`, `socket_*Hip`, `socket_headTop`, `socket_back`).
+- `colliders`: per-bone capsules (bone-local, along +Y) with mass, a controller capsule, total mass.
+- `bounds`: rest and max-pose (every frame of every clip). `masks`: upperBody, lowerBody, head, arms, legs. `materials`: slot -> index.
+- `animations` (also on each `animations[i].extras.animation`): role, loop, fps, in-place speed (m/s), foot contacts `[down, up]` (an interval with down > up wraps over the loop point), footDown/footUp events.
+
+**Validation**: every export is checked (humanoid roles, unique names, one skin, identity roots, uniform scale, soles at 0, facing +Z, feet parallel, T-pose arms, weights, clip bone sets, loop continuity, in-place, landmark reach, symmetry). The report is always saved; with any error the `.glb` is not exported.
+
+Not included (yet): face blend shapes / VRM expressions, LODs (characters are ~2.5k triangles), twist bones (rigid skinning can't candy-wrap).
