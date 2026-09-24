@@ -16,6 +16,7 @@ export function ps2Material({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
       map: { value: map || whiteTex() },
       color: { value: new THREE.Color(...color) },
       alphaTest: { value: alphaTest },
+      hueShift: { value: 0 }, satMul: { value: 1 },
     },
     vertexShader: /* glsl */`
       uniform vec2 snapRes; uniform float fogNear, fogFar;
@@ -33,7 +34,7 @@ export function ps2Material({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
         vFog = smoothstep(fogNear, fogFar, -mv.z);
       }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D map; uniform vec3 color, fogColor; uniform float affine, alphaTest;
+      uniform sampler2D map; uniform vec3 color, fogColor; uniform float affine, alphaTest, hueShift, satMul;
       varying vec3 vUvw; varying vec2 vUvP; varying vec3 vLight; varying float vFog;
       float bayer2(vec2 a){ a = floor(a); return fract(a.x / 2. + a.y * a.y * .75); }
       float bayer4(vec2 a){ return bayer2(.5 * a) * .25 + bayer2(a); }
@@ -41,7 +42,13 @@ export function ps2Material({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
         vec2 uv = mix(vUvP, vUvw.xy / vUvw.z, affine);
         vec4 t = texture2D(map, uv);
         if (t.a < alphaTest) discard;
-        vec3 c = t.rgb * color * vLight;
+        vec3 c = t.rgb;
+        if (hueShift != 0. || satMul != 1.) {
+          vec3 y = mat3(.299, .596, .211, .587, -.274, -.523, .114, -.322, .312) * c;
+          float h = atan(y.z, y.y) + radians(hueShift), ch = length(y.yz) * satMul;
+          c = mat3(1., 1., 1., .956, -.272, -1.106, .621, -.647, 1.703) * vec3(y.x, ch * cos(h), ch * sin(h));
+        }
+        c *= color * vLight;
         c = mix(c, fogColor, vFog);
         c = floor(clamp(c, 0., 1.) * 31. + bayer4(gl_FragCoord.xy)) / 31.;
         gl_FragColor = vec4(c, 1.);
@@ -98,20 +105,6 @@ export class HeadRig {
     this.head = new THREE.Mesh(this.geo, this.headMat);
     this.group.add(this.head);
 
-    this.skinGeoMat = ps2Material();
-    this.neck = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 0.8, 8, 1, true), this.skinGeoMat);
-    this.neck.position.set(0, -0.78, -0.25);
-    this.group.add(this.neck);
-
-    this.outfits = {
-      suit: ps2Material({ map: canvasTex(32, 32, noiseFill([28, 26, 30], 30), 3) }),
-      fur: ps2Material({ map: canvasTex(32, 32, noiseFill([50, 120, 60], 110), 4) }),
-    };
-    this.body = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), this.outfits.suit);
-    this.body.scale.set(1.05, 0.62, 0.62);
-    this.body.position.set(0, -1.45, -0.3);
-    this.group.add(this.body);
-
     const hatMat = ps2Material({ map: canvasTex(16, 16, noiseFill([30, 26, 24], 25), 2) });
     this.hats = {
       cowboy: hat(hatMat, 0.95, 0.4, 0.46, 0.42),
@@ -159,6 +152,8 @@ export class HeadRig {
     this.geo.attributes.uv.needsUpdate = true;
     this.geo.computeVertexNormals();
     this.geo.computeBoundingSphere();
+    this.geo.computeBoundingBox();
+    this.skinUV = skinUV;
 
     if (this.flip === null) {
       // make hull triangles face away from the head center
@@ -175,10 +170,6 @@ export class HeadRig {
     }
 
     this.headMat.uniforms.map.value = tex;
-    this.skinGeoMat.uniforms.map.value = tex;
-    const nuv = this.neck.geometry.attributes.uv;
-    for (let i = 0; i < nuv.count; i++) nuv.setXY(i, skinUV[0] + (i % 3) * 0.01, skinUV[1] - 0.02);
-    nuv.needsUpdate = true;
 
     let top = -Infinity;
     for (let i = 0; i < this.nVerts; i++) top = Math.max(top, pos[i * 3 + 1]);
@@ -187,9 +178,6 @@ export class HeadRig {
       h.position.set(0, top - 0.2, C[2] - 0.05);
       h.rotation.set(-0.12, 0, 0.06);
     }
-    this.body.visible = p.outfit !== 'none';
-    if (this.outfits[p.outfit]) this.body.material = this.outfits[p.outfit];
-    this.neck.visible = this.body.visible;
     this.buildHair(p.hair === 'stringy', C);
   }
 
@@ -266,13 +254,16 @@ export function buildEnvironment(scene) {
     g.fillStyle = gr; g.fillRect(0, 0, w, h);
   });
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(60, 60, 12, 12),
-    ps2Material({ map: canvasTex(32, 32, noiseFill([200, 120, 80], 70), 18) }),
+    new THREE.PlaneGeometry(240, 240, 24, 24),
+    ps2Material({ map: canvasTex(32, 32, noiseFill([200, 120, 80], 40), 200) }),
   );
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -2.05;
+  ground.position.y = 0;
   scene.add(ground);
-  const dune = new THREE.Mesh(new THREE.SphereGeometry(6, 10, 6), ps2Material({ map: canvasTex(32, 32, noiseFill([190, 110, 90], 60), 6) }));
-  dune.scale.set(2, 0.5, 1); dune.position.set(-7, -2.4, -14);
-  scene.add(dune);
+  const duneMat = ps2Material({ map: canvasTex(32, 32, noiseFill([190, 110, 90], 60), 6) });
+  for (const [x, z, s] of [[-30, -70, 22], [35, -90, 30], [-80, -40, 18]]) {
+    const dune = new THREE.Mesh(new THREE.SphereGeometry(s, 10, 6), duneMat);
+    dune.scale.set(2, 0.45, 1); dune.position.set(x, -s * 0.12, z);
+    scene.add(dune);
+  }
 }

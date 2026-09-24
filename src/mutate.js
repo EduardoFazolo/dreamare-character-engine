@@ -1,3 +1,5 @@
+import { OUTFITS, POSES } from './body.js';
+
 // Parameter schema + landmark-driven warps. The same deform() runs in UV space (2D, bakes into
 // the texture) and on the 3D mesh, because both share MediaPipe's 468-landmark indexing.
 
@@ -22,6 +24,25 @@ export const SCHEMA = [
     ['snout', 'Snout', -1, 2, 0],
     ['cranium', 'Cranium', -0.8, 2.5, 0],
     ['headDepth', 'Head depth', -0.6, 1.5, 0],
+  ]},
+  { group: 'Body', items: [
+    ['headScale', 'Head size', 0.6, 2.2, 1.1],
+    ['neckLen', 'Neck length', 0.1, 2.5, 0.5],
+    ['shoulderW', 'Shoulder width', 1.2, 4.5, 2.5],
+    ['torsoLen', 'Torso length', 1.5, 5.5, 3],
+    ['girth', 'Girth', 0.45, 2.2, 1],
+    ['belly', 'Belly', -0.3, 2.2, 0],
+    ['hunch', 'Hunch', -0.3, 1.5, 0.1],
+    ['armLen', 'Arm length', 0.5, 2.2, 1],
+    ['handSize', 'Hand size', 0.5, 2.8, 1],
+    ['fingerLen', 'Finger length', 0.4, 3.5, 1],
+    ['legLen', 'Leg length', 0.35, 1.9, 1],
+    ['footSize', 'Foot size', 0.5, 2.5, 1],
+  ]},
+  { group: 'Outfit color', items: [
+    ['outfitHue', 'Outfit hue', -180, 180, 0],
+    ['outfitSat', 'Outfit saturation', 0, 2, 1],
+    ['outfitBright', 'Outfit brightness', 0.4, 1.6, 1],
   ]},
   { group: 'Where mutations apply', items: [
     ['texWarp', 'Texture warp', 0, 1.5, 1],
@@ -61,7 +82,9 @@ export const CHOICES = {
   atlasRes: { label: 'Texture res', options: [64, 128, 256, 512], def: 128 },
   renderH: { label: 'Render height', options: [224, 240, 320, 448], def: 240 },
   geoSource: { label: 'Head shape', options: ['canonical', 'photo'], def: 'canonical' },
-  outfit: { label: 'Outfit', options: ['suit', 'fur', 'none'], def: 'suit' },
+  view: { label: 'Camera', options: ['medium', 'full', 'portrait'], def: 'medium' },
+  pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
+  outfit: { label: 'Outfit', options: Object.keys(OUTFITS), def: 'suit' },
   hat: { label: 'Hat', options: ['none', 'cowboy', 'bowler'], def: 'none' },
   hair: { label: 'Hair', options: ['none', 'stringy'], def: 'none' },
 };
@@ -179,7 +202,18 @@ export function randomize(base) {
   p.grime = rnd(0.1, 0.5);
   p.texWarp = rnd(0.7, 1.3);
   p.geoWarp = rnd(0.3, 0.9);
-  p.outfit = pick(['suit', 'suit', 'fur', 'none']);
+  const body = SCHEMA.find((g) => g.group === 'Body').items;
+  for (const [k, , mn, mx, d] of body) p[k] = Math.max(mn, Math.min(mx, d + gauss() * 0.12 * (mx - mn)));
+  if (Math.random() < 0.75) {
+    const [k, , mn, mx, d] = pick(body);
+    p[k] = Math.random() < 0.75 ? rnd(d + (mx - d) * 0.55, mx) : rnd(mn, d - (d - mn) * 0.55);
+  }
+  p.headScale = Math.max(p.headScale, rnd(0.95, 1.35));
+  p.outfitHue = Math.random() < 0.3 ? rnd(-180, 180) : rnd(-15, 15);
+  p.outfitSat = rnd(0.7, 1.4);
+  p.outfitBright = rnd(0.75, 1.15);
+  p.pose = pick(['stand', 'stand', 'stand', 'hunch', 'hunch', 'crouch', 'gunslinger', 'zombie']);
+  p.outfit = pick(Object.keys(OUTFITS));
   p.hat = pick(['none', 'none', 'cowboy', 'bowler']);
   p.hair = p.hat === 'none' ? pick(['none', 'stringy']) : pick(['none', 'none', 'stringy']);
   return p;

@@ -3,6 +3,7 @@ import { initLandmarker, loadCanonical, makeFace, loadImage } from './face.js';
 import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
 import { AtlasBaker } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
+import { BodyRig } from './body.js';
 
 THREE.ColorManagement.enabled = false;
 
@@ -21,10 +22,37 @@ const rig = new HeadRig(canon);
 
 const scene = new THREE.Scene();
 buildEnvironment(scene);
-scene.add(rig.group);
-const camera = new THREE.PerspectiveCamera(32, 4 / 3, 0.1, 60);
-camera.position.set(0, -0.2, 4.1);
-camera.lookAt(0, -0.25, 0);
+const body = new BodyRig();
+scene.add(body.root);
+const camera = new THREE.PerspectiveCamera(32, 4 / 3, 0.1, 400);
+
+function frameCamera() {
+  const yaw = body.root.rotation.y;
+  body.root.rotation.y = 0;
+  body.root.updateMatrixWorld(true);
+  const half = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  let target, dist;
+  if (params.view === 'portrait') {
+    target = rig.group.localToWorld(new THREE.Vector3(0, -0.35, 0));
+    dist = 1.25 / half * params.headScale;
+  } else if (params.view === 'medium') {
+    const box = new THREE.Box3().setFromObject(body.parts);
+    const hipY = body.j.pelvis.getWorldPosition(new THREE.Vector3()).y;
+    const top = box.max.y + 0.2, bottom = hipY - (hipY - box.min.y) * 0.2;
+    target = new THREE.Vector3((box.min.x + box.max.x) / 2, (top + bottom) / 2, (box.min.z + box.max.z) / 2);
+    dist = ((top - bottom) / 2) * 1.05 / half + (box.max.z - box.min.z) / 2;
+  } else {
+    const box = new THREE.Box3().setFromObject(body.parts);
+    target = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    dist = Math.max(size.y / 2, size.x / 2 / camera.aspect) * 1.08 / half + size.z / 2;
+  }
+  camera.position.set(target.x, target.y + dist * 0.06, target.z + dist);
+  camera.lookAt(target);
+  PS2.fogNear.value = dist + 4;
+  PS2.fogFar.value = dist + 60;
+  body.root.rotation.y = yaw;
+}
 
 // low-res game frame -> VHS-ish upscale pass
 let lowRT;
@@ -75,6 +103,8 @@ function rebuild() {
   texture = baker.bake(face, uvW, params, params.atlasRes);
   const base = params.geoSource === 'photo' ? face.geo : canon.pos;
   rig.update(deform(base, params, params.geoWarp), texture, params);
+  body.update(params, texture, rig.skinUV, rig.group);
+  frameCamera();
   baker.toCanvas($('#atlas'));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
@@ -103,8 +133,8 @@ function loop(ms) {
   const t = ms / 1000;
   idle += 1 / 60;
   const sway = idle > 2 ? Math.sin(t * 0.6) * 0.45 : 0;
-  rig.group.rotation.y = yaw + sway;
-  rig.group.position.y = Math.sin(t * 1.3) * 0.015;
+  body.root.rotation.y = yaw + sway;
+  body.animate(t);
   renderFrame(t);
 }
 
@@ -194,15 +224,14 @@ $('#export').onclick = () => {
 $('#roll').onclick = () => roll(12);
 function roll(n) {
   paused = true;
-  const keep = { params, current, yaw: rig.group.rotation.y };
+  const keep = { params, current };
   const gal = $('#gallery');
   gal.innerHTML = '';
   for (let i = 0; i < n; i++) {
     current = Math.floor(Math.random() * faces.length);
     params = randomize(defaults());
     rebuild();
-    rig.group.rotation.y = (Math.random() - 0.5) * 1.1;
-    rig.group.position.y = 0;
+    body.root.rotation.y = (Math.random() - 0.5) * 1.1;
     renderFrame(i);
     const img = document.createElement('img');
     img.src = canvas.toDataURL('image/jpeg', 0.85);
@@ -219,7 +248,7 @@ function roll(n) {
 buildControls();
 syncControls();
 setRes(params.renderH);
-await initLandmarker();
+await Promise.all([initLandmarker(), body.preload()]);
 status('detecting sample faces…');
 for (const name of await (await fetch('/faces/index.json')).json()) await addFace(`/faces/${name}`, name).catch(() => {});
 renderFaces();
