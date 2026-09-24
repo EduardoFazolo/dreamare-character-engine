@@ -86,7 +86,7 @@ function annotate(writer, sk, name) {
   json.extensions.VRMC_vrm = {
     specVersion: '1.0',
     meta: {
-      name, version: '1', authors: ['Dream Face Lab'],
+      name, version: '1', authors: ['Dreamare Character Engine'],
       licenseUrl: 'https://vrm.dev/licenses/1.0/',
       // conservative VRM defaults; edit if you publish the character
       avatarPermission: 'onlyAuthor', commercialUsage: 'personalNonProfit', creditNotation: 'required',

@@ -1,7 +1,7 @@
-# Dream Face Lab
+# Dreamare Character Engine
 <img width="2957" height="1574" alt="image" src="https://github.com/user-attachments/assets/11ef5673-48ad-45ce-b6d2-348780690558" />
 
-Texture-first MVP: photo -> MediaPipe landmarks -> canonical-UV face texture -> mutations/grade/makeup -> crude low-poly head with a PS2 renderer.
+Engine-agnostic generator for strange, dreamlike PS2-era humanoids: a photo becomes a mutated face texture (MediaPipe landmarks -> canonical-UV texture -> warps, grade, makeup) on a sculpted, clothed, rigged body that exports to any engine.
 
     npm install && npm run dev   # http://localhost:5177
 
@@ -27,7 +27,7 @@ Poses: stand, hunch, crouch, gunslinger (with revolver), zombie. Camera: medium,
 
 ## Export (any engine)
 
-**Export GLB** writes `name.glb` plus `name.report.json`. The goal: a character any engine can use with zero guessing (Three.js, Godot, Unity, Unreal, Blender). Everything the creator knows ships in the file.
+**Export character** downloads one `name.zip` with `name.glb`, `name.report.json` and `textures/face.png` + `textures/body.png` (already embedded in the GLB; there for engines that want them separately). Files are named `dreamare_<outfit>_<id>`, where the id comes from the character's seed. The goal: a character any engine can use with zero guessing (Three.js, Godot, Unity, Unreal, Blender). Everything the creator knows ships in the file.
 
 **Plain glTF 2.0, valid on its own** (Khronos validator: 0 errors, 0 warnings)
 - Meters, +Y up, facing +Z, soles at y = 0. Top-level nodes are `Root` (identity, the ground point between the feet) and `mesh_Character`.
@@ -46,6 +46,6 @@ Poses: stand, hunch, crouch, gunslinger (with revolver), zombie. Camera: medium,
 - `bounds`: rest and max-pose (every frame of every clip). `masks`: upperBody, lowerBody, head, arms, legs. `materials`: slot -> index.
 - `animations` (also on each `animations[i].extras.animation`): role, loop, fps, in-place speed (m/s), foot contacts `[down, up]` (an interval with down > up wraps over the loop point), footDown/footUp events.
 
-**Validation**: every export is checked (humanoid roles, unique names, one skin, identity roots, uniform scale, soles at 0, facing +Z, feet parallel, T-pose arms, weights, clip bone sets, loop continuity, in-place, landmark reach, symmetry). The report is always saved; with any error the `.glb` is not exported.
+**Validation**: every export is checked (humanoid roles, unique names, one skin, identity roots, uniform scale, soles at 0, facing +Z, feet parallel, T-pose arms, weights, clip bone sets, loop continuity, in-place, landmark reach, symmetry). The report is always saved; with any error only the report is downloaded, no `.glb`.
 
 Not included (yet): face blend shapes / VRM expressions, LODs (characters are ~2.5k triangles), twist bones (rigid skinning can't candy-wrap).

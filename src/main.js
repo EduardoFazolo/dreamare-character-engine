@@ -7,6 +7,7 @@ import { BodyRig } from './body.js';
 import { SkinnedCharacter } from './rig.js';
 import { simplifierReady } from './sdf.js';
 import { exportGLB } from './export.js';
+import { zipSync, strToU8 } from 'fflate';
 
 THREE.ColorManagement.enabled = false;
 
@@ -271,28 +272,45 @@ $('#randomize').onclick = () => {
 $('#reset').onclick = () => { params = defaults(); syncControls(); rebuild(); };
 $('#export').onclick = () => {
   const a = document.createElement('a');
-  a.download = `face_${faces[current].name.replace(/\.\w+$/, '')}_${params.atlasRes}.png`;
+  a.download = `dreamare_face_${(params.seed >>> 0).toString(36)}_${params.atlasRes}.png`;
   a.href = $('#atlas').toDataURL('image/png');
   a.click();
 };
 
 $('#exportGlb').onclick = async () => {
-  const name = `character_${faces[current].name.replace(/\.\w+$/, '')}_${params.outfit}`;
+  const name = `dreamare_${params.outfit}_${(params.seed >>> 0).toString(36)}`;
   const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas]]);
   const { glb, report } = await exportGLB(sk, canvases, { name, materials: params.exportMat });
-  const save = (data, file, type) => {
-    const a = document.createElement('a');
-    a.download = file;
-    a.href = URL.createObjectURL(new Blob([data], { type }));
-    a.click();
+  const reportJson = JSON.stringify(report, null, 2);
+  if (!report.ok) {
+    // a character with errors is not exported: only the report explaining why
+    download(new Blob([reportJson], { type: 'application/json' }), `${name}.report.json`);
+    status(`export refused: ${report.errors.map((e) => e.code).join(', ')} (see ${name}.report.json)`);
+    return;
+  }
+  // one zip instead of a burst of downloads; textures are already inside the GLB, the PNGs are extras
+  const files = {
+    [`${name}.glb`]: new Uint8Array(glb),
+    [`${name}.report.json`]: strToU8(reportJson),
+    'textures/face.png': await pngBytes($('#atlas')),
   };
-  // the report always ships next to the file; a character with errors is not exported at all
-  save(JSON.stringify(report, null, 2), `${name}.report.json`, 'application/json');
-  if (report.ok) save(glb, `${name}.glb`, 'model/gltf-binary');
-  status(report.ok
-    ? `exported ${name}.glb (${report.warnings.length} warnings)`
-    : `export refused: ${report.errors.map((e) => e.code).join(', ')} (see ${name}.report.json)`);
+  if (params.bodyStyle !== 'segmented' && sk.bodyCanvas) files['textures/body.png'] = await pngBytes(sk.bodyCanvas);
+  download(new Blob([zipSync(files, { level: 6 })], { type: 'application/zip' }), `${name}.zip`);
+  status(`exported ${name}.zip (${report.warnings.length} warnings)`);
 };
+
+function download(blob, file) {
+  const a = document.createElement('a');
+  a.download = file;
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function pngBytes(canvas) {
+  const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/png'));
+  return new Uint8Array(await blob.arrayBuffer());
+}
 
 $('#roll').onclick = () => roll(12);
 function roll(n) {

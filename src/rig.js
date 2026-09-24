@@ -420,7 +420,7 @@ export class SkinnedCharacter {
     }
 
     return {
-      schema: 'dream-face-lab.character/1',
+      schema: 'dreamare.character/1',
       units: 'meters', up: [0, 1, 0], forward: [0, 0, 1], left: [1, 0, 0],
       bindPose: 'T', bindPoseSpec: 'VRM 1.0 T-pose',
       skinning: { influences: 1, rigid: true },

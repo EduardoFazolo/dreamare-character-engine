@@ -1,5 +1,5 @@
 {
-  "name": "dream-face-lab",
+  "name": "dreamare-character-engine",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
+    "fflate": "^0.8.3",
     "meshoptimizer": "^1.2.0",
     "three": "^0.186.0"
   },
