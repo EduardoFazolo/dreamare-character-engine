@@ -221,7 +221,7 @@ syncControls();
 setRes(params.renderH);
 await initLandmarker();
 status('detecting sample faces…');
-for (let i = 1; i <= 12; i++) await addFace(`/faces/face${i}.jpg`, `face${i}.jpg`).catch(() => {});
+for (const name of await (await fetch('/faces/index.json')).json()) await addFace(`/faces/${name}`, name).catch(() => {});
 renderFaces();
 status(`${faces.length} faces loaded. Drag the head to turn it. Drop your own photos anywhere.`);
 params = randomize(params);
