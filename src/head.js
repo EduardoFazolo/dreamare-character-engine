@@ -19,14 +19,21 @@ export function ps2Material({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
       hueShift: { value: 0 }, satMul: { value: 1 },
     },
     vertexShader: /* glsl */`
+      #include <common>
+      #include <skinning_pars_vertex>
       uniform vec2 snapRes; uniform float fogNear, fogFar;
       varying vec3 vUvw; varying vec2 vUvP; varying vec3 vLight; varying float vFog;
       void main(){
-        vec4 mv = modelViewMatrix * vec4(position, 1.);
+        #include <skinbase_vertex>
+        #include <beginnormal_vertex>
+        #include <skinnormal_vertex>
+        #include <begin_vertex>
+        #include <skinning_vertex>
+        vec4 mv = modelViewMatrix * vec4(transformed, 1.);
         vec4 cp = projectionMatrix * mv;
         cp.xy = floor(cp.xy / cp.w * snapRes + .5) / snapRes * cp.w;
         gl_Position = cp;
-        vec3 n = normalize(mat3(modelMatrix) * normal);
+        vec3 n = normalize(mat3(modelMatrix) * objectNormal);
         float key = max(dot(n, normalize(vec3(.6, .8, .7))), 0.);
         float rim = max(dot(n, normalize(vec3(-.8, .1, -.4))), 0.);
         vLight = vec3(.42, .38, .48) + vec3(1., .93, .8) * key * .85 + vec3(.3, .35, .6) * rim * .5;
@@ -102,10 +109,12 @@ export class HeadRig {
     this.geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(this.nVerts * 2), 2));
     this.geo.setIndex(idx);
     this.headMat = ps2Material();
+    this.headMat.name = 'Head';
     this.head = new THREE.Mesh(this.geo, this.headMat);
     this.group.add(this.head);
 
     const hatMat = ps2Material({ map: canvasTex(16, 16, noiseFill([30, 26, 24], 25), 2) });
+    hatMat.name = 'Hat';
     this.hats = {
       cowboy: hat(hatMat, 0.95, 0.4, 0.46, 0.42),
       bowler: hat(hatMat, 0.62, 0.43, 0.43, 0.38, true),
@@ -113,6 +122,7 @@ export class HeadRig {
     for (const h of Object.values(this.hats)) this.group.add(h);
 
     this.hairMat = ps2Material({ map: canvasTex(32, 64, drawHair), alphaTest: 0.5, side: THREE.DoubleSide });
+    this.hairMat.name = 'Hair';
     this.hair = new THREE.Group();
     this.group.add(this.hair);
     this.flip = null;

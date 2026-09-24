@@ -4,6 +4,8 @@ import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
 import { AtlasBaker } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
 import { BodyRig } from './body.js';
+import { SkinnedCharacter } from './rig.js';
+import { exportGLB } from './export.js';
 
 THREE.ColorManagement.enabled = false;
 
@@ -24,6 +26,9 @@ const scene = new THREE.Scene();
 buildEnvironment(scene);
 const body = new BodyRig();
 scene.add(body.root);
+body.parts.visible = false; // the driver rig only poses; what you see is the baked skinned mesh
+const sk = new SkinnedCharacter();
+body.root.add(sk.group);
 const camera = new THREE.PerspectiveCamera(32, 4 / 3, 0.1, 400);
 
 function frameCamera() {
@@ -104,6 +109,9 @@ function rebuild() {
   const base = params.geoSource === 'photo' ? face.geo : canon.pos;
   rig.update(deform(base, params, params.geoWarp), texture, params);
   body.update(params, texture, rig.skinUV, rig.group);
+  sk.bake(body, params);
+  sk.play(params.anim);
+  sk.update(0);
   frameCamera();
   baker.toCanvas($('#atlas'));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
@@ -126,7 +134,7 @@ canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clien
 canvas.addEventListener('pointermove', (e) => { if (dragging) { yaw += (e.clientX - lastX) * 0.01; lastX = e.clientX; idle = 0; } });
 canvas.addEventListener('pointerup', () => (dragging = false));
 
-let paused = false;
+let paused = false, lastT;
 function loop(ms) {
   requestAnimationFrame(loop);
   if (paused || !faces.length) return;
@@ -134,7 +142,8 @@ function loop(ms) {
   idle += 1 / 60;
   const sway = idle > 2 ? Math.sin(t * 0.6) * 0.45 : 0;
   body.root.rotation.y = yaw + sway;
-  body.animate(t);
+  sk.update(Math.min(0.1, t - (lastT ?? t)));
+  lastT = t;
   renderFrame(t);
 }
 
@@ -221,6 +230,14 @@ $('#export').onclick = () => {
   a.click();
 };
 
+$('#exportGlb').onclick = async () => {
+  const buf = await exportGLB(sk, $('#atlas'));
+  const a = document.createElement('a');
+  a.download = `character_${faces[current].name.replace(/\.\w+$/, '')}.glb`;
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+  a.click();
+};
+
 $('#roll').onclick = () => roll(12);
 function roll(n) {
   paused = true;
@@ -232,6 +249,7 @@ function roll(n) {
     params = randomize(defaults());
     rebuild();
     body.root.rotation.y = (Math.random() - 0.5) * 1.1;
+    sk.update(Math.random() * 3);
     renderFrame(i);
     const img = document.createElement('img');
     img.src = canvas.toDataURL('image/jpeg', 0.85);

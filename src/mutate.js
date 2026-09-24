@@ -84,6 +84,7 @@ export const CHOICES = {
   geoSource: { label: 'Head shape', options: ['canonical', 'photo'], def: 'canonical' },
   view: { label: 'Camera', options: ['medium', 'full', 'portrait'], def: 'medium' },
   pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
+  anim: { label: 'Animation', options: ['idle', 'walk', 'pose'], def: 'idle' },
   outfit: { label: 'Outfit', options: Object.keys(OUTFITS), def: 'suit' },
   hat: { label: 'Hat', options: ['none', 'cowboy', 'bowler'], def: 'none' },
   hair: { label: 'Hair', options: ['none', 'stringy'], def: 'none' },

@@ -39,8 +39,10 @@ export class BodyRig {
     this.loader = new THREE.TextureLoader();
     this.tex = {};
     this.mats = { top: ps2Material(), bottom: ps2Material(), shoes: ps2Material(), skin: ps2Material(), metal: ps2Material({ color: [0.62, 0.62, 0.66] }) };
+    for (const [k, m] of Object.entries(this.mats)) m.name = k[0].toUpperCase() + k.slice(1);
     this.headAnchor = new THREE.Group();
-    this.j = {};
+    this.headAnchor.userData.joint = 'head';
+    this.j = { head: this.headAnchor };
   }
 
   preload() {
@@ -86,13 +88,7 @@ export class BodyRig {
     head.scale.setScalar(p.headScale);
     head.position.set(0, 0.6 * p.headScale, 0.22 * p.headScale);
     this.headAnchor.add(head);
-
-    // plant the lowest point on the ground
-    this.parts.position.set(0, 0, 0);
-    this.root.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(this.parts, true);
-    this.parts.position.y = -box.min.y;
-    this.root.updateMatrixWorld(true);
+    this.snap();
   }
 
   build(p, outfit) {
@@ -112,6 +108,7 @@ export class BodyRig {
     const joint = (name, parent, x, y, z) => {
       const o = new THREE.Group();
       o.position.set(x, y, z);
+      o.userData.joint = name;
       parent.add(o);
       this.j[name] = o;
       return o;
@@ -143,7 +140,7 @@ export class BodyRig {
       mesh(new THREE.SphereGeometry(0.2 * g, 7, 5), 'top', elbow);
       mesh(limb(0.2 * g, 0.15 * g, fa), 'top', elbow);
       const wrist = joint('wrist' + side, elbow, 0, -fa, 0);
-      this.hand(wrist, p, sx, mesh);
+      this.hand(wrist, p, sx, mesh, side);
       if (side === 'A' && POSES[p.pose]?.gun) this.revolver(wrist, p.handSize, mesh);
 
       const hip = joint('hip' + side, pelvis, sx * hipR * 0.5, -0.1, 0);
@@ -158,7 +155,7 @@ export class BodyRig {
     }
   }
 
-  hand(wrist, p, sx, mesh) {
+  hand(wrist, p, sx, mesh, side) {
     const hs = p.handSize;
     const palm = new THREE.BoxGeometry(0.34 * hs, 0.42 * hs, 0.13 * hs).translate(0, -0.21 * hs, 0);
     mesh(palm, 'skin', wrist);
@@ -167,12 +164,16 @@ export class BodyRig {
       const f = new THREE.Group();
       f.position.set((i - 1.5) * 0.085 * hs, -0.4 * hs, 0);
       f.rotation.set(-0.25 - i * 0.05, 0, (i - 1.5) * 0.06);
+      f.userData.joint = `finger${side}${i}`;
+      this.j[f.userData.joint] = f;
       mesh(limb(0.04 * hs, 0.03 * hs, fl * (i === 0 || i === 3 ? 0.85 : 1), 5), 'skin', f);
       wrist.add(f);
     }
     const thumb = new THREE.Group();
     thumb.position.set(-sx * 0.17 * hs, -0.18 * hs, 0.04 * hs);
     thumb.rotation.set(-0.5, 0, -sx * 0.6);
+    thumb.userData.joint = `thumb${side}`;
+    this.j[thumb.userData.joint] = thumb;
     mesh(limb(0.045 * hs, 0.035 * hs, fl * 0.7, 5), 'skin', thumb);
     wrist.add(thumb);
   }
@@ -190,34 +191,78 @@ export class BodyRig {
     wrist.add(gun);
   }
 
-  pose(p) {
-    const P = POSES[p.pose] || POSES.stand, j = this.j;
+  // Poses/animations are written as driver-joint rotations; rig.js converts them to bone tracks.
+  pose(p, poseName = p.pose, extra = {}) {
+    const P = POSES[poseName] || POSES.stand, j = this.j;
     const out = 0.06 + p.girth * 0.05 + Math.max(0, p.belly) * 0.06;
-    this.base = {};
-    const set = (name, x, z = 0) => { j[name].rotation.set(x, 0, z); this.base[name] = [x, z]; };
+    const set = (name, x, y = 0, z = 0) => {
+      const e = extra[name] || [0, 0, 0];
+      j[name].rotation.set(x + e[0], y + e[1], z + e[2]);
+    };
     set('waist', P.waist + p.hunch * 0.5);
     set('neck', P.neck + p.hunch * 0.4);
     for (const [side, sx] of [['A', -1], ['B', 1]]) {
       const shp = (side === 'A' && P.shA) || P.sh, el = side === 'A' && P.elA !== undefined ? P.elA : P.el;
-      set('shoulder' + side, shp[0], sx * (shp[1] + out));
+      set('shoulder' + side, shp[0], 0, sx * (shp[1] + out));
       set('elbow' + side, el);
-      set('hip' + side, P.hip[0], sx * P.hip[1]);
+      set('hip' + side, P.hip[0], 0, sx * P.hip[1]);
       set('knee' + side, P.knee);
-      set('ankle' + side, -(P.hip[0] + P.knee));
+      const e = (k) => (extra[k + side] || [0])[0];
+      set('ankle' + side, -(P.hip[0] + e('hip') + P.knee + e('knee')));
     }
     // head keeps looking forward-ish
-    this.headAnchor.rotation.x = -(j.waist.rotation.x + j.neck.rotation.x) * 0.85;
+    set('head', -(j.waist.rotation.x + j.neck.rotation.x) * 0.85);
   }
 
-  animate(t) {
-    if (!this.base) return;
-    const j = this.j, b = this.base;
-    j.waist.rotation.x = b.waist[0] + Math.sin(t * 1.1) * 0.015;
-    j.neck.rotation.y = Math.sin(t * 0.37) * 0.12;
-    j.shoulderA.rotation.x = b.shoulderA[0] + Math.sin(t * 0.9) * 0.03;
-    j.shoulderB.rotation.x = b.shoulderB[0] + Math.sin(t * 0.9 + 1) * 0.03;
+  // Bind pose for export: straight T-pose, feet on the ground.
+  tPose() {
+    for (const [name, o] of Object.entries(this.j)) {
+      if (name.startsWith('finger') || name.startsWith('thumb')) continue;
+      o.rotation.set(0, 0, 0);
+    }
+    this.j.shoulderA.rotation.z = -Math.PI / 2;
+    this.j.shoulderB.rotation.z = Math.PI / 2;
+  }
+
+  // lowest point of the driver meshes -> ground
+  snap() {
+    this.parts.position.set(0, 0, 0);
+    this.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(this.parts, true);
+    this.parts.position.y = -box.min.y;
+    this.root.updateMatrixWorld(true);
   }
 }
+
+// Animation "sources": functions of time that pose the driver rig.
+export const MOTIONS = {
+  pose: { duration: 1, fps: 2, fn: (body, p) => body.pose(p) },
+  idle: {
+    duration: 4, fps: 15,
+    fn: (body, p, t) => {
+      const w = (2 * Math.PI * t) / 4;
+      body.pose(p, p.pose, {
+        waist: [Math.sin(w) * 0.02, 0, 0],
+        neck: [0, Math.sin(w) * 0.12, 0],
+        shoulderA: [Math.sin(w * 2) * 0.03, 0, 0],
+        shoulderB: [Math.sin(w * 2 + 1) * 0.03, 0, 0],
+      });
+    },
+  },
+  walk: {
+    duration: 1.1, fps: 20, snapEachFrame: true,
+    fn: (body, p, t) => {
+      const w = (2 * Math.PI * t) / 1.1, s = Math.sin(w), c = Math.cos(w);
+      body.pose(p, 'stand', {
+        hipA: [-0.5 * s, 0, 0], hipB: [0.5 * s, 0, 0],
+        kneeA: [0.7 * Math.max(0, c), 0, 0], kneeB: [0.7 * Math.max(0, -c), 0, 0],
+        shoulderA: [0.4 * s, 0, 0], shoulderB: [-0.4 * s, 0, 0],
+        elbowA: [-0.2 - 0.2 * Math.max(0, s), 0, 0], elbowB: [-0.2 - 0.2 * Math.max(0, -s), 0, 0],
+        waist: [0.04, 0.1 * s, 0], neck: [0, -0.08 * s, 0],
+      });
+    },
+  },
+};
 
 function lathe(pts, maxR) {
   return new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(Math.max(0.001, r), y)), 8).scale(1, 1, 1);

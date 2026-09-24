@@ -17,3 +17,16 @@ Crude jointed body (lathe torso + cylinder limbs, in "head units") with proporti
 - Poses: stand, hunch, crouch, gunslinger (with revolver), zombie. The lowest point is snapped to the ground.
 - Hands, neck and barefoot/naked parts sample the skin color from the face texture, so they match the head.
 - Camera: medium (thighs up), full, portrait.
+
+## Export (any engine)
+
+**Export GLB** writes a binary glTF 2.0 file. It passes the Khronos glTF validator with 0 errors and 0 warnings.
+
+- The on-screen character is itself the baked asset: the jointed body only drives poses; every rebuild bakes it into one skinned mesh + skeleton (`src/rig.js`).
+- Skeleton: 32 bones with Mixamo-style humanoid names (`Hips`, `Spine`, `Spine1`, `Spine2`, `Neck`, `Head`, `LeftShoulder`, `LeftArm`, `LeftForeArm`, `LeftHand`, thumb + 4 fingers, `LeftUpLeg`, `LeftLeg`, `LeftFoot`, `LeftToeBase`, and the Right side). Each bone's +Y points at its child.
+- Rest/bind pose: T-pose, meters (about 1.5 m tall), +Y up, facing +Z, feet at y = 0.
+- Skinning is rigid: each vertex follows 1 bone (the PS1-style segmented look).
+- Clips: `Pose` (the current static pose), `Idle`, `Walk`.
+- Materials: unlit (`KHR_materials_unlit`), with the grade and outfit tint baked into the textures and nearest filtering. The PS2 shader itself (wobble, dither, fog) is not exported; recreate it per engine.
+
+Import: Godot 4 and Blender open `.glb` natively, Unreal 5 has a built-in glTF importer, and Unity needs the glTFast package. The bone names are chosen so Unity Humanoid, Godot's humanoid bone map and Unreal's retargeter can auto-map them, which is what lets Mixamo/mocap animations play on these characters.
