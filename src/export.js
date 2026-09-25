@@ -27,6 +27,7 @@ export async function exportGLB(sk, canvases, { name = 'character', materials = 
   // node transforms = T-pose bind, which retargeters read as the rest pose. Save/restore the live
   // pose: the mixer skips unchanged values, so a static clip would not rewrite it on its own.
   const live = sk.skeleton.bones.map((b) => [b.position.clone(), b.quaternion.clone()]);
+  sk.meta.bounds.maxPose ||= sk.animatedBounds(); // bounds over every animation frame, export-only
   sk.skeleton.pose();
   let report;
   const exporter = new GLTFExporter();

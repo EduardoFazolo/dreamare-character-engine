@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MeshoptSimplifier } from 'meshoptimizer';
+import { perf } from './perf.js';
 
 // Signed distance field of a sculpted body: primitives in their joint's local frame, smooth-unioned,
 // polygonized with surface nets, then decimated to a low-poly budget with meshoptimizer.
@@ -60,6 +61,7 @@ export class BodySDF {
   constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18, sagFloor = -Infinity } = {}) {
     this.inflate = inflate; this.clay = clay; this.sag = sag; this.seed = seed; this.join = join; this.sagFloor = sagFloor;
     const pad = inflate + clay * 0.12 + extra;
+    this.extraPad = extra;
     this.prims = prims.map((p) => {
       const inv = p.matrix.clone().invert().elements; // model -> local, column-major
       const lb = localBounds(p);
@@ -70,6 +72,18 @@ export class BodySDF {
     });
     this.bounds = new THREE.Box3();
     for (const p of this.prims) this.bounds.union(p.box);
+    // hot-loop data: numeric type/group codes and precomputed fat per prim (no strings, no Map)
+    this.groupNames = ['torso', ...new Set(this.prims.filter((p) => p.group && p.group !== 'torso').map((p) => p.group))];
+    for (const p of this.prims) {
+      p.t = p.type === 'cone' ? 0 : p.type === 'ellipsoid' ? 1 : 2;
+      p.gi = Math.max(0, this.groupNames.indexOf(p.group || 'torso'));
+      // fat mostly lands on the torso; limbs get less so legs don't swell into one column
+      // (feet keep their exact size so soles stay on the ground)
+      p.fat = p.rigid ? 0 : this.inflate * (p.gi === 0 ? 1 : p.group.startsWith('leg') ? 0.4 : 0.6);
+    }
+    this.acc = new Float64Array(this.groupNames.length);
+    this.giA = this.groupNames.indexOf('legA');
+    this.giB = this.groupNames.indexOf('legB');
   }
 
   // exclude: a limb group to leave out (each leg is sculpted in a pass where the other doesn't exist)
@@ -77,18 +91,18 @@ export class BodySDF {
   evalList(x, y, z, list, exclude = null, out = null) {
     // torso prims smooth-union together; each limb group smooth-unions with the torso;
     // limb groups combine with a hard min, so left/right legs (and feet) never web together
-    let torso = 1e3;
-    const groups = this._g || (this._g = new Map());
-    groups.clear();
-    for (const p of list) {
+    const acc = this.acc, G = acc.length;
+    acc.fill(1e3);
+    for (let n = 0; n < list.length; n++) {
+      const p = list[n];
       if (p.ghost) continue;
       const e = p.inv;
       const lx = e[0] * x + e[4] * y + e[8] * z + e[12];
       let ly = e[1] * x + e[5] * y + e[9] * z + e[13];
       const lz = e[2] * x + e[6] * y + e[10] * z + e[14];
       let v;
-      if (p.type === 'cone') v = sdRoundCone(lx, ly, lz, p.a, p.b, p.r1, p.r2);
-      else if (p.type === 'ellipsoid') {
+      if (p.t === 0) v = sdRoundCone(lx, ly, lz, p.a, p.b, p.r1, p.r2);
+      else if (p.t === 1) {
         // sag: soft tissue stretches downward below its center, fading out near the ground
         if (p.soft && this.sag && ly < p.c[1]) {
           const sag = this.sag * Math.min(1, Math.max(0, (y - 0.5) / 1.2)) * Math.min(1, Math.max(0, (y - this.sagFloor) / 0.4));
@@ -96,18 +110,17 @@ export class BodySDF {
         }
         v = sdEllipsoid(lx, ly, lz, p.c, p.r);
       } else v = sdRoundBox(lx, ly, lz, p.c, p.b, p.round);
-      // fat mostly lands on the torso; limbs get less so legs don't swell into one column
-      // (feet keep their exact size so soles stay on the ground)
-      if (!p.rigid) v -= this.inflate * (!p.group || p.group === 'torso' ? 1 : p.group.startsWith('leg') ? 0.4 : 0.6);
-      if (!p.group || p.group === 'torso') torso = smin(torso, v, p.k);
-      else groups.set(p.group, smin(groups.has(p.group) ? groups.get(p.group) : 1e3, v, p.k));
+      v -= p.fat;
+      acc[p.gi] = smin(acc[p.gi], v, p.k);
     }
+    const torso = acc[0], ex = exclude === null ? -1 : this.groupNames.indexOf(exclude);
     let d = torso, noA = torso, noB = torso;
-    for (const [name, g] of groups) {
-      const v = smin(torso, g, this.join);
-      if (name !== exclude) d = Math.min(d, v);
-      if (name !== 'legA') noA = Math.min(noA, v);
-      if (name !== 'legB') noB = Math.min(noB, v);
+    for (let g = 1; g < G; g++) {
+      if (acc[g] >= 1e3) continue; // group not present at this point
+      const v = smin(torso, acc[g], this.join);
+      if (g !== ex) d = Math.min(d, v);
+      if (g !== this.giA) noA = Math.min(noA, v);
+      if (g !== this.giB) noB = Math.min(noB, v);
     }
     let n = 0;
     if (this.clay) {
@@ -176,104 +189,233 @@ export function polygonize(sdf, cell) {
 }
 
 // derive another field (a garment) on the same grid from the sampled body values
-export function deriveGrid(grid, garment, val = grid.val) {
-  const { nx, ny, nz, o, cell } = grid, out = new Float32Array(val.length);
-  for (let k = 0, i3 = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, i3++) {
-    out[i3] = val[i3] >= 999 ? 1e3 : garment.fromBody(val[i3], o.x + i * cell, o.y + j * cell, o.z + k * cell);
+// iRange: only the corner columns a pass scans (surface nets reads one column beyond each side)
+export function deriveGrid(grid, garment, val = grid.val, iRange = [0, grid.nx]) {
+  const { nx, ny, nz, o, cell } = grid, out = new Float32Array(val.length).fill(1e3);
+  const i0 = Math.max(0, iRange[0] - 2), i1 = Math.min(nx, iRange[1] + 2);
+  const far = garment.extra ? Infinity : garment.thickness + 2 * cell + garment.fuzz * 0.5 + 0.02;
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+    const row = nx * (j + ny * k);
+    for (let i = i0; i < i1; i++) {
+      const v = val[row + i];
+      // well outside the shell (> 2 cells + fuzz) the garment is positive whatever the mask says,
+      // and no surface crossing can touch such a corner: skip the mask there
+      out[row + i] = v >= 999 ? 1e3 : v > far ? v - garment.thickness : garment.fromBody(v, o.x + i * cell, o.y + j * cell, o.z + k * cell);
+    }
   }
   return out;
 }
 
-export function sampleGrid(sdf, cell) {
+// Narrow band: a block is evaluated exactly only if the surface (or a clothing offset, within
+// `band`) can pass through it; blocks provably inside/outside get a conservative fill. Every
+// sign change and every garment crossing lies inside exact blocks, so meshes come out identical.
+// jRange: optional [j0, j1) block rows to sample (a worker's slab); also returns the exact flags
+export function sampleGrid(sdf, cell, jRange = null) {
   const b = sdf.bounds, o = b.min;
+  const band = sdf.extraPad + 2 * cell;
+  const lip = 1.6 + sdf.clay * 0.8; // safety factor over a 1-Lipschitz field (ellipsoid approx, noise)
   const nx = Math.ceil((b.max.x - o.x) / cell) + 2, ny = Math.ceil((b.max.y - o.y) / cell) + 2, nz = Math.ceil((b.max.z - o.z) / cell) + 2;
-  const val = new Float32Array(nx * ny * nz).fill(1e3);
-  const valL = new Float32Array(nx * ny * nz).fill(1e3), valR = new Float32Array(nx * ny * nz).fill(1e3);
-  const idx = (i, j, k) => i + nx * (j + ny * k);
+  // a slab only stores its own corner rows [j0, jTop]
+  const [j0, j1] = jRange || [0, ny];
+  const jTop = Math.min(j1, ny - 1), rows = jRange ? jTop - j0 + 1 : ny, jBase = jRange ? j0 : 0;
+  const n = nx * rows * nz;
+  const val = new Float32Array(n).fill(1e3), valL = new Float32Array(n).fill(1e3), valR = new Float32Array(n).fill(1e3);
+  const idx = (i, j, k) => i + nx * (j - jBase + rows * k);
   const B = 8, tmp = new THREE.Box3(), lo = new THREE.Vector3(), hi = new THREE.Vector3(), two = [0, 0];
-  for (let bk = 0; bk < nz; bk += B) for (let bj = 0; bj < ny; bj += B) for (let bi = 0; bi < nx; bi += B) {
+  const exact = new Uint8Array(n), half = (Math.sqrt(3) * B * cell) / 2;
+  // ord: sequential order of the block that wrote each corner, so slabs can be merged with the
+  // exact same rules as one pass (first exact evaluation wins; among fills the last one wins)
+  const ord = new Int32Array(n), nbx = Math.ceil(nx / B), nby = Math.ceil(ny / B);
+  for (let bk = 0; bk < nz; bk += B) for (let bj = j0; bj < j1; bj += B) for (let bi = 0; bi < nx; bi += B) {
+    const key = ((bk / B) * nby + bj / B) * nbx + bi / B;
     lo.set(o.x + bi * cell, o.y + bj * cell, o.z + bk * cell);
     hi.set(o.x + (bi + B) * cell, o.y + (bj + B) * cell, o.z + (bk + B) * cell);
     tmp.set(lo, hi);
     const list = sdf.prims.filter((p) => p.box.intersectsBox(tmp));
     if (!list.length) continue;
-    for (let k = bk; k <= Math.min(bk + B, nz - 1); k++) for (let j = bj; j <= Math.min(bj + B, ny - 1); j++) for (let i = bi; i <= Math.min(bi + B, nx - 1); i++) {
+    const kEnd = Math.min(bk + B, nz - 1), jEnd = Math.min(bj + B, ny - 1, jTop), iEnd = Math.min(bi + B, nx - 1);
+    // two levels: the 8-block, then its 4-sub-blocks, each skipped when provably far from the band
+    const region = (i0, j0, k0, n, i1, j1, k1) => {
+      const hr = (Math.sqrt(3) * n * cell) / 2;
+      const d0 = sdf.evalList(o.x + (i0 + n / 2) * cell, o.y + (j0 + n / 2) * cell, o.z + (k0 + n / 2) * cell, list, null, two);
+      const a0 = two[0], b0 = two[1], margin = hr * lip + band;
+      const far = Math.min(d0, a0, b0) > margin ? 1 : Math.max(d0, a0, b0) < -margin ? -1 : 0;
+      if (!far) return false;
+      const s = -far * hr * lip; // conservative: still beyond the band, same sign
+      for (let k = k0; k <= k1; k++) for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const at = idx(i, j, k);
+        if (exact[at]) continue;
+        val[at] = d0 + s; valL[at] = a0 + s; valR[at] = b0 + s; ord[at] = key;
+      }
+      return true;
+    };
+    if (region(bi, bj, bk, B, iEnd, jEnd, kEnd)) continue;
+    const H = B / 2;
+    for (let sk = bk; sk < bk + B && sk <= kEnd; sk += H) for (let sj = bj; sj < bj + B && sj <= jEnd; sj += H) for (let si = bi; si < bi + B && si <= iEnd; si += H) {
+      const k1 = Math.min(sk + H, kEnd), j1 = Math.min(sj + H, jEnd), i1 = Math.min(si + H, iEnd);
+      if (region(si, sj, sk, H, i1, j1, k1)) continue;
+      // third level: 2-cell sub-blocks, same provable skip rule
+      const Q = H / 2;
+      for (let tk = sk; tk < sk + H && tk <= k1; tk += Q) for (let tj = sj; tj < sj + H && tj <= j1; tj += Q) for (let ti = si; ti < si + H && ti <= i1; ti += Q) {
+      const qk1 = Math.min(tk + Q, k1), qj1 = Math.min(tj + Q, j1), qi1 = Math.min(ti + Q, i1);
+      if (region(ti, tj, tk, Q, qi1, qj1, qk1)) continue;
+      for (let k = tk; k <= qk1; k++) for (let j = tj; j <= qj1; j++) for (let i = ti; i <= qi1; i++) {
       const at = idx(i, j, k);
+      if (exact[at]) continue;
+      exact[at] = 1; ord[at] = key;
       val[at] = sdf.evalList(o.x + i * cell, o.y + j * cell, o.z + k * cell, list, null, two);
       valL[at] = two[0]; // left pass (+x): the right leg (legA) doesn't exist
       valR[at] = two[1]; // right pass (-x): the left leg (legB) doesn't exist
+      }
+      }
     }
   }
-  return { nx, ny, nz, o, cell, val, valL, valR };
+  return { nx, ny, nz, o, cell, val, valL, valR, exact, ord, j0: jBase, rows };
+}
+
+// Merge worker slabs (ascending rows) with the same rules as one sequential pass: an exactly
+// evaluated corner always wins, otherwise the later writer wins, so the grid is identical.
+export function mergeSlabs(slabs) {
+  const { nx, ny, nz, cell } = slabs[0], o = new THREE.Vector3().fromArray(slabs[0].o);
+  const n = nx * ny * nz;
+  const val = new Float32Array(n).fill(1e3), valL = new Float32Array(n).fill(1e3), valR = new Float32Array(n).fill(1e3);
+  const exact = new Uint8Array(n), ord = new Int32Array(n).fill(-1);
+  for (const sl of slabs) {
+    for (let k = 0; k < nz; k++) for (let j = sl.j0; j < sl.j0 + sl.rows; j++) {
+      const row = nx * (j + ny * k), srow = nx * (j - sl.j0 + sl.rows * k);
+      for (let i = 0; i < nx; i++) {
+        const at = row + i, s = srow + i, key = sl.ord[s];
+        const take = sl.exact[s]
+          ? !exact[at] || key < ord[at] // earliest exact evaluation
+          : !exact[at] && sl.val[s] < 999 && key > ord[at]; // latest fill, never over an exact
+        if (take) {
+          val[at] = sl.val[s]; valL[at] = sl.valL[s]; valR[at] = sl.valR[s];
+          exact[at] = sl.exact[s]; ord[at] = key;
+        }
+      }
+    }
+  }
+  return { nx, ny, nz, o, cell, val, valL, valR, exact };
 }
 
 // keep(x): optional filter on a quad's edge-midpoint x (used to take one body half per pass)
-export function surfaceNets(grid, val, field, keep = null) {
+// iRange: optional [i0, i1) corner columns the pass needs (a leg pass only scans its own half)
+export function surfaceNets(grid, val, field, keep = null, iRange = null) {
   const { nx, ny, nz, o, cell } = grid;
   const idx = (i, j, k) => i + nx * (j + ny * k);
+  const [iA, iB] = iRange || [0, nx];
+  // blocks (8 cells) with both signs among their corners; everything else can't hold surface
+  const B = 8, bx = Math.ceil(nx / B), by = Math.ceil(ny / B), bz = Math.ceil(nz / B);
+  const blocks = [];
+  const iLo = Math.max(0, iA - 1), iHi = Math.min(nx - 1, iB + 1);
+  for (let kb = 0; kb < bz; kb++) for (let jb = 0; jb < by; jb++) for (let ib = 0; ib < bx; ib++) {
+    const i0 = Math.max(ib * B, iLo), i1 = Math.min(ib * B + B, iHi);
+    if (i0 > i1) continue;
+    let pos = false, neg = false;
+    scan: for (let k = kb * B; k <= Math.min(kb * B + B, nz - 1); k++) for (let j = jb * B; j <= Math.min(jb * B + B, ny - 1); j++) {
+      const row = nx * (j + ny * k);
+      for (let i = i0; i <= i1; i++) {
+        if (val[row + i] < 0) neg = true; else pos = true;
+        if (pos && neg) break scan;
+      }
+    }
+    if (pos && neg) blocks.push([ib * B, jb * B, kb * B]);
+  }
 
+  // flat strides and lookup tables: no closures, no destructuring in the hot loops
+  const SY = nx, SZ = nx * ny;
+  const OFF = [0, 1, SY, SY + 1, SZ, SZ + 1, SZ + SY, SZ + SY + 1];
+  const EA = [0, 2, 4, 6, 0, 1, 4, 5, 0, 1, 2, 3], EC = [1, 3, 5, 7, 2, 3, 6, 7, 4, 5, 6, 7];
+  const BX = [0, 1, 0, 1, 0, 1, 0, 1], BY = [0, 0, 1, 1, 0, 0, 1, 1], BZ = [0, 0, 0, 0, 1, 1, 1, 1];
   const verts = [], cellVert = new Int32Array(nx * ny * nz).fill(-1);
-  const E = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
-  const corner = new Float32Array(8);
-  for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
-    let mask = 0;
-    for (let c = 0; c < 8; c++) {
-      const v = (corner[c] = val[idx(i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1))]);
-      if (v < 0) mask |= 1 << c;
+  const corner = new Float64Array(8);
+  for (let q = 0; q < blocks.length; q++) {
+    const bi = blocks[q][0], bj = blocks[q][1], bk = blocks[q][2];
+    const kE = Math.min(bk + B, nz - 1), jE = Math.min(bj + B, ny - 1), iS = Math.max(bi, iA - 1), iE = Math.min(bi + B, nx - 1, iB + 1);
+    for (let k = bk; k < kE; k++) for (let j = bj; j < jE; j++) {
+      const rowBase = SY * j + SZ * k;
+      for (let i = iS; i < iE; i++) {
+        const base = rowBase + i;
+        let mask = 0;
+        for (let c = 0; c < 8; c++) {
+          const v = (corner[c] = val[base + OFF[c]]);
+          if (v < 0) mask |= 1 << c;
+        }
+        if (mask === 0 || mask === 255) continue;
+        let sx = 0, sy = 0, sz = 0, n = 0;
+        for (let e = 0; e < 12; e++) {
+          const ea = EA[e], ec = EC[e], va = corner[ea], vc = corner[ec];
+          if ((va < 0) === (vc < 0)) continue;
+          const t = va / (va - vc);
+          sx += BX[ea] + (BX[ec] - BX[ea]) * t;
+          sy += BY[ea] + (BY[ec] - BY[ea]) * t;
+          sz += BZ[ea] + (BZ[ec] - BZ[ea]) * t;
+          n++;
+        }
+        cellVert[base] = verts.length / 3;
+        verts.push(o.x + (i + sx / n) * cell, o.y + (j + sy / n) * cell, o.z + (k + sz / n) * cell);
+      }
     }
-    if (mask === 0 || mask === 255) continue;
-    let sx = 0, sy = 0, sz = 0, n = 0;
-    for (const [a, c] of E) {
-      const va = corner[a], vc = corner[c];
-      if ((va < 0) === (vc < 0)) continue;
-      const t = va / (va - vc);
-      sx += (a & 1) + ((c & 1) - (a & 1)) * t;
-      sy += ((a >> 1) & 1) + (((c >> 1) & 1) - ((a >> 1) & 1)) * t;
-      sz += ((a >> 2) & 1) + (((c >> 2) & 1) - ((a >> 2) & 1)) * t;
-      n++;
-    }
-    cellVert[idx(i, j, k)] = verts.length / 3;
-    verts.push(o.x + (i + sx / n) * cell, o.y + (j + sy / n) * cell, o.z + (k + sz / n) * cell);
   }
 
   const tris = [];
-  const quad = (a, b, c, d, flip) => {
-    if (a < 0 || b < 0 || c < 0 || d < 0) return;
-    if (flip) tris.push(a, d, c, a, c, b); else tris.push(a, b, c, a, c, d);
-  };
-  for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
-    const inside = val[idx(i, j, k)] < 0;
-    const x0 = o.x + i * cell;
-    // edge along x from corner (i,j,k): cells sharing it differ in j,k
-    if (inside !== (val[idx(i + 1, j, k)] < 0) && (!keep || keep(x0 + cell / 2)))
-      quad(cellVert[idx(i, j, k)], cellVert[idx(i, j - 1, k)], cellVert[idx(i, j - 1, k - 1)], cellVert[idx(i, j, k - 1)], inside);
-    if (inside !== (val[idx(i, j + 1, k)] < 0) && (!keep || keep(x0)))
-      quad(cellVert[idx(i, j, k)], cellVert[idx(i, j, k - 1)], cellVert[idx(i - 1, j, k - 1)], cellVert[idx(i - 1, j, k)], inside);
-    if (inside !== (val[idx(i, j, k + 1)] < 0) && (!keep || keep(x0)))
-      quad(cellVert[idx(i, j, k)], cellVert[idx(i - 1, j, k)], cellVert[idx(i - 1, j - 1, k)], cellVert[idx(i, j - 1, k)], inside);
+  const xKeep = keep ? keep : null;
+  for (let q = 0; q < blocks.length; q++) {
+    const bi = blocks[q][0], bj = blocks[q][1], bk = blocks[q][2];
+    const kE = Math.min(bk + B, nz - 1), jE = Math.min(bj + B, ny - 1), iS = Math.max(1, bi, iA), iE = Math.min(bi + B, nx - 1, iB);
+    for (let k = Math.max(1, bk); k < kE; k++) for (let j = Math.max(1, bj); j < jE; j++) {
+      const rowBase = SY * j + SZ * k;
+      for (let i = iS; i < iE; i++) {
+        const at = rowBase + i;
+        const inside = val[at] < 0;
+        const x0 = o.x + i * cell;
+        // edge along x: the 4 cells sharing it differ in j,k ; along y: in k,i ; along z: in i,j
+        if (inside !== (val[at + 1] < 0) && (!xKeep || xKeep(x0 + cell / 2))) {
+          const a0 = cellVert[at], b0 = cellVert[at - SY], c0 = cellVert[at - SY - SZ], d0 = cellVert[at - SZ];
+          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) { if (inside) tris.push(a0, c0, d0, a0, b0, c0); else tris.push(a0, c0, b0, a0, d0, c0); }
+        }
+        if (inside !== (val[at + SY] < 0) && (!xKeep || xKeep(x0))) {
+          const a0 = cellVert[at], b0 = cellVert[at - SZ], c0 = cellVert[at - SZ - 1], d0 = cellVert[at - 1];
+          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) { if (inside) tris.push(a0, c0, d0, a0, b0, c0); else tris.push(a0, c0, b0, a0, d0, c0); }
+        }
+        if (inside !== (val[at + SZ] < 0) && (!xKeep || xKeep(x0))) {
+          const a0 = cellVert[at], b0 = cellVert[at - 1], c0 = cellVert[at - 1 - SY], d0 = cellVert[at - SY];
+          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) { if (inside) tris.push(a0, c0, d0, a0, b0, c0); else tris.push(a0, c0, b0, a0, d0, c0); }
+        }
+      }
+    }
   }
-  const positions = new Float32Array(verts), indices = new Uint32Array(tris);
-  orientOutward(field, positions, indices);
-  return { positions, indices };
+  // winding is emitted outward directly (a runtime gradient check flipped 120/120 meshes, always)
+  return { positions: new Float32Array(verts), indices: new Uint32Array(tris) };
 }
 
 // Legs sculpted separately: the left half (+x) comes from the pass without the right leg and vice
 // versa, so the two legs can never be bridged by one grid cell. Both passes contain the same torso,
 // so the halves meet at the centerline and are welded there.
 // seamMinY: only the torso needs welding; below it (between the legs) nothing may be joined
+// corner columns each leg pass scans (its own half plus a small overlap at the centerline)
+export function splitRanges(grid) {
+  const i0 = Math.floor(-grid.o.x / grid.cell); // corner column at/just left of x = 0
+  return { left: [Math.max(1, i0 - 1), grid.nx], right: [1, Math.min(grid.nx, i0 + 3)] };
+}
+
 export function splitNets(grid, valLeft, valRight, fieldLeft, fieldRight, seamMinY = -Infinity) {
-  const a = surfaceNets(grid, valLeft, fieldLeft, (x) => x >= 0);
-  const b = surfaceNets(grid, valRight, fieldRight, (x) => x < 0);
-  return weldSeam(a, b, grid.cell, seamMinY);
+  const r = splitRanges(grid);
+  const a = perf.time('pass', () => surfaceNets(grid, valLeft, fieldLeft, (x) => x >= 0, r.left));
+  const b = perf.time('pass', () => surfaceNets(grid, valRight, fieldRight, (x) => x < 0, r.right));
+  return perf.time('weld', () => weldSeam(a, b, grid.cell, seamMinY));
 }
 
 function weldSeam(a, b, cell, seamMinY) {
-  const na = a.positions.length / 3, tol = cell * 0.75, band = cell * 1.01;
-  const P = new Float32Array(a.positions.length + b.positions.length);
+  const na = a.positions.length / 3, nt = na + b.positions.length / 3, tol = cell * 0.75, band = cell * 1.01;
+  const P = new Float32Array(nt * 3);
   P.set(a.positions); P.set(b.positions, a.positions.length);
-  const I = [...a.indices, ...Array.from(b.indices, (v) => v + na)];
-  const used = new Uint8Array(P.length / 3);
-  for (const v of I) used[v] = 1;
+  const I = new Uint32Array(a.indices.length + b.indices.length);
+  I.set(a.indices);
+  for (let t = 0; t < b.indices.length; t++) I[a.indices.length + t] = b.indices[t] + na;
+  const used = new Uint8Array(nt);
+  for (let t = 0; t < I.length; t++) used[I[t]] = 1;
+  // only seam vertices (a thin band at the centerline, above the crotch) take part in welding
   const key = (y, z) => `${Math.floor(y / tol)},${Math.floor(z / tol)}`;
   const hash = new Map();
   for (let v = 0; v < na; v++) {
@@ -281,29 +423,34 @@ function weldSeam(a, b, cell, seamMinY) {
     const k = key(P[v * 3 + 1], P[v * 3 + 2]);
     (hash.get(k) || hash.set(k, []).get(k)).push(v);
   }
-  const remap = new Int32Array(P.length / 3).map((_, i) => i);
-  for (let v = na; v < P.length / 3; v++) {
+  const remap = new Int32Array(nt);
+  for (let v = 0; v < nt; v++) remap[v] = v;
+  for (let v = na; v < nt; v++) {
     if (!used[v] || Math.abs(P[v * 3]) > band || P[v * 3 + 1] < seamMinY) continue;
     const y = P[v * 3 + 1], z = P[v * 3 + 2];
     let best = -1, bd = tol * tol;
     for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-      for (const u of hash.get(`${Math.floor(y / tol) + dy},${Math.floor(z / tol) + dz}`) || []) {
+      const list = hash.get(`${Math.floor(y / tol) + dy},${Math.floor(z / tol) + dz}`);
+      if (!list) continue;
+      for (const u of list) {
         const d = (P[u * 3] - P[v * 3]) ** 2 + (P[u * 3 + 1] - y) ** 2 + (P[u * 3 + 2] - z) ** 2;
         if (d < bd) { bd = d; best = u; }
       }
     }
     if (best >= 0) remap[v] = best;
   }
-  const map = new Map(), pos = [], idx = [];
+  // compact in first-use order (same order a Map-based compaction would give)
+  const newId = new Int32Array(nt).fill(-1), pos = new Float32Array(nt * 3), idx = new Uint32Array(I.length);
+  let nv = 0, ni = 0;
   for (let t = 0; t < I.length; t += 3) {
-    const tri = [remap[I[t]], remap[I[t + 1]], remap[I[t + 2]]];
-    if (tri[0] === tri[1] || tri[1] === tri[2] || tri[0] === tri[2]) continue; // collapsed at the seam
-    for (const v of tri) {
-      if (!map.has(v)) { map.set(v, map.size); pos.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); }
-      idx.push(map.get(v));
+    const t0 = remap[I[t]], t1 = remap[I[t + 1]], t2 = remap[I[t + 2]];
+    if (t0 === t1 || t1 === t2 || t0 === t2) continue; // collapsed at the seam
+    for (const v of [t0, t1, t2]) {
+      if (newId[v] < 0) { newId[v] = nv; pos[nv * 3] = P[v * 3]; pos[nv * 3 + 1] = P[v * 3 + 1]; pos[nv * 3 + 2] = P[v * 3 + 2]; nv++; }
+      idx[ni++] = newId[v];
     }
   }
-  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+  return { positions: pos.slice(0, nv * 3), indices: idx.slice(0, ni) };
 }
 
 // make triangle winding agree with the SDF gradient (outward)

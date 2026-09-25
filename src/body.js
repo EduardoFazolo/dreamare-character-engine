@@ -56,6 +56,7 @@ export class BodyRig {
 
   // small noisy tile in the face's skin tone, for hands, neck and bare skin
   skinTexture([r, g, b]) {
+    this.skinKey = [r, g, b].map((v) => v.toFixed(4)).join(',');
     if (!this.skinTex) {
       const c = document.createElement('canvas');
       c.width = c.height = 16;
@@ -65,7 +66,7 @@ export class BodyRig {
     }
     const c = this.skinTex.image, ctx = c.getContext('2d');
     for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      const n = 0.9 + Math.random() * 0.2;
+      const n = 0.9 + ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1 + 1) % 1 * 0.2; // deterministic noise
       ctx.fillStyle = `rgb(${[r, g, b].map((v) => Math.min(255, v * n * 255) | 0).join(',')})`;
       ctx.fillRect(x, y, 1, 1);
     }

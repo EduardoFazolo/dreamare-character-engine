@@ -7,6 +7,7 @@ import { BodyRig } from './body.js';
 import { SkinnedCharacter } from './rig.js';
 import { simplifierReady } from './sdf.js';
 import { exportGLB } from './export.js';
+import { perf } from './perf.js';
 import { zipSync, strToU8 } from 'fflate';
 
 THREE.ColorManagement.enabled = false;
@@ -112,25 +113,42 @@ let params = defaults();
 let texture = null;
 let lastSkin = null;
 
+// Two phases: everything cheap runs now; the character swap waits for its body sculpt, which
+// runs in a worker (cached by geometry, so texture/face/render changes never re-sculpt).
+// Until then the previous character stays on screen and the UI keeps running at full speed.
+let gen = 0, lastRebuild = Promise.resolve();
 function rebuild() {
   const face = faces[current];
-  if (!face) return;
-  const uvW = deform(canonUV, params, params.texWarp);
-  texture = baker.bake(face, uvW, params, params.atlasRes);
-  const skin = skinColor(baker.toCanvas($('#atlas')), uvW);
+  if (!face) return Promise.resolve();
+  const my = ++gen;
+  perf.reset();
+  const t0 = performance.now();
+  const uvW = perf.time('face.deform', () => deform(canonUV, params, params.texWarp));
+  texture = perf.time('face.bake', () => baker.bake(face, uvW, params, params.atlasRes));
+  const skin = perf.time('face.readback+skin', () => skinColor(baker.toCanvas($('#atlas')), uvW));
   lastSkin = skin;
   const base = params.geoSource === 'photo' ? face.geo : canon.pos;
-  rig.update(deform(base, params, params.geoWarp), texture, params);
-  body.update(params, skin, rig.group);
-  sk.bake(body, params);
-  showBodyAtlas();
-  sk.play(params.anim);
-  sk.update(0);
-  frameCamera();
+  perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp), texture, params));
+  perf.time('driver.update', () => body.update(params, skin, rig.group));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
   PS2.affine.value = params.affine;
   post.uniforms.vhs.value = params.vhs;
+  if (sk.hasSculpt(params)) {
+    finishRebuild(t0);
+    return (lastRebuild = Promise.resolve());
+  }
+  $('#bodyInfo').textContent = 'sculpting…';
+  return (lastRebuild = sk.ensureSculpt(body, params).then(() => { if (my === gen) finishRebuild(t0); }));
+}
+
+function finishRebuild(t0) {
+  perf.time('sk.bake', () => sk.bake(body, params));
+  perf.time('ui.bodyAtlas', () => showBodyAtlas());
+  sk.play(params.anim);
+  sk.update(0);
+  perf.time('camera', () => frameCamera());
+  perf.log.total = performance.now() - t0;
 }
 
 function showBodyAtlas() {
@@ -278,6 +296,7 @@ $('#export').onclick = () => {
 };
 
 $('#exportGlb').onclick = async () => {
+  await lastRebuild; // never export while a sculpt is still on its way
   const name = `dreamare_${params.outfit}_${(params.seed >>> 0).toString(36)}`;
   const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas]]);
   const { glb, report } = await exportGLB(sk, canvases, { name, materials: params.exportMat });
@@ -313,7 +332,7 @@ async function pngBytes(canvas) {
 }
 
 $('#roll').onclick = () => roll(12);
-function roll(n) {
+async function roll(n) {
   paused = true;
   const keep = { params, current };
   const gal = $('#gallery');
@@ -321,7 +340,7 @@ function roll(n) {
   for (let i = 0; i < n; i++) {
     current = Math.floor(Math.random() * faces.length);
     params = randomize(defaults());
-    rebuild();
+    await rebuild();
     body.root.rotation.y = (Math.random() - 0.5) * 1.1;
     sk.update(Math.random() * 3);
     renderFrame(i);
@@ -332,7 +351,7 @@ function roll(n) {
     gal.appendChild(img);
   }
   ({ params, current } = keep);
-  rebuild();
+  await rebuild();
   paused = false;
 }
 
@@ -347,6 +366,6 @@ renderFaces();
 status(`${faces.length} faces loaded. Drag to turn, scroll to zoom, double-click to reset. Drop your own photos anywhere.`);
 params = randomize(params);
 syncControls();
-rebuild();
+window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, idle: () => lastRebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera, body };
+await rebuild();
 requestAnimationFrame(loop);
-window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera };

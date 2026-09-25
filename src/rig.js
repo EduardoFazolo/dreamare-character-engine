@@ -2,8 +2,19 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MOTIONS, OUTFITS } from './body.js';
 import { ps2Material } from './head.js';
-import { sculptBody, regionSpec, REGION_NAMES } from './sculpt.js';
+import { sculptInput, sculptCore, regionSpec, REGION_NAMES } from './sculpt.js';
 import { unwrap, BodyBaker } from './bodybake.js';
+import { perf } from './perf.js';
+import { SCHEMA } from './mutate.js';
+
+// Params that cannot change the sculpted body geometry (face, textures, render, pose, accessories).
+// Everything else is part of the sculpt cache key, so geometry is only rebuilt when it can change.
+const NOT_SCULPT = new Set([
+  ...SCHEMA.filter((g) => ['Face mutations', 'Skull (3D only)', 'Where mutations apply', 'Grade', 'Makeup (painted in UV space)', 'Render', 'Outfit color'].includes(g.group))
+    .flatMap((g) => g.items.map((i) => i[0])),
+  'bodyGrime', 'headScale', 'hunch', 'pose', 'hat', 'hair', 'view', 'anim', 'exportMat', 'atlasRes', 'renderH', 'geoSource',
+]);
+const sculptKey = (p) => JSON.stringify(Object.keys(p).filter((k) => !NOT_SCULPT.has(k)).sort().map((k) => [k, p[k]]));
 
 // Bakes the driver rig (BodyRig joints + segment meshes) into an engine-agnostic character:
 // one SkinnedMesh + one skeleton (Root -> Hips -> ...), Mixamo-style names, VRM 1.0 humanoid roles,
@@ -87,6 +98,23 @@ const r4 = (x) => +x.toFixed(4);
 export class SkinnedCharacter {
   constructor(renderer) {
     this.bodyBaker = new BodyBaker(renderer);
+    // sculpting runs in a worker; results cached by geometry key (a few recent ones)
+    this.worker = new Worker(new URL('./sculpt.worker.js', import.meta.url), { type: 'module' });
+    this.parts = new Map();
+    this.jobs = new Map();
+    this.jobId = 0;
+    this.worker.onmessage = (e) => {
+      const job = this.jobs.get(e.data.id);
+      this.jobs.delete(e.data.id);
+      this.running = null;
+      if (job) {
+        this.store(job.key, e.data.parts);
+        this.lastSculptMs = e.data.ms;
+        this.lastSculptPerf = e.data.perf;
+        job.resolve(true);
+      }
+      this.pump();
+    };
     this.regionMats = Object.fromEntries(REGION_NAMES.map((n) => { const m = ps2Material(); m.name = n; return [n, m]; }));
     this.group = new THREE.Group(); // display container, scaled back to head units
     this.content = new THREE.Scene(); // what gets exported (meters); a Scene so its children export as root nodes
@@ -94,6 +122,58 @@ export class SkinnedCharacter {
     this.group.scale.setScalar(1 / METERS);
     this.mixer = null;
     this.clips = [];
+  }
+
+  sculptKey(p) { return p.bodyStyle === 'segmented' ? 'segmented' : sculptKey(p); }
+  hasSculpt(p) { const k = this.sculptKey(p); return k === 'segmented' || this.parts.has(k); }
+
+  store(key, parts) {
+    this.parts.set(key, parts);
+    while (this.parts.size > 6) this.parts.delete(this.parts.keys().next().value);
+  }
+
+  // Sculpt input captured from the driver in its bind pose (the driver itself is left untouched).
+  prepareInput(body, p) {
+    const j = body.j;
+    const saved = Object.fromEntries(Object.entries(j).map(([k, o]) => [k, o.quaternion.clone()]));
+    const savedY = body.parts.position.y, savedYaw = body.root.rotation.y;
+    body.root.rotation.y = 0;
+    body.tPose();
+    body.snap();
+    const rootInv = new THREE.Matrix4().copy(body.root.matrixWorld).invert();
+    const model = (o) => new THREE.Matrix4().multiplyMatrices(rootInv, o.matrixWorld);
+    const outfit = OUTFITS[p.outfit] || OUTFITS.suit;
+    const input = sculptInput(body, p, model, regionSpec(body, p, model, outfit), outfit);
+    for (const [k, q] of Object.entries(saved)) j[k].quaternion.copy(q);
+    body.parts.position.y = savedY;
+    body.root.rotation.y = savedYaw;
+    body.root.updateMatrixWorld(true);
+    return input;
+  }
+
+  // Resolves once the sculpt for these params is cached. Only the newest request is ever queued:
+  // while sliders move, intermediate sculpts are skipped instead of piling up.
+  ensureSculpt(body, p) {
+    const key = this.sculptKey(p);
+    if (this.hasSculpt(p)) return Promise.resolve(true);
+    if (this.running?.key === key) return this.running.promise;
+    if (this.queued) this.queued.resolve(false); // superseded before it started
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    this.queued = { key, input: this.prepareInput(body, p), resolve, promise };
+    this.pump();
+    return promise;
+  }
+
+  pump() {
+    if (this.running || !this.queued) return;
+    const job = this.queued;
+    this.queued = null;
+    if (this.parts.has(job.key)) { job.resolve(true); return; }
+    const id = ++this.jobId;
+    this.jobs.set(id, job);
+    this.running = job;
+    this.worker.postMessage({ id, input: job.input });
   }
 
   // body: BodyRig (already built + posed for the current params), p: params
@@ -212,9 +292,9 @@ export class SkinnedCharacter {
       }
     }
     const bodyBoxes = [];
-    if (sculpted) this.sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes);
+    if (sculpted) perf.time('sculpt(all)', () => this.sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes));
     const mats = [...byMat.keys()];
-    const perMat = mats.map((m) => { const g = mergeGeometries(byMat.get(m)); byMat.get(m).forEach((x) => x.dispose()); return g; });
+    const perMat = mats.map((m) => mergeGeometries(byMat.get(m)));
     const geo = mergeGeometries(perMat, true);
     perMat.forEach((g) => g.dispose());
 
@@ -232,7 +312,7 @@ export class SkinnedCharacter {
 
     // ---- creator-known metadata ----
     const renderItems = sculpted ? items.filter((it) => !PROXY.has(it.mat.name)) : items;
-    this.meta = this.measure(body, p, ctx, renderItems, boneVerts, model, BQ, bodyBoxes);
+    this.meta = perf.time('measure', () => this.measure(body, p, ctx, renderItems, boneVerts, model, BQ, bodyBoxes));
     this.meta.skinning = sculpted ? { influences: 4, rigid: false, note: 'body smooth-skinned; head/accessories rigid' } : { influences: 1, rigid: true };
     this.meta.bodyStyle = sculpted ? 'sculpted' : 'segmented';
 
@@ -248,9 +328,9 @@ export class SkinnedCharacter {
       });
     }
     this.clipMeta = {};
-    this.clips = Object.entries(MOTIONS).map(([name, m]) => this.bakeClip(body, p, name, m, rootInv, footLocal));
+    this.clips = perf.time('clips', () => Object.entries(MOTIONS).map(([name, m]) => this.bakeClip(body, p, name, m, rootInv, footLocal)));
     this.meta.animations = this.clipMeta;
-    this.meta.bounds.maxPose = this.animatedBounds();
+    // bounds over every animation frame are only needed in the exported file: computed at export
 
     // restore the driver
     for (const [k, q] of Object.entries(saved)) j[k].quaternion.copy(q);
@@ -265,10 +345,41 @@ export class SkinnedCharacter {
   // Sculpted body: SDF mesh -> distance-based skin weights (<= 4 bones) -> unwrap -> baked atlas,
   // one primitive per clothing region, all sharing that atlas.
   sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes) {
+    const key = sculptKey(p);
+    if (this.cache?.key !== key) this.cache = { key, ...this.sculptGeometry(body, p, model, P, BQ, index) };
+    const c = this.cache;
+    // texture: rebake only when an input changed (outfit textures/tints, skin tone, grime, resolution)
+    const inputs = ['top', 'bottom', 'shoes', 'skin'].map((slot) => {
+      const u = body.mats[slot].uniforms;
+      return { map: u.map.value, hue: u.hueShift.value, sat: u.satMul.value, bright: u.color.value.r };
+    });
+    const tkey = JSON.stringify([inputs.map((i) => [i.map?.uuid, i.hue, i.sat, i.bright]), body.skinKey, p.bodyRes, p.bodyGrime, key]);
+    if (c.tkey !== tkey) {
+      this.bodyTexture = perf.time('bodyBake(gpu)', () => this.bodyBaker.bake(c.bakeGeo, c.R, inputs, p.bodyRes, p.bodyGrime));
+      this.bodyCanvas = perf.time('bodyReadback', () => this.bodyBaker.toCanvas(this.bodyCanvas));
+      c.tkey = tkey;
+    }
+    for (const [name, sub] of c.subsets) {
+      const mat = this.regionMats[name];
+      mat.uniforms.map.value = this.bodyTexture;
+      if (!byMat.has(mat)) byMat.set(mat, []);
+      byMat.get(mat).push(sub);
+    }
+    for (const [bone, vs] of Object.entries(c.boneVerts)) (boneVerts[bone] ||= []).push(...vs);
+    bodyBoxes.push(c.box);
+    this.stats = c.stats;
+  }
+
+  sculptGeometry(body, p, model, P, BQ, index) {
     const t0 = performance.now();
     const outfit = OUTFITS[p.outfit] || OUTFITS.suit;
     const R = regionSpec(body, p, model, outfit);
-    const parts = sculptBody(body, p, model, R, outfit);
+    // normally sculpted in the worker already; synchronous fallback keeps bake() self-sufficient
+    let parts = this.parts.get(sculptKey(p));
+    if (!parts) {
+      parts = perf.time('sculptBody(sync)', () => sculptCore(sculptInput(body, p, model, R, outfit)));
+      this.store(sculptKey(p), parts);
+    }
     const segs = {};
     for (const [name, , joint] of this.defs) {
       if (!joint) continue;
@@ -280,28 +391,17 @@ export class SkinnedCharacter {
       else b = a.clone().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(BQ[name]), 0.35 * p.fingerLen * p.handSize);
       segs[name] = [a, b];
     }
-    for (const part of parts) skinWeights(part, segs, index);
+    perf.time('skinWeights', () => { for (const part of parts) skinWeights(part, segs, index); });
     const segByIndex = Object.fromEntries(Object.entries(segs).map(([n, s]) => [index[n], s]));
-    const { geo, groups, charts } = unwrap(parts, segByIndex, R, p.bodyRes);
-    const inputs = ['top', 'bottom', 'shoes', 'skin'].map((slot) => {
-      const u = body.mats[slot].uniforms;
-      return { map: u.map.value, hue: u.hueShift.value, sat: u.satMul.value, bright: u.color.value.r };
-    });
-    this.bodyTexture = this.bodyBaker.bake(geo, R, inputs, p.bodyRes, p.bodyGrime);
-    this.bodyCanvas = this.bodyBaker.toCanvas(this.bodyCanvas);
+    const { geo, groups, charts } = perf.time('unwrap', () => unwrap(parts, segByIndex, R, p.bodyRes));
+    const bakeGeo = geo.clone(); // keeps the bake-only attributes for texture-only rebakes
     geo.deleteAttribute('ao');
     geo.deleteAttribute('layer'); // bake-only attributes
     geo.scale(METERS, METERS, METERS);
-    for (const gr of groups) {
-      const sub = subset(geo, gr.start, gr.count);
-      const mat = this.regionMats[gr.name];
-      mat.uniforms.map.value = this.bodyTexture;
-      if (!byMat.has(mat)) byMat.set(mat, []);
-      byMat.get(mat).push(sub);
-    }
+    const subsets = groups.map((gr) => [gr.name, subset(geo, gr.start, gr.count)]);
     const names = Object.fromEntries(Object.entries(index).map(([n, i]) => [i, n]));
     const pos = geo.attributes.position, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
-    const box = new THREE.Box3();
+    const box = new THREE.Box3(), boneVerts = {};
     for (let i = 0; i < pos.count; i++) {
       let best = 0;
       for (let k = 1; k < 4; k++) if (sw.getComponent(i, k) > sw.getComponent(i, best)) best = k;
@@ -309,9 +409,9 @@ export class SkinnedCharacter {
       (boneVerts[names[si.getComponent(i, best)]] ||= []).push(v);
       box.expandByPoint(v);
     }
-    bodyBoxes.push(box);
     geo.dispose();
-    this.stats = { tris: groups.reduce((s, g) => s + g.count / 3, 0), charts, ms: Math.round(performance.now() - t0) };
+    const stats = { tris: groups.reduce((s, g) => s + g.count / 3, 0), charts, ms: Math.round(performance.now() - t0) };
+    return { R, bakeGeo, subsets, boneVerts, box, stats, tkey: null };
   }
 
   measure(body, p, ctx, items, boneVerts, model, BQ, bodyBoxes = []) {

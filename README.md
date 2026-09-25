@@ -25,6 +25,15 @@ Sculpt sliders: muscle, fat (negative thins proportionally), hump, lumps/tumors 
 
 Poses: stand, hunch, crouch, gunslinger (with revolver), zombie. Camera: medium, full, portrait.
 
+## Performance
+
+- **Dependency-aware rebuilds**: the body sculpt is cached by a key of only the params that can change its geometry. Face, grade, makeup, outfit color, grime, render, pose and accessory changes never re-sculpt (~20 ms); the body texture is re-baked on the GPU only when its inputs change. Animated bounds are computed at export only.
+- **Off the main thread**: the sculpt runs in a Web Worker (`src/sculpt.worker.js`), so the UI never freezes; the previous character stays on screen and is swapped atomically when the new one is ready. Only the newest request is queued while sliders move.
+- **Parallel**: the worker fans out to a pool (`src/sampler.worker.js`): the grid is sampled in row slabs, and body, each garment and both hands are meshed and shaded concurrently. Slabs merge with the same rules as a single pass (earliest exact evaluation wins, else latest fill), so the output is bit-identical to the single-threaded path, which stays as a fallback.
+- **Narrow band**: the distance field is evaluated exactly only near the surface and clothing offsets (three levels of provably-far block skipping); surface nets only scan blocks with a sign change and each leg pass only its half.
+
+Geometry sliders: ~120-200 ms until the new body appears, 0 ms of main-thread blocking. Other sliders: ~20 ms.
+
 ## Export (any engine)
 
 **Export character** downloads one `name.zip` with `name.glb`, `name.report.json` and `textures/face.png` + `textures/body.png` (already embedded in the GLB; there for engines that want them separately). Files are named `dreamare_<outfit>_<id>`, where the id comes from the character's seed. The goal: a character any engine can use with zero guessing (Three.js, Godot, Unity, Unreal, Blender). Everything the creator knows ships in the file.
