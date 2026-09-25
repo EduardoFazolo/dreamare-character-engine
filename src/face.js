@@ -144,7 +144,32 @@ export function analyzeHair(face) {
     img.data[o + 3] = 255;
   }
   pg.putImageData(img, 0, 0);
-  face.hair = { style, color, canvas: patch, cover };
+
+  // Skin mask of the photo (face skin only: body skin is the neck, darker, under the jaw), softened, as a texture laid out like the photo texture
+  // (v up): lets the sculpted head take the person's real skin from the photo where the photo has it.
+  const soft = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) soft[i] = cat[i] === 3 ? 1 : 0;
+  const blur = (src) => { // separable box blur, radius 2
+    const t = new Float32Array(w * h), o = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let a = 0, n = 0; for (let k = -2; k <= 2; k++) { const xx = x + k; if (xx >= 0 && xx < w) { a += src[y * w + xx]; n++; } } t[y * w + x] = a / n; }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let a = 0, n = 0; for (let k = -2; k <= 2; k++) { const yy = y + k; if (yy >= 0 && yy < h) { a += t[yy * w + x]; n++; } } o[y * w + x] = a / n; }
+    return o;
+  };
+  const sm = blur(blur(soft)), seg = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const o = ((h - 1 - y) * w + x) * 4, v = Math.round(sm[y * w + x] * 255); seg[o] = seg[o + 1] = seg[o + 2] = v; seg[o + 3] = 255; }
+  const segTex = new THREE.DataTexture(seg, w, h);
+  segTex.magFilter = segTex.minFilter = THREE.LinearFilter; segTex.needsUpdate = true;
+
+  // a patch of the person's real skin (the skinniest window on the face), for its grain
+  const skinFrac = (x0, y0, x1, y1) => { let n = 0, k = 0; for (let y = Math.max(0, y0 | 0); y < Math.min(h, y1); y++) for (let x = Math.max(0, x0 | 0); x < Math.min(w, x1); x++) { n++; if (cat[y * w + x] === 3) k++; } return n ? k / n : 0; };
+  const ss = Math.max(6, 0.14 * fw);
+  let sBest = [left, top], sF = -1;
+  for (let y = top; y < chin - ss; y += ss / 3) for (let x = left; x < right - ss; x += ss / 3) { const f = skinFrac(x, y, x + ss, y + ss); if (f > sF) { sF = f; sBest = [x, y]; } }
+  const skinPatch = document.createElement('canvas');
+  skinPatch.width = skinPatch.height = 32;
+  skinPatch.getContext('2d').drawImage(face.img, (sBest[0] / w) * face.img.naturalWidth, (sBest[1] / h) * face.img.naturalHeight, (ss / w) * face.img.naturalWidth, (ss / h) * face.img.naturalHeight, 0, 0, 32, 32);
+
+  face.hair = { style, color, canvas: patch, cover, segTex, skinPatch };
   return face.hair;
 }
 

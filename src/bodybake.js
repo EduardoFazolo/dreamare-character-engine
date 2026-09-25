@@ -173,9 +173,9 @@ export class BodyBaker {
         ...uniforms,
       },
       vertexShader: /* glsl */`
-        attribute float ao; attribute float layer; attribute float aux;
-        varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer; varying float vAux;
-        void main(){ vPos = position; vNor = normal; vAo = ao; vLayer = layer; vAux = aux; gl_Position = vec4(uv * 2. - 1., 0., 1.); }`,
+        attribute float ao; attribute float layer; attribute float aux; attribute vec3 tone; // (tone: optional)
+        varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer; varying float vAux; varying vec3 vTone;
+        void main(){ vPos = position; vNor = normal; vAo = ao; vLayer = layer; vAux = aux; vTone = tone; gl_Position = vec4(uv * 2. - 1., 0., 1.); }`,
       fragmentShader: fragment,
     });
     this.scene = new THREE.Scene();

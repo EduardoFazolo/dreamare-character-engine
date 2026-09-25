@@ -3,7 +3,7 @@ import { initLandmarker, loadCanonical, makeFace, loadImage, analyzeHair } from 
 import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
 import { AtlasBaker } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
-import { BodyRig } from './body.js';
+import { BodyRig, POSES } from './body.js';
 import { SkinnedCharacter } from './rig.js';
 import { simplifierReady } from './sdf.js';
 import { exportGLB } from './export.js';
@@ -117,6 +117,20 @@ let lastSkin = null;
 // runs in a worker (cached by geometry, so texture/face/render changes never re-sculpt).
 // Until then the previous character stays on screen and the UI keeps running at full speed.
 let gen = 0, lastRebuild = Promise.resolve();
+// The person's face proportions on the canonical face's sculpted depth: x/y from the photo's landmarks
+// (roll removed: eye line level; 20% canonical to calm landmark noise), z from the canonical model, whose
+// nose, eye sockets, brow, lips and chin are properly modeled (MediaPipe's per-photo depth is weak).
+function fittedFace(face) {
+  if (face.fitted) return face.fitted;
+  const G = face.geo, C = canon.pos, L = G[263], R = G[33];
+  const a = -Math.atan2(L[1] - R[1], L[0] - R[0]), ca = Math.cos(a), sa = Math.sin(a);
+  face.fitted = G.map((g, i) => {
+    const x = g[0] * ca - g[1] * sa, y = g[0] * sa + g[1] * ca;
+    return [x * 0.8 + C[i][0] * 0.2, y * 0.8 + C[i][1] * 0.2, C[i][2]];
+  });
+  return face.fitted;
+}
+
 function rebuild() {
   const face = faces[current];
   if (!face) return Promise.resolve();
@@ -128,8 +142,10 @@ function rebuild() {
   perf.time('face.readback', () => baker.toCanvas($('#atlas')));
   const skin = perf.time('face.skin', () => baker.skinTone(uvW));
   lastSkin = skin;
-  const base = params.geoSource === 'photo' ? face.geo : canon.pos;
-  const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), skin, atlas: $('#atlas') }));
+  // head shape: canonical (the generic face), photo (MediaPipe's per-photo 3D: right proportions, weak
+  // depth) or fitted (the person's proportions from the photo on the canonical face's sculpted depth)
+  const base = params.geoSource === 'photo' ? face.geo : params.geoSource === 'fitted' ? fittedFace(face) : canon.pos;
+  const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), skin, photo: { lm: face.lm, tex: baker.photoTex, pixels: baker.photoPixels, center: baker.photoCenter }, uvW, atlas: $('#atlas') }));
   perf.time('driver.update', () => body.update(params, skin, rig.group));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
@@ -285,6 +301,13 @@ $('#randomize').onclick = () => {
     renderFaces();
   }
   params = randomize(params);
+  syncControls();
+  rebuild();
+};
+// a different pose for the same character (poses never re-sculpt, so this is instant)
+$('#randPose').onclick = () => {
+  const others = Object.keys(POSES).filter((k) => k !== params.pose);
+  params = { ...params, pose: others[Math.floor(Math.random() * others.length)] };
   syncControls();
   rebuild();
 };

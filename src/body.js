@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ps2Material } from './head.js';
 import { paintSkinTile } from './skintile.js';
+import { HEAD_PIVOT } from './headsculpt.js';
 
 // Crude jointed humanoid in "head units" (face width = 1). Segments are low-poly lathes and
 // cylinders; the look comes from photo textures + wrong proportions, same trick as the face.
@@ -23,13 +24,31 @@ export const OUTFITS = {
   naked: { top: 'skin', bottom: 'skin', shoes: 'skin' },
 };
 
-// joint rotations; A = character's right side (-x), B = left (+x)
+const HEAD_ON_NECK = [0.45, 0.5, 0.35]; // max head rotation on the neck (x nod, y turn, z tilt), radians
+
+// joint rotations; A = character's right side (-x), B = left (+x). Signs: waist/neck/head x > 0 leans
+// or looks down, shoulder x < 0 raises the arm forward, shoulder/hip z spreads (mirrored per side),
+// elbow x < 0 bends, hip x < 0 lifts the thigh, knee x > 0 bends. rot: extra per-joint [x, y, z]
+// (not mirrored), for the asymmetric poses; feet stay flat whatever the legs do.
 export const POSES = {
   stand: { waist: 0.04, neck: 0.05, sh: [0.05, 0.1], el: -0.15, hip: [0, 0.04], knee: 0.05 },
   hunch: { waist: 0.5, neck: 0.45, sh: [-0.35, 0.12], el: -0.35, hip: [-0.25, 0.07], knee: 0.4 },
   crouch: { waist: 0.75, neck: 0.25, sh: [-1.05, 0.22], el: -0.2, hip: [-1.75, 0.28], knee: 2.2 },
   gunslinger: { waist: 0, neck: 0.02, sh: [0.05, 0.12], el: -0.2, shA: [-1.4, 0.15], elA: -0.05, hip: [0, 0.12], knee: 0.05, gun: true },
   zombie: { waist: 0.12, neck: 0.3, sh: [-1.45, 0.06], el: -0.1, hip: [0, 0.05], knee: 0.12 },
+  // creepy ones
+  broken: { waist: 0.1, neck: 0.15, sh: [0.1, 0.02], el: -0.05, hip: [0, 0.05], knee: 0.15, // neck snapped to one side, a shoulder dropped
+    rot: { neck: [0, 0.2, 0.75], head: [0.1, 0.25, 0.45], waist: [0, 0, -0.12], shoulderA: [0.15, 0, 0.18], shoulderB: [-0.1, 0, -0.08], elbowB: [-0.35, 0, 0], kneeA: [0.25, 0, 0] } },
+  lurker: { waist: 1.05, neck: 0.1, sh: [-0.95, 0.05], el: -0.08, hip: [-0.35, 0.16], knee: 0.65, // bent double, arms dangling straight down (sh ~ -waist), head craned up to stare
+    rot: { head: [-0.55, 0, 0], neck: [-0.2, 0, 0], shoulderA: [0.1, 0, 0], shoulderB: [-0.15, 0, 0] } },
+  puppet: { waist: -0.05, neck: 0.8, sh: [-2.35, 0.3], el: -0.25, hip: [0, 0.02], knee: 0.12, // marionette: strung up by the wrists, head lolling, a knee lifted
+    rot: { head: [0.3, 0, 0.35], shoulderA: [0.25, 0, 0], shoulderB: [-0.15, 0, 0], waist: [0, 0, 0.08], kneeB: [0.55, 0, 0], hipB: [-0.35, 0, 0] } },
+  stare: { waist: 0, neck: 0, sh: [0.02, -0.02], el: 0, hip: [0, 0.02], knee: 0, // square to the front, head turned hard, shoulders hiked
+    rot: { neck: [0.05, 1.05, 0], head: [-0.08, 0.6, 0.12], shoulderA: [0, 0, -0.18], shoulderB: [0, 0, 0.18] } },
+  crawler: { waist: 1.2, neck: -0.25, sh: [-1.7, 0.18], el: -0.35, hip: [-1.55, 0.3], knee: 2.1, // low on all fours-ish, hands near the ground, looking up
+    rot: { head: [-0.7, 0, 0.15], shoulderA: [0.25, 0, 0], elbowA: [-0.3, 0, 0], kneeB: [0.15, 0, 0] } },
+  mantis: { waist: 0.25, neck: 0.25, sh: [-0.75, -0.05], el: -2.25, hip: [0, 0.04], knee: 0.2, // arms folded up, hands under the chin, head cocked
+    rot: { head: [0, -0.2, -0.5], shoulderA: [0.1, 0.25, 0], shoulderB: [0.1, -0.25, 0] } },
 };
 
 export class BodyRig {
@@ -99,7 +118,7 @@ export class BodyRig {
     this.pose(p);
 
     head.scale.setScalar(p.headScale);
-    head.position.set(0, 0.6 * p.headScale, 0.22 * p.headScale);
+    head.position.set(0, -HEAD_PIVOT[1] * p.headScale, -HEAD_PIVOT[2] * p.headScale); // head joint at HEAD_PIVOT
     this.headAnchor.add(head);
     this.snap();
   }
@@ -263,11 +282,11 @@ export class BodyRig {
 
   // Poses/animations are written as driver-joint rotations; rig.js converts them to bone tracks.
   pose(p, poseName = p.pose, extra = {}) {
-    const P = POSES[poseName] || POSES.stand, j = this.j;
+    const P = POSES[poseName] || POSES.stand, j = this.j, rot = P.rot || {};
     const out = 0.06 + p.girth * 0.05 + Math.max(0, p.belly) * 0.06;
     const set = (name, x, y = 0, z = 0) => {
-      const e = extra[name] || [0, 0, 0];
-      j[name].rotation.set(x + e[0], y + e[1], z + e[2]);
+      const e = extra[name] || [0, 0, 0], r = rot[name] || [0, 0, 0];
+      j[name].rotation.set(x + e[0] + r[0], y + e[1] + r[1], z + e[2] + r[2]);
     };
     set('waist', P.waist + p.hunch * 0.5);
     set('neck', P.neck + p.hunch * 0.4);
@@ -277,11 +296,20 @@ export class BodyRig {
       set('elbow' + side, el);
       set('hip' + side, P.hip[0], 0, sx * P.hip[1]);
       set('knee' + side, P.knee);
-      const e = (k) => (extra[k + side] || [0])[0];
+      const e = (k) => (extra[k + side] || [0])[0] + (rot[k + side] || [0])[0];
       set('ankle' + side, -(P.hip[0] + e('hip') + P.knee + e('knee')));
     }
-    // head keeps looking forward-ish
-    set('head', -(j.waist.rotation.x + j.neck.rotation.x) * 0.85);
+    // head keeps looking forward-ish (plus the pose's own head rotation, from rot)
+    const r = rot.waist?.[0] || 0, rn = rot.neck?.[0] || 0;
+    set('head', -(j.waist.rotation.x - r + j.neck.rotation.x - rn) * 0.85);
+    // The head is rigid (with a neck stub that hides the joint inside the body's neck): bent further on
+    // the neck than a neck can, the stub swings out as a second neck. Cap the head-on-neck rotation and
+    // hand the rest to the (smoothly skinned) neck joint: the head ends up facing the same way.
+    const h = j.head.rotation, n = j.neck.rotation;
+    for (const [ax, lim] of [['x', HEAD_ON_NECK[0]], ['y', HEAD_ON_NECK[1]], ['z', HEAD_ON_NECK[2]]]) {
+      const c = Math.max(-lim, Math.min(lim, h[ax]));
+      n[ax] += h[ax] - c; h[ax] = c;
+    }
   }
 
   // Bind pose for export: VRM 1.0 T-pose. Standing straight toward +Z, arms along X, palms down

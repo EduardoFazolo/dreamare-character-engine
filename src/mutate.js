@@ -26,6 +26,7 @@ export const SCHEMA = [
     ['cranium', 'Cranium', -0.8, 2.5, 0],
     ['headDepth', 'Head depth', -0.6, 1.5, 0],
     ['earSize', 'Ear size', 0, 3, 1],
+    ['backUV', 'Face texture over the head: edge smear -> forehead skin', 0, 1, 0.55],
   ]},
   { group: 'Hair', items: [
     ['hairVolume', 'Hair volume', 0.3, 2.5, 1],
@@ -101,7 +102,7 @@ export const SCHEMA = [
 export const CHOICES = {
   atlasRes: { label: 'Texture res', options: [64, 128, 256, 512], def: 128 },
   renderH: { label: 'Render height', options: [224, 240, 320, 448], def: 240 },
-  geoSource: { label: 'Head shape', options: ['canonical', 'photo'], def: 'canonical' },
+  geoSource: { label: 'Head shape', options: ['fitted', 'canonical', 'photo'], def: 'fitted' },
   view: { label: 'Camera', options: ['full', 'medium', 'portrait'], def: 'full' },
   bodyStyle: { label: 'Body style', options: ['sculpted', 'segmented'], def: 'sculpted' },
   bodyRes: { label: 'Body texture res', options: [128, 256, 512, 1024], def: 512 },
@@ -305,7 +306,7 @@ export function randomize(base) {
   p.outfitHue = Math.random() < 0.3 ? rnd(-180, 180) : rnd(-15, 15);
   p.outfitSat = rnd(0.7, 1.4);
   p.outfitBright = rnd(0.75, 1.15);
-  p.pose = pick(['stand', 'stand', 'stand', 'hunch', 'hunch', 'crouch', 'gunslinger', 'zombie']);
+  p.pose = pick(['stand', 'stand', 'stand', 'hunch', 'hunch', 'crouch', 'gunslinger', 'zombie', 'broken', 'lurker', 'puppet', 'stare', 'crawler', 'mantis']);
   p.outfit = pick(Object.keys(OUTFITS));
   // sculpt: mostly subtle, sometimes one thing goes very wrong
   p.seed = Math.floor(Math.random() * 1e9);
