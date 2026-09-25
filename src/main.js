@@ -145,7 +145,7 @@ function rebuild() {
   // head shape: canonical (the generic face), photo (MediaPipe's per-photo 3D: right proportions, weak
   // depth) or fitted (the person's proportions from the photo on the canonical face's sculpted depth)
   const base = params.geoSource === 'photo' ? face.geo : params.geoSource === 'fitted' ? fittedFace(face) : canon.pos;
-  const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), skin, photo: { lm: face.lm, tex: baker.photoTex, pixels: baker.photoPixels, center: baker.photoCenter }, uvW, atlas: $('#atlas') }));
+  const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), skin, uvW }));
   perf.time('driver.update', () => body.update(params, skin, rig.group));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);

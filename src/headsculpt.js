@@ -131,8 +131,7 @@ export function sculptHead(P, loop, maskIndex, p, style, hat = 'none') {
     // covers the rest); any longer and it swings out of the neck when the head nods
     { type: 'cone', matrix: I4, a: [0, D.chin + 0.15, D.sideZ - 0.22], b: [0, Math.min(D.chin - 0.05, HEAD_PIVOT[1] - 0.12), D.sideZ - 0.26], r1: nr * 1.1, r2: nr, k: 0.12 },
   ];
-  // beads along the mask rim, slightly behind it: the skull passes just around the photo's edge (whose
-  // ring is then laid onto it, see snapRim)
+  // beads along the face's rim, slightly behind it: the skull (which shapes hair and hats) hugs the face
   for (const i of loop) prims.push(ell([P[i][0], P[i][1], P[i][2] - 0.025], [0.05, 0.05, 0.05], 0.06));
   const earPrims = [-1, 1].map((sx) => ell([sx * (D.sideX + 0.02), D.earY, D.sideZ - 0.1], [0.055 * ear, 0.2 * Math.sqrt(ear), 0.13 * Math.sqrt(ear)], 0.05));
   prims.push(...earPrims);
@@ -172,8 +171,6 @@ export function sculptHead(P, loop, maskIndex, p, style, hat = 'none') {
   const grid = perf.time('head.grid', () => sampleGrid(sdf, HEAD_CELL));
 
   const skull = perf.time('head.skullNets', () => simplify(surfaceNets(grid, grid.val, sdf), 900));
-  const rim = snapRim(P, loop, sdf);
-  skull.indices = pushBehindMask(skull.positions, skull.indices, rim.Ps, maskIndex, loop);
   Object.assign(skull, perf.time('head.shade', () => shade(sdf, skull.positions)));
   const stub = stubbleMask(D);
   skull.aux = new Float32Array(skull.positions.length / 3);
@@ -226,8 +223,7 @@ export function sculptHead(P, loop, maskIndex, p, style, hat = 'none') {
     const x = hatMesh.positions[i * 3], y = hatMesh.positions[i * 3 + 1], z = hatMesh.positions[i * 3 + 2];
     if (Math.abs(x) < 0.15 && Math.abs(y - line(z)) < 0.08) crownFront = Math.max(crownFront, z);
   }
-  const band = buildBand(P, loop, [prims[0], prims[1], prims[2], ...earPrims]);
-  return { skull, band, maskDz: rim.dz, hair, hat: hatMesh, hatFit: { line0, R, tilt: Math.atan(0.06), z: D.sideZ - 0.02, brim: hsp?.brim || null, crownFront, frontY: line(crownFront) }, dims: D, slick: hs?.slick ? 1 : 0 };
+  return { skull, hair, hat: hatMesh, hatFit: { line0, R, tilt: Math.atan(0.06), z: D.sideZ - 0.02, brim: hsp?.brim || null, crownFront, frontY: line(crownFront) }, dims: D, slick: hs?.slick ? 1 : 0 };
 }
 
 // Hat types: shape added to the fitted shell, where it sits, and its brim. top = extra height.
@@ -248,170 +244,3 @@ function hatSpec(hat, D, R, crown) {
   }
 }
 
-// The rest of the head, grown from the face's outline so face and head are ONE mesh (shared rim vertices,
-// shared shading: no mask plate on a skull). Every outline point sends a path over the head toward a pole
-// at the back (forehead over the scalp, cheeks around past the ears, the jaw under the chin), BAND_RINGS
-// rings each, laid on the sculpted head (cranium, occiput, jaw, ears: no neck stub, no rim beads). The
-// first rings ease from the face's rim onto that surface. Returns ring vertices (ring k, outline point i
-// at 468 + (k - 1) * n + i; ring 0 is the face's own outline), their normalized ring index, and the
-// triangles joining them (outward winding).
-export const BAND_RINGS = 10;
-function buildBand(P, loop, headPrims) {
-  const sdf = new BodySDF(headPrims, {});
-  const C = new THREE.Vector3().fromArray(headPrims[0].c), n = loop.length, K = BAND_RINGS;
-  const pole = new THREE.Vector3(0, -0.12, -1).normalize();
-  // each path swings first toward its own direction around the face (the forehead up over the scalp, the
-  // chin down under the jaw, cheeks out past the ears), then on to the pole: a straight great circle to
-  // the pole went under the chin from the forehead when a tall cranium put the head's center up at the brow
-  let fx = 0, fy = 0; for (const i of loop) { fx += P[i][0] / loop.length; fy += P[i][1] / loop.length; }
-  const surf = (dir) => { // outermost head surface along dir from C
-    let t = 3;
-    for (let k = 0; k < 300 && t > 0; k++) { const q = C.clone().addScaledVector(dir, t), d = sdf.eval(q.x, q.y, q.z); if (d < 1e-3) break; t -= Math.max(d, 0.004); }
-    return C.clone().addScaledVector(dir, Math.max(t, 0.05));
-  };
-  const slerp = (a, b, s) => { const w = Math.acos(Math.min(1, Math.max(-1, a.dot(b)))); if (w < 1e-4) return a.clone(); return a.clone().multiplyScalar(Math.sin((1 - s) * w) / Math.sin(w)).addScaledVector(b, Math.sin(s * w) / Math.sin(w)).normalize(); };
-  const pos = new Float32Array(K * n * 3), ring = new Float32Array(K * n);
-  for (let i = 0; i < n; i++) {
-    const rim = new THREE.Vector3(...P[loop[i]]), d0 = rim.clone().sub(C).normalize();
-    const th = Math.atan2(P[loop[i]][1] - fy, P[loop[i]][0] - fx), mid = new THREE.Vector3(Math.cos(th), Math.sin(th), -0.15).normalize();
-    const path = (s) => (s < 0.45 ? slerp(d0, mid, s / 0.45) : slerp(mid, pole, (s - 0.45) / 0.55));
-    const delta = rim.clone().sub(surf(d0)); // the face's rim relative to the head surface there
-    for (let k = 1; k <= K; k++) {
-      const s = Math.pow(k / K, 1.25), q = k === K ? surf(pole) : surf(path(s));
-      const u = Math.min(1, s / 0.3), w = 1 - u * u * (3 - 2 * u); // ease off the rim's offset
-      q.addScaledVector(delta, w);
-      pos.set([q.x, q.y, q.z], ((k - 1) * n + i) * 3); ring[(k - 1) * n + i] = k / K;
-    }
-  }
-  const id = (k, i) => (k === 0 ? loop[i] : 468 + (k - 1) * n + (i % n));
-  const tri = [];
-  for (let k = 0; k < K; k++) for (let i = 0; i < n; i++) tri.push(id(k, i), id(k, i + 1), id(k + 1, i + 1), id(k, i), id(k + 1, i + 1), id(k + 1, i));
-  // outward winding: test one triangle on ring 1..2 against the direction from C
-  const at = (v) => (v < 468 ? new THREE.Vector3(...P[v]) : new THREE.Vector3().fromArray(pos, (v - 468) * 3));
-  const t0 = n * 6; const a = at(tri[t0]), b = at(tri[t0 + 1]), c = at(tri[t0 + 2]);
-  if (b.clone().sub(a).cross(c.clone().sub(a)).dot(a.clone().add(b).add(c).multiplyScalar(1 / 3).sub(C)) < 0) for (let t = 0; t < tri.length; t += 3) { const x = tri[t + 1]; tri[t + 1] = tri[t + 2]; tri[t + 2] = x; }
-  return { positions: pos, ring, index: new Uint32Array(tri), n };
-}
-
-// The mask's outer ring is laid onto the skull (snapRim), and the skull stays behind the mask everywhere
-// inside the outline, so the two surfaces meet in one smooth curve (the face outline) and never cross:
-// crossing, the skull's bumps (the rim beads) cut a wavy, scalloped line through the face's rim.
-// Exact, no grid: the footprint is the mask's own outline polygon (point-in-polygon), the depth comes
-// from the containing mask triangle. The gap behind the mask grows from MIN_GAP at the outline (where
-// the mask lies on the skull: sub-pixel, no lip) to BEHIND_MASK by RIM_CORE in, where the photo shows.
-// Triangles deeper than HIDDEN_BAND are dropped (never seen), and every kept triangle is sampled so a
-// flat one spanning a hollow of the face (eye socket, beside the nose) can't cut in front of it even with
-// its vertices behind. Returns the kept indices.
-const BEHIND_MASK = 0.03, MIN_GAP = 0.004, RIM_CORE = 0.12, HIDDEN_BAND = 0.14;
-const gapAt = (e) => { const u = Math.min(1, e / RIM_CORE); return MIN_GAP + (BEHIND_MASK - MIN_GAP) * u * u * (3 - 2 * u); };
-
-// The mask's outer ring (within RIM_CORE of its outline) eases onto the skull's front surface (ray-
-// marched in the skull field): exactly on it at the outline, the mask's own shape by RIM_CORE in.
-// Returns the snapped points and each point's z offset (the head applies these to the live mask).
-function snapRim(P, loop, sdf) {
-  const poly = loop.map((i) => [P[i][0], P[i][1]]);
-  const Ps = P.map((v) => v.slice()), dz = new Float32Array(P.length);
-  for (let i = 0; i < P.length; i++) {
-    const [x, y, z0] = P[i];
-    let e = Infinity;
-    for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
-      const [ax, ay] = poly[b], [bx, by] = poly[a], ex = bx - ax, ey = by - ay;
-      const t = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey)));
-      e = Math.min(e, Math.hypot(x - ax - ex * t, y - ay - ey * t));
-    }
-    if (e >= RIM_CORE) continue;
-    let z = z0 + 0.3, hit = false;
-    for (let k = 0; k < 200 && z > z0 - 0.3; k++) {
-      const d = sdf.eval(x, y, z);
-      if (d < 1e-4) { hit = true; break; }
-      z -= Math.max(d, 0.002);
-    }
-    if (!hit) continue;
-    const u = e / RIM_CORE, w = u * u * (3 - 2 * u);
-    Ps[i][2] = z + (z0 - z) * w;
-    dz[i] = Ps[i][2] - z0;
-  }
-  return { Ps, dz };
-}
-function pushBehindMask(pos, index, P, tri, loop) {
-  const poly = loop.map((i) => [P[i][0], P[i][1]]);
-  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-  for (const [x, y] of poly) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
-  // triangle buckets for the depth lookup
-  const N = 24, buckets = Array.from({ length: N * N }, () => []);
-  const bi = (x) => Math.min(N - 1, Math.max(0, Math.floor(((x - x0) / (x1 - x0)) * N)));
-  const bj = (y) => Math.min(N - 1, Math.max(0, Math.floor(((y - y0) / (y1 - y0)) * N)));
-  for (let t = 0; t < tri.length; t += 3) {
-    const xs = [P[tri[t]][0], P[tri[t + 1]][0], P[tri[t + 2]][0]], ys = [P[tri[t]][1], P[tri[t + 1]][1], P[tri[t + 2]][1]];
-    for (let j = bj(Math.min(...ys)); j <= bj(Math.max(...ys)); j++) for (let i = bi(Math.min(...xs)); i <= bi(Math.max(...xs)); i++) buckets[j * N + i].push(t);
-  }
-  const depth = (x, y) => {
-    let best = -Infinity;
-    for (const t of buckets[bj(y) * N + bi(x)]) {
-      const a = P[tri[t]], b = P[tri[t + 1]], c = P[tri[t + 2]];
-      const den = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
-      if (Math.abs(den) < 1e-12) continue;
-      const l1 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / den, l2 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / den, l3 = 1 - l1 - l2;
-      if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
-      best = Math.max(best, l1 * a[2] + l2 * b[2] + l3 * c[2]);
-    }
-    return best;
-  };
-  const inside = (x, y) => {
-    let c = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i], [xj, yj] = poly[j];
-      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
-    }
-    return c;
-  };
-  // distance to the outline
-  const edgeDist = (x, y) => {
-    let d = Infinity;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [ax, ay] = poly[j], [bx, by] = poly[i], ex = bx - ax, ey = by - ay;
-      const t = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey)));
-      const dd = Math.hypot(x - ax - ex * t, y - ay - ey * t);
-      d = Math.min(d, dd);
-    }
-    return d;
-  };
-  const deep = new Uint8Array(pos.length / 3);
-  for (let v = 0; v < pos.length; v += 3) {
-    const x = pos[v], y = pos[v + 1];
-    if (!inside(x, y)) continue;
-    const e = edgeDist(x, y);
-    if (e > HIDDEN_BAND) deep[v / 3] = 1;
-    const d = depth(x, y);
-    if (d === -Infinity) continue;
-    pos[v + 2] = Math.min(pos[v + 2], d - gapAt(e));
-  }
-  const keep = [];
-  for (let t = 0; t < index.length; t += 3) if (!(deep[index[t]] && deep[index[t + 1]] && deep[index[t + 2]])) keep.push(index[t], index[t + 1], index[t + 2]);
-  // Vertices behind the mask don't make a flat triangle behind it where the face curves more than the
-  // margin across it: sample each kept triangle (vertices, edge midpoints, centroid) and push the whole
-  // triangle back by any overshoot, until none is left (only ever backwards, only near/inside the mask).
-  const near = new Uint8Array(pos.length / 3);
-  for (let v = 0; v < pos.length; v += 3) near[v / 3] = inside(pos[v], pos[v + 1]) ? 1 : 0;
-  const W = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [0.5, 0.5, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [1 / 3, 1 / 3, 1 / 3]];
-  for (let pass = 0; pass < 6; pass++) {
-    let moved = 0;
-    for (let t = 0; t < keep.length; t += 3) {
-      const a = keep[t] * 3, b = keep[t + 1] * 3, c = keep[t + 2] * 3;
-      if (!near[a / 3] && !near[b / 3] && !near[c / 3]) continue;
-      let over = 0;
-      for (const [wa, wb, wc] of W) {
-        const x = wa * pos[a] + wb * pos[b] + wc * pos[c], y = wa * pos[a + 1] + wb * pos[b + 1] + wc * pos[c + 1];
-        if (!inside(x, y)) continue;
-        const d = depth(x, y);
-        if (d === -Infinity) continue;
-        over = Math.max(over, wa * pos[a + 2] + wb * pos[b + 2] + wc * pos[c + 2] - (d - gapAt(edgeDist(x, y)) / 2));
-      }
-      if (over <= 0) continue;
-      for (const v of [a, b, c]) if (near[v / 3]) pos[v + 2] -= over + 0.005;
-      moved++;
-    }
-    if (!moved) break;
-  }
-  return new Uint32Array(keep);
-}

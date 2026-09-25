@@ -26,7 +26,6 @@ export const SCHEMA = [
     ['cranium', 'Cranium', -0.8, 2.5, 0],
     ['headDepth', 'Head depth', -0.6, 1.5, 0],
     ['earSize', 'Ear size', 0, 3, 1],
-    ['backUV', 'Face texture over the head: edge smear -> forehead skin', 0, 1, 0.55],
   ]},
   { group: 'Hair', items: [
     ['hairVolume', 'Hair volume', 0.3, 2.5, 1],

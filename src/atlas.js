@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { LANDMARKS as L, centerOf } from './mutate.js';
-import { boundaryLoop, stretchT, rayToPolygon } from './stretch.js';
 
 // Photo -> canonical-UV face texture, then grade + makeup + posterize at game resolution.
 export class AtlasBaker {
@@ -15,16 +14,7 @@ export class AtlasBaker {
     this.unwrapGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(468 * 3), 3));
     this.unwrapGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(468 * 2), 2));
     this.unwrapGeo.setIndex(canon.index);
-    // edge: each vertex's distance to the face outline (canonical UV, in face widths), carried into the
-    // alpha channel so the grade pass can feather the photo out toward the skin tone (see FEATHER)
-    this.unwrapGeo.setAttribute('edge', new THREE.BufferAttribute(outlineDistance(canon), 1));
-    this.unwrapMat = new THREE.ShaderMaterial({
-      uniforms: { map: { value: null } }, side: THREE.DoubleSide,
-      vertexShader: /* glsl */`attribute float edge; varying vec2 vUv; varying float vEdge;
-        void main(){ vUv = uv; vEdge = edge; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
-      fragmentShader: /* glsl */`uniform sampler2D map; varying vec2 vUv; varying float vEdge;
-        void main(){ gl_FragColor = vec4(texture2D(map, vUv).rgb, vEdge); }`,
-    });
+    this.unwrapMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
     this.unwrapScene = new THREE.Scene();
     // edge padding: copies of the face 1-2% larger underneath, so the outline texels are face, not the
     // flat background (a dotted outline otherwise); small enough to never show ghost features
@@ -34,9 +24,8 @@ export class AtlasBaker {
       m.scale.set(sc, sc, 1); m.position.set(cu[0] * (1 - sc), cu[1] * (1 - sc), (sc - 1) * -5);
       this.unwrapScene.add(m);
     }
-    // Outside the drawn face: the flat skin tone (the clear color), like the original atlas. (Radially
-    // stretched edge skin there read as glitchy streaks, enlarged face copies as ghost features.)
-    this.loop = boundaryLoop(canon.index);
+    // Outside the drawn face: the flat skin tone (the clear color). (Radially stretched edge skin there read
+    // as glitchy streaks; enlarged face copies as padding showed ghost features.)
 
     this.gradeMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -47,7 +36,6 @@ export class AtlasBaker {
         eyeL: { value: new THREE.Vector2() }, eyeR: { value: new THREE.Vector2() }, mouthC: { value: new THREE.Vector2() },
         noseC: { value: new THREE.Vector2() }, cheekL: { value: new THREE.Vector2() }, cheekR: { value: new THREE.Vector2() },
         faceW: { value: 0.8 }, cornerL: { value: new THREE.Vector2() }, cornerR: { value: new THREE.Vector2() }, teeth: { value: 0 }, upLip: { value: new THREE.Vector2() }, loLip: { value: new THREE.Vector2() }, socket: { value: 0 }, eyeVoid: { value: 0 }, lips: { value: 0 }, noseRed: { value: 0 }, flush: { value: 0 },
-        feather: { value: 0 }, featherTone: { value: new THREE.Vector3(0.8, 0.6, 0.5) },
       },
       vertexShader: /* glsl */`varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`,
       fragmentShader: GRADE_FRAG,
@@ -62,16 +50,8 @@ export class AtlasBaker {
     const fc = centerOf(face.lm, [1, 6, 9, 168]);
     const pos = this.unwrapGeo.attributes.position.array;
     const uv = this.unwrapGeo.attributes.uv.array;
-    // headStretch: the photo's outer skin stretched outward (see stretch.js), measured in the photo
-    const poly = p.headStretch ? this.loop.map((i) => [face.lm[i][0], face.lm[i][1]]) : null;
     for (let i = 0; i < 468; i++) {
       pos[i * 3] = uvW[i][0]; pos[i * 3 + 1] = uvW[i][1]; pos[i * 3 + 2] = 0;
-      if (poly) {
-        const dx = face.lm[i][0] - fc[0], dy = face.lm[i][1] - fc[1], r = Math.hypot(dx, dy), R = r > 1e-6 ? rayToPolygon(fc, [dx / r, dy / r], poly) : 1;
-        const k = R > 0 && r > 1e-6 ? (stretchT(Math.min(1, r / R)) * R) / r : 1;
-        uv[i * 2] = fc[0] + dx * k; uv[i * 2 + 1] = 1 - (fc[1] + dy * k);
-        continue;
-      }
       // the outline samples the photo inside its edge: the canonical outline runs along the hairline and
       // the jaw, where the photo has hair, background and the shadow under the jaw. It takes the first real
       // skin inward (see skinInset): a fixed nudge left the jaw's shadow as a black band under the chin.
@@ -82,7 +62,8 @@ export class AtlasBaker {
     this.unwrapGeo.attributes.position.needsUpdate = true;
     this.unwrapGeo.attributes.uv.needsUpdate = true;
 
-    this.unwrapMat.uniforms.map.value = face.tex;
+    this.unwrapMat.map = face.tex;
+    this.unwrapMat.needsUpdate = true;
 
     if (!this.rtB || this.rtB.width !== res) {
       this.rtB?.dispose();
@@ -103,40 +84,21 @@ export class AtlasBaker {
     const prevClear = r.getClearColor(new THREE.Color()), prevAlpha = r.getClearAlpha();
     r.setClearColor(new THREE.Color(...face.skin), 1);
     r.setRenderTarget(this.rtA); r.clear(); r.render(this.unwrapScene, this.cam);
-    // skin tone first (makeup off, no feather), then the atlas feathered out toward it
-    this.tone = this.readTone(uvW, res);
-    u.feather.value = 0; u.featherTone.value.fromArray(this.tone); // (the face texture stays whole: the head carries it on)
+    this.tone = this.readTone(uvW, res); // skin tone (makeup off) for the body and hair shell
     r.setRenderTarget(this.rtB); r.clear(); r.render(this.quadScene, this.cam);
-    this.photoTex = this.gradePhoto(face); // (the head projects it onto its band)
-    this.photoCenter = fc; // (photo space, for the head's stretch)
     r.setRenderTarget(null);
     r.setClearColor(prevClear, prevAlpha);
     return this.rtB.texture;
   }
 
-  // The whole photo through the same grade (no makeup, no feather): the head projects it onto the skull.
-  gradePhoto(face) {
-    const u = this.gradeMat.uniforms, keep = {}, src = u.src.value;
-    for (const k of MAKEUP) { keep[k] = u[k].value; u[k].value = 0; }
-    u.feather.value = 0; u.src.value = face.tex;
-    if (!this.rtP) this.rtP = new THREE.WebGLRenderTarget(512, 512, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
-    this.r.setRenderTarget(this.rtP); this.r.render(this.quadScene, this.cam); this.r.setRenderTarget(null);
-    for (const k of MAKEUP) u[k].value = keep[k];
-    u.src.value = src;
-    this.photoPixels ??= new Uint8Array(512 * 512 * 4);
-    this.r.readRenderTargetPixels(this.rtP, 0, 0, 512, 512, this.photoPixels); // (rows v-up, like the texture)
-    return this.rtP.texture;
-  }
-
-  // The skin tone the body, skull and the face's feathered border wear (computed by bake()).
+  // The skin tone the body and hair shell wear (computed by bake()).
   skinTone() { return this.tone; }
 
   // The graded texture without makeup (cheek flush sits right on the cheeks, lips and nose red nearby:
-  // sampled with them, the neck and hands came out pinker than the face) and without the feather.
+  // sampled with them, the neck and hands came out pinker than the face).
   readTone(uvW, n) {
     const u = this.gradeMat.uniforms, keep = {};
     for (const k of MAKEUP) { keep[k] = u[k].value; u[k].value = 0; }
-    u.feather.value = 0;
     if (!this.rtS || this.rtS.width !== n) {
       this.rtS?.dispose();
       this.rtS = new THREE.WebGLRenderTarget(n, n, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
@@ -169,23 +131,6 @@ export class AtlasBaker {
 // Robust skin tone (see AtlasBaker.skinTone): median of several skin landmarks, so hair or brows at
 // any single point can't turn the body's skin black.
 const MAKEUP = ['socket', 'eyeVoid', 'lips', 'noseRed', 'flush', 'teeth'];
-const FEATHER = 0.16; // how far in from the outline the photo fades into the skin tone (face widths)
-
-// each canonical vertex's distance to the face outline in canonical UV, in face widths (0 on the outline)
-function outlineDistance(canon) {
-  const count = new Map(), key = (a, b) => (a < b ? a * 1000 + b : b * 1000 + a), I = canon.index, U = canon.uv;
-  for (let t = 0; t < I.length; t += 3) for (let e = 0; e < 3; e++) { const k = key(I[t + e], I[t + (e + 1) % 3]); count.set(k, (count.get(k) || 0) + 1); }
-  const segs = [...count].filter(([, c]) => c === 1).map(([k]) => [U[Math.floor(k / 1000)], U[k % 1000]]);
-  const width = Math.hypot(U[L.sideR][0] - U[L.sideL][0], U[L.sideR][1] - U[L.sideL][1]);
-  return new Float32Array(U.map((p) => {
-    let d = Infinity;
-    for (const [a, b] of segs) {
-      const ex = b[0] - a[0], ey = b[1] - a[1], t = Math.max(0, Math.min(1, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / (ex * ex + ey * ey)));
-      d = Math.min(d, Math.hypot(p[0] - a[0] - ex * t, p[1] - a[1] - ey * t));
-    }
-    return Math.min(1, d / width);
-  }));
-}
 const SKIN_POINTS = [50, 280, 205, 425, 151, 9, 199, 36, 266];
 // how far toward the face center (fraction of the way) outline vertex i must sample the photo to land on
 // skin: from 0.06 in, the first step at least EDGE_SKIN as bright as the face's skin and staying so for
@@ -243,8 +188,7 @@ uniform sampler2D src; uniform float outRes;
 uniform float hue, sat, contrast, bright, pale, sharpen, grime, levels;
 uniform vec3 shadowTint, highTint;
 uniform vec2 eyeL, eyeR, mouthC, noseC, cheekL, cheekR;
-uniform float faceW, socket, eyeVoid, lips, noseRed, flush, teeth, feather;
-uniform vec3 featherTone;
+uniform float faceW, socket, eyeVoid, lips, noseRed, flush, teeth;
 uniform vec2 cornerL, cornerR, upLip, loLip;
 varying vec2 vUv;
 
@@ -307,10 +251,6 @@ void main(){
 
   float n = vnoise(vUv * 48.) * .6 + vnoise(vUv * 150.) * .4;
   c *= 1. - grime * (n * .6);
-
-  // the photo fades out into the skin tone over its outer rim, so the face melts into the head
-  // (the skull wears this same tone) instead of ending in a hard-edged photo on a head
-  if (feather > 0.) c = mix(featherTone, c, smoothstep(0., feather, texture2D(src, vUv).a));
 
   c = floor(clamp(c, 0., 1.) * levels + bayer4(gl_FragCoord.xy)) / levels;
   gl_FragColor = vec4(c, 1.);
