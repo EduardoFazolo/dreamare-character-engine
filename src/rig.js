@@ -431,7 +431,8 @@ export class SkinnedCharacter {
 
     // sockets / landmark empties: named nodes parented to the bone that carries them
     const empties = {};
-    const empty = (name, bone, at, yAxis) => {
+    // reach: how far from its bone this socket may legitimately sit (default 0.6 m, see the validation)
+    const empty = (name, bone, at, yAxis, reach) => {
       const o = new THREE.Object3D();
       o.name = name;
       const inv = bones[bone].matrixWorld.clone().invert();
@@ -441,7 +442,7 @@ export class SkinnedCharacter {
         o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), localDir);
       }
       bones[bone].add(o);
-      empties[name] = { bone, position: arr(at) };
+      empties[name] = reach ? { bone, position: arr(at), reach } : { bone, position: arr(at) };
       return o;
     };
 
@@ -480,8 +481,12 @@ export class SkinnedCharacter {
       empty(`socket_${l}Hip`, 'Hips', new THREE.Vector3(sx * hipX, pos('Hips').y, 0));
     }
     const skullItem = items.find((it) => it.mat.name === 'head') || face;
-    const headTop = new THREE.Vector3(0, (skullItem ? new THREE.Box3().setFromBufferAttribute(skullItem.g.attributes.position).max.y : all.max.y / METERS) * METERS, pos('Head').z);
-    empty('socket_headTop', 'Head', headTop);
+    const skullBox = skullItem ? new THREE.Box3().setFromBufferAttribute(skullItem.g.attributes.position) : null;
+    const headTop = new THREE.Vector3(0, (skullBox ? skullBox.max.y : all.max.y / METERS) * METERS, pos('Head').z);
+    // reach: the skull's own height (independent of where the socket landed): big or tall heads
+    // legitimately put their top past the default 0.6 m
+    const headH = skullBox ? (skullBox.max.y - skullBox.min.y) * METERS : 0;
+    empty('socket_headTop', 'Head', headTop, null, +Math.max(0.6, headH * 1.1).toFixed(3));
     const chestVerts = boneVerts.Spine || [];
     const backZ = chestVerts.reduce((mn, v) => Math.min(mn, v.z), 0);
     empty('socket_back', 'Spine2', new THREE.Vector3(0, pos('Spine2').y, backZ));

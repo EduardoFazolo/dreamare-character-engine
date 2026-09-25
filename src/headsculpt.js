@@ -38,6 +38,8 @@ export function hairSpec(style, D, vol, fringeMin = -Infinity) {
   const back = (z) => Math.min(1, Math.max(0, (D.sideZ - z) / 0.45)); // 0 at the sides, 1 at the back
   const cut = (y, z, front, rear) => front + (rear - front) * back(z) - y; // > 0 below the cut line
   const face = (y, z, line) => SMIN(Math.max(line, fringeMin) - y, z - zf); // > 0 inside the face zone
+  // > 0 in front of: the ear plane beside the face, the neck's centre plane below the jaw (D.neck: proxy)
+  const behindJaw = (y, z) => z - (D.neck.z + (D.sideZ + 0.02 - D.neck.z) * Math.min(1, Math.max(0, (y - (D.chin - 0.1)) / 0.3)));
   let s;
   switch (style) {
     case 'short': s = { t: 0.07, mask: (x, y, z) => SMAX(cut(y, z, D.earTop, D.chin + 0.12), face(y, z, hairline)) }; break;
@@ -55,12 +57,15 @@ export function hairSpec(style, D, vol, fringeMin = -Infinity) {
     }; break;
     case 'long': s = {
       t: 0.07,
-      mask: (x, y, z) => SMAX(cut(y, z, D.chin - 0.15, D.chin - 1.0), face(y, z, hairline)),
+      // (the shell obeys the same below-the-jaw rule as the slab: it wraps the neck proxy, which is fatter
+      // than a thin real neck and showed as a dark collar under the chin)
+      mask: (x, y, z) => smax(SMAX(cut(y, z, D.chin - 0.15, D.chin - 1.0), face(y, z, hairline)), behindJaw(y, z), 0.15),
       // Beside the face it hangs behind the ears; below the jaw it hangs behind the neck's centre plane
       // (D.neck: the body-neck proxy), so it can never cover the throat or the chest.
       // (wider than the hair around the neck by 3 cells: coinciding side faces mesh into slivers)
-      extra: (x, y, z) => SMAX(sdRoundBoxAt(x, y, z, [0, D.chin - 0.35, D.sideZ - 0.12], [Math.max(D.sideX + 0.1, D.neck.r + 0.07 * vol + 3 * HEAD_CELL), 0.6, 0.34], 0.14), face(y, z, hairline),
-        z - (D.neck.z + (D.sideZ + 0.02 - D.neck.z) * Math.min(1, Math.max(0, (y - (D.chin - 0.1)) / 0.3)))),
+      // (that cut is rounded wide, 0.15: its flat face showed from the front as cardboard flaps)
+      extra: (x, y, z) => smax(SMAX(sdRoundBoxAt(x, y, z, [0, D.chin - 0.35, D.sideZ - 0.12], [Math.max(D.sideX + 0.1, D.neck.r + 0.07 * vol + 3 * HEAD_CELL), 0.6, 0.34], 0.14), face(y, z, hairline)),
+        behindJaw(y, z), 0.15),
       bounds: [[-D.sideX - 0.3, D.chin - 1.05, D.sideZ - 0.55], [D.sideX + 0.3, D.chin + 0.3, D.sideZ + 0.3]],
     }; break;
     case 'afro': s = { t: 0.3, fuzz: 0.12, fringe: hairline + 0.05, mask: (x, y, z) => SMAX(cut(y, z, D.earY, D.chin + 0.1), face(y, z, hairline + 0.05)) }; break;
@@ -174,7 +179,7 @@ export function sculptHead(P, loop, maskIndex, p, style, hat = 'none') {
     for (let k = 0, at = 0; k < grid.nz; k++) for (let j = 0; j < grid.ny; j++) for (let i = 0; i < grid.nx; i++, at++) {
       val[at] = smin(val[at], neckProxy(grid.o.x + i * grid.cell, grid.o.y + j * grid.cell, grid.o.z + k * grid.cell), K);
     }
-    const field = new GarmentField(base, { thickness: hs.t, mask: hs.mask, extra: hs.extra || null, fuzz: hs.fuzz || 0, fuzzFreq: fuzzFreqFor(grid.cell), hem: hemFor(grid.cell) });
+    const field = new GarmentField(base, { thickness: hs.t, mask: hs.mask, extra: hs.extra || null, fuzz: hs.fuzz || 0, fuzzFreq: fuzzFreqFor(grid.cell), hem: hemFor(grid.cell), hemShift: 0 }); // (hair: its cut rules assume no shift)
     const mesh = perf.time('head.hairNets', () => simplify(surfaceNets(grid, deriveGrid(grid, field, val), field), 800));
     if (mesh.indices.length) hair = { ...mesh, ...perf.time('head.shade', () => shade(field, mesh.positions)) };
   }

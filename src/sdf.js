@@ -60,10 +60,11 @@ function vnoise(x, y, z, s) {
 export class BodySDF {
   // pad: extra evaluated margin around the body (room for clothing shells); join: limb->torso blend
   // sagFloor: soft tissue can droop down to here but not below (no flesh webbing between the legs)
-  // ground: cut everything below y = 0, rim rounded by this radius (0 = off): soles come out exactly
-  // flat on the ground, no clamping of vertices (which folds triangles over at the sole's rim).
-  // Keep it under half the sole's width: a rounded cut lifts every point closer than that to the rim.
-  constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18, sagFloor = -Infinity, ground = 0 } = {}) {
+  // ground: cut everything below y = 0 (null = off; a number rounds the rim by that radius): soles come
+  // out exactly flat on the ground, no clamping of vertices (which folds triangles at the sole's rim).
+  // The feet are shaped so the cut crosses them at 45 degrees (body.js): a hard cut then meshes cleanly,
+  // where rounding would lift every point closer than its radius to the rim off the ground.
+  constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18, sagFloor = -Infinity, ground = null } = {}) {
     this.inflate = inflate; this.clay = clay; this.sag = sag; this.seed = seed; this.join = join; this.sagFloor = sagFloor; this.ground = ground;
     const pad = inflate + clay * 0.12 + extra;
     this.extraPad = extra;
@@ -132,7 +133,7 @@ export class BodySDF {
       const s = this.seed;
       n = this.clay * Math.min(1, Math.max(0, (y - 0.25) / 0.6)) * (0.09 * (vnoise(x * 1.6, y * 1.6, z * 1.6, s) - 0.5) + 0.035 * (vnoise(x * 5, y * 5, z * 5, s + 7) - 0.5));
     }
-    if (this.ground) {
+    if (this.ground != null) {
       const k = this.ground;
       if (out) { out[0] = smax(noA + n, -y, k); out[1] = smax(noB + n, -y, k); }
       return smax(d + n, -y, k);
@@ -171,16 +172,28 @@ export function gradientOf(field, x, y, z, h = 0.01) {
 export const fuzzFreqFor = (cell) => 1 / (4 * cell);
 export const hemFor = (cell) => 1.5 * cell;
 export class GarmentField {
-  constructor(body, { thickness, mask, extra = null, fuzz = 0, fuzzFreq = 3.5, hem = 0.1 }) {
-    Object.assign(this, { body, thickness, mask, extra, fuzz, fuzzFreq, hem });
+  // profile: { y, w, below, above }: the thickness is `below` under y and `above` over y + w (smooth in
+  // between). Where two layers overlap, the outer one must clear the inner one by more than the two
+  // decimated meshes' chord error: pant cuffs thicken over the shoe, the shoe thins inside the pants.
+  // hemShift: how far past the cut the hem's rounding happens (clothing: hem / 2, see fromBody)
+  constructor(body, { thickness, mask, extra = null, fuzz = 0, fuzzFreq = 3.5, hem = 0.1, hemShift = hem / 2, profile = null }) {
+    Object.assign(this, { body, thickness, mask, extra, fuzz, fuzzFreq, hem, hemShift, profile });
+    this.maxThickness = profile ? Math.max(thickness, profile.below, profile.above) : thickness;
   }
   fromBody(d, x, y, z) {
-    let v = d - this.thickness;
+    let t = this.thickness;
+    const q = this.profile;
+    if (q) { const s = Math.min(1, Math.max(0, (y - q.y) / q.w)); t = q.below + (q.above - q.below) * s * s * (3 - 2 * s); }
+    let v = d - t;
     if (this.fuzz) { const f = this.fuzzFreq; v += this.fuzz * (vnoise(x * f, y * f, z * f, 3) - 0.5); }
-    v = smax(v, this.mask(x, y, z), this.hem);
+    // Rounded hem, rounded just past the cut: smax rounds a corner by removing material within `hem`
+    // of it, which brings thin cloth down onto the skin before the hem (the separately decimated meshes
+    // then interpenetrate into a jagged skin/cloth line). Against the mask shifted out by hem/2, the
+    // shell keeps its thickness up to the designed hem (dip there: (sqrt(k) - sqrt(k/2))^2 ~ 0.09 k).
+    v = smax(v, this.mask(x, y, z) - this.hemShift, this.hem);
     v = this.extra ? smin(v, this.extra(x, y, z), this.hem) : v;
     // (rounding under the shell's thickness: the sole's inside stays exactly on y = 0)
-    return this.body.ground ? smax(v, -y, Math.min(this.body.ground, 0.9 * this.thickness)) : v;
+    return this.body.ground != null ? smax(v, -y, Math.min(this.body.ground, 0.9 * this.thickness)) : v;
   }
   eval(x, y, z) { return this.fromBody(this.body.eval(x, y, z), x, y, z); }
   gradient(x, y, z) { return gradientOf(this, x, y, z); }
@@ -213,7 +226,7 @@ export function polygonize(sdf, cell) {
 export function deriveGrid(grid, garment, val = grid.val, iRange = [0, grid.nx]) {
   const { nx, ny, nz, o, cell } = grid, out = new Float32Array(val.length).fill(1e3);
   const i0 = Math.max(0, iRange[0] - 2), i1 = Math.min(nx, iRange[1] + 2);
-  const far = garment.extra ? Infinity : garment.thickness + 2 * cell + garment.fuzz * 0.5 + 0.02;
+  const far = garment.extra ? Infinity : (garment.maxThickness ?? garment.thickness) + 2 * cell + garment.fuzz * 0.5 + 0.02;
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
     const row = nx * (j + ny * k);
     for (let i = i0; i < i1; i++) {

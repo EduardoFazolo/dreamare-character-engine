@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ps2Material } from './head.js';
+import { paintSkinTile } from './skintile.js';
 
 // Crude jointed humanoid in "head units" (face width = 1). Segments are low-poly lathes and
 // cylinders; the look comes from photo textures + wrong proportions, same trick as the face.
@@ -54,22 +55,16 @@ export class BodyRig {
     })));
   }
 
-  // small noisy tile in the face's skin tone, for hands, neck and bare skin
+  // tile in the face's skin tone, for hands, neck and bare skin
   skinTexture([r, g, b]) {
     this.skinKey = [r, g, b].map((v) => v.toFixed(4)).join(',');
     if (!this.skinTex) {
       const c = document.createElement('canvas');
-      c.width = c.height = 16;
       this.skinTex = new THREE.CanvasTexture(c);
       this.skinTex.wrapS = this.skinTex.wrapT = THREE.RepeatWrapping;
       this.skinTex.magFilter = this.skinTex.minFilter = THREE.NearestFilter;
     }
-    const c = this.skinTex.image, ctx = c.getContext('2d');
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      const n = 0.9 + ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1 + 1) % 1 * 0.2; // deterministic noise
-      ctx.fillStyle = `rgb(${[r, g, b].map((v) => Math.min(255, v * n * 255) | 0).join(',')})`;
-      ctx.fillRect(x, y, 1, 1);
-    }
+    paintSkinTile(this.skinTex.image, [r, g, b]);
     this.skinTex.needsUpdate = true;
     return this.skinTex;
   }
@@ -211,14 +206,16 @@ export class BodyRig {
       const fs = p.footSize * (outfit.feet || 1);
       mesh(new THREE.BoxGeometry(0.36 * fs * Math.sqrt(g), 0.26, 0.85 * fs).translate(0, -0.1, 0.22 * fs), 'shoes', ankle, false);
       // shaped foot: heel, arch, wider ball of the foot. Every piece stays inside the proxy's footprint
-      // (ground snapping and contacts don't change) and reaches SINK below its sole height (-0.23):
-      // the sculpt's ground plane cuts that off into a flat sole. A sole merely touching the plane
-      // would be tangent to it, and a tangent cut meshes into slivers. The sole stays exactly on y = 0
-      // wherever it is deeper than the plane's rounding radius (half a grid cell, <= 0.035).
-      const fw = 0.18 * fs * Math.sqrt(g), SINK = 0.12, h = SINK / 2;
-      S(ankle, { type: 'ellipsoid', c: [0, -0.13 - h, -0.02], r: [fw * 0.72, 0.1 + h, 0.16], k: 0.08, rigid: true });
-      S(ankle, { type: 'box', c: [0, -0.13 - h, 0.2 * fs], b: [fw * 0.8, 0.1 + h, 0.24 * fs], round: 0.08, k: 0.1, rigid: true });
-      S(ankle, { type: 'ellipsoid', c: [0, -0.15 - h, 0.45 * fs], r: [fw, 0.08 + h, 0.2 * fs], k: 0.1, rigid: true });
+      // (ground snapping and contacts don't change) and reaches below the proxy's sole height (-0.23),
+      // where the sculpt's ground plane cuts it flat. Each is placed so that cut crosses its surface at
+      // 60 degrees: a sole merely touching the plane is tangent (slivers), a wall hitting it at 90 degrees
+      // is a razor crease (teeth after decimation), and a shallower cut flattens the toes. Tops stay put.
+      const fw = 0.18 * fs * Math.sqrt(g), SOLE = -0.23, CUT = 0.5; // cut CUT * r below the center: 60 deg
+      const ell = (top, rx, rz, cz, k) => { const ry = (top - SOLE) / (1 + CUT); S(ankle, { type: 'ellipsoid', c: [0, top - ry, cz], r: [rx, ry, rz], k, rigid: true }); };
+      ell(-0.03, fw * 0.72, 0.16, -0.02, 0.08); // heel
+      const round = 0.08, bot = SOLE - (1 - CUT) * round; // arch: the cut crosses its rounded edge at 60
+      S(ankle, { type: 'box', c: [0, (-0.03 + bot) / 2, 0.2 * fs], b: [fw * 0.8, (-0.03 - bot) / 2, 0.24 * fs], round, k: 0.1, rigid: true });
+      ell(-0.07, fw, 0.2 * fs, 0.45 * fs, 0.1); // ball
       grp = 'torso';
     }
   }

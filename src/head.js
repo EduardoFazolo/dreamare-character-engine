@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { sculptHead } from './headsculpt.js';
 import { perf } from './perf.js';
 import { unwrap, BodyBaker } from './bodybake.js';
+import { paintSkinTile } from './skintile.js';
 
 // ---------------- PS2-ish material: vertex snapping, gouraud, affine UVs, 15-bit dither, fog ----------------
 export const PS2 = {
@@ -112,7 +113,7 @@ export class HeadRig {
     this.skull = new THREE.Mesh(new THREE.BufferGeometry(), this.skullMat);
     this.hairShell = new THREE.Mesh(new THREE.BufferGeometry(), this.hairShellMat);
     this.group.add(this.skull, this.hairShell);
-    this.skinTex = canvasTex(16, 16, () => {}, 1);
+    this.skinTex = canvasTex(64, 64, () => {}, 1);
     this.hairTex = new THREE.CanvasTexture(document.createElement('canvas'));
     this.hairTex.wrapS = this.hairTex.wrapT = THREE.MirroredRepeatWrapping; // hides the photo patch edges
     this.baker = new BodyBaker(renderer, {
@@ -248,7 +249,7 @@ export class HeadRig {
     if (!atlas) return { pos, col: pos.map(() => [0, 0, 0]), sig: 'none' };
     const g = atlas.getContext('2d', { willReadFrequently: true }), n = atlas.width, uv0 = this.canon.uv, c0 = uv0[1];
     const col = this.loop.map((i) => {
-      const u = uv0[i][0] + (c0[0] - uv0[i][0]) * 0.12, v = uv0[i][1] + (c0[1] - uv0[i][1]) * 0.12;
+      const u = uv0[i][0] + (c0[0] - uv0[i][0]) * 0.03, v = uv0[i][1] + (c0[1] - uv0[i][1]) * 0.03; // the mask's own border
       const d = g.getImageData(Math.min(n - 2, Math.max(0, Math.floor(u * n))), Math.min(n - 2, Math.max(0, Math.floor((1 - v) * n))), 2, 2).data;
       return [0, 1, 2].map((k) => (d[k] + d[4 + k] + d[8 + k] + d[12 + k]) / 1020);
     });
@@ -302,7 +303,7 @@ export class HeadRig {
   }
 
   paint(hair, skin, p, rim) {
-    fillSkin(this.skinTex.image, skin);
+    paintSkinTile(this.skinTex.image, skin);
     this.skinTex.needsUpdate = true;
     const u = this.baker.mat.uniforms;
     if (hair) { this.hairTex.image = hair.canvas; this.hairTex.needsUpdate = true; }
@@ -316,40 +317,45 @@ export class HeadRig {
     this.hairShellMat.uniforms.map.value = this.headTexture;
   }
 
-  // stringy strand cards hanging from the sides and back of the sculpted skull
+  // Stringy wisps hanging from the hair shell's lower edge (sides and back): rooted on the shell itself
+  // (never on bald skull or poking through it), hanging straight down, tinted with the shell's own
+  // painted color (the mean of the head texture over the shell), so dye and photo hair carry over.
   buildHair(on) {
     this.hair.clear();
-    if (!on || !this.skullPts) return;
-    const { positions: P, normals: N } = this.skullPts, D = this.dims;
-    const picks = [];
-    for (let i = 0; i < P.length / 3; i++) {
-      if (P[i * 3 + 1] > D.earY + 0.05 && P[i * 3 + 2] < D.sideZ + 0.05 && N[i * 3 + 1] < 0.7) picks.push(i);
+    const geo = this.hairShell.geometry, pos = geo.attributes.position;
+    if (!on || !this.hairShell.visible || !pos || !this.headCanvas) return;
+    const nrm = geo.attributes.normal, uv = geo.attributes.uv, D = this.dims;
+    // root per angle bin: the lowest outward-facing shell vertex (sides and back only)
+    const BINS = 20, root = new Array(BINS).fill(-1);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i) - D.sideZ, nx = nrm.getX(i), nz = nrm.getZ(i);
+      const a = Math.atan2(x, -z); // 0 at the back, +-pi/2 at the sides
+      if (Math.abs(a) > 1.75 || nrm.getY(i) > 0.5 || nx * x + nz * z <= 0) continue;
+      const b = Math.min(BINS - 1, Math.floor(((a + 1.75) / 3.5) * BINS));
+      if (root[b] < 0 || y < pos.getY(root[b])) root[b] = i;
     }
-    const step = Math.max(1, Math.floor(picks.length / 26));
-    for (let n = 0; n < picks.length; n += step) {
-      const i = picks[n];
-      const len = 0.55 + (Math.sin(n * 3.7) * 0.5 + 0.5) * 0.45;
-      const g = new THREE.PlaneGeometry(0.2, len, 1, 3);
-      g.translate(0, -len / 2, 0);
-      const m = new THREE.Mesh(g, this.hairMat);
-      m.position.set(P[i * 3] + N[i * 3] * 0.03, P[i * 3 + 1] + 0.02, P[i * 3 + 2] + N[i * 3 + 2] * 0.03);
-      m.lookAt(m.position.x + N[i * 3], m.position.y, m.position.z + N[i * 3 + 2]);
-      m.rotateX(-0.15);
+    // the shell's painted color
+    const g = this.headCanvas.getContext('2d', { willReadFrequently: true }), n = this.headCanvas.width, px = g.getImageData(0, 0, n, n).data;
+    const col = [0, 0, 0];
+    let cnt = 0;
+    for (let i = 0; i < uv.count; i += 3) {
+      const o = (Math.min(n - 1, Math.floor((1 - uv.getY(i)) * n)) * n + Math.min(n - 1, Math.floor(uv.getX(i) * n))) * 4;
+      col[0] += px[o]; col[1] += px[o + 1]; col[2] += px[o + 2]; cnt++;
+    }
+    this.hairMat.uniforms.color.value.setRGB(...col.map((v) => v / cnt / 255 / 0.85)); // strands average 0.85
+    root.forEach((i, b) => {
+      if (i < 0) return;
+      const len = 0.28 + 0.22 * (0.5 + 0.5 * Math.sin(b * 2.3));
+      const cg = new THREE.PlaneGeometry(0.14, len, 1, 2).translate(0, -len / 2, 0);
+      const m = new THREE.Mesh(cg, this.hairMat);
+      const ox = nrm.getX(i), oz = nrm.getZ(i), l = Math.hypot(ox, oz) || 1;
+      m.position.set(pos.getX(i) - (ox / l) * 0.015, pos.getY(i) + 0.05, pos.getZ(i) - (oz / l) * 0.015); // root tucked in
+      m.lookAt(m.position.x + ox, m.position.y, m.position.z + oz); // vertical card facing out
       this.hair.add(m);
-    }
+    });
   }
 }
 HeadRig.ids = 0;
-
-function fillSkin(c, [r, g, b]) {
-  c.width = c.height = 16;
-  const ctx = c.getContext('2d');
-  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-    const n = 0.9 + ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1 + 1) % 1 * 0.2;
-    ctx.fillStyle = `rgb(${[r, g, b].map((v) => Math.min(255, v * n * 255) | 0).join(',')})`;
-    ctx.fillRect(x, y, 1, 1);
-  }
-}
 
 // compact copy of an index range with only the vertices it uses (display attributes only)
 function subset(geo, start, count) {
@@ -417,13 +423,14 @@ void main(){
 }`;
 
 
+// grey strands (tinted per character by the material color), deterministic
 function drawHair(g, w, h) {
   g.clearRect(0, 0, w, h);
+  const r = (k) => ((Math.sin(k * 12.9898) * 43758.5453) % 1 + 1) % 1;
   for (let x = 0; x < w; x++) {
-    if (Math.random() < 0.45) continue;
-    const end = h * (0.6 + Math.random() * 0.4);
-    const v = 25 + Math.random() * 45;
-    g.fillStyle = `rgb(${v + 20},${v + 8},${v})`;
+    if (r(x) < 0.35) continue;
+    const end = h * (0.55 + r(x + 101) * 0.45), v = 180 + r(x + 57) * 75;
+    g.fillStyle = `rgb(${v},${v},${v})`;
     g.fillRect(x, 0, 1, end);
   }
 }

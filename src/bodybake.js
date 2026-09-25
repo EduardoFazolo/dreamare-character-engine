@@ -167,7 +167,7 @@ export class BodyBaker {
         tint2: { value: new THREE.Vector3(0, 1, 1) }, tint3: { value: new THREE.Vector3(0, 1, 1) },
         waistY: { value: 0 }, collarY: { value: 0 }, shoulderX: { value: 1 }, wristX: { value: 2 },
         ankleY: { value: 0 }, crotchY: { value: 0 }, sleeve: { value: 1 }, pants: { value: 1 },
-        skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, hemRound: { value: 0.1 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
+        skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, hemRound: { value: 0.1 }, pantsFloor: { value: 0 }, shoeTop: { value: 0 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
         belt: { value: 0 }, buttons: { value: 0 }, grime: { value: 0 }, tile: { value: 1 / 0.9 },
         bare: { value: new THREE.Vector4() }, // 1 where a region's fabric is just skin
         ...uniforms,
@@ -214,7 +214,7 @@ export class BodyBaker {
     const u = this.mat.uniforms;
     inputs.forEach((inp, i) => { u['tex' + i].value = inp.map; u['tint' + i].value.set(inp.hue, inp.sat, inp.bright); });
     u.bare.value.set(...inputs.map((inp, i) => (i === 3 || inp.map === inputs[3].map ? 1 : 0)));
-    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'hemRound', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k === 'hemRound' ? 'round' : k];
+    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'hemRound', 'pantsFloor', 'shoeTop', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k === 'hemRound' ? 'round' : k];
     u.skirt.value = R.skirt ? 1 : 0;
     u.belt.value = R.details.belt ? 1 : 0;
     u.buttons.value = R.details.buttons ? 1 : 0;
@@ -262,7 +262,7 @@ export class BodyBaker {
 const BAKE_FRAG = /* glsl */`
 uniform sampler2D tex0, tex1, tex2, tex3;
 uniform vec3 tint0, tint1, tint2, tint3; // hue degrees, saturation, brightness
-uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, hemRound, shoulderY, armBand, toeZ;
+uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, hemRound, pantsFloor, shoeTop, shoulderY, armBand, toeZ;
 uniform vec4 bare;
 varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer;
 
@@ -295,9 +295,9 @@ float maskBottom(vec3 p){
   if (skirt > .5) return smax_(p.y - (waistY + .05), hemY - p.y, hemRound);
   float span = crotchY - ankleY;
   float m = smax_(p.y - waistY, (max(0., crotchY - p.y) / span - pants) * span, hemRound);
-  return smax_(m, ankleY + .08 - p.y, hemRound);
+  return smax_(m, pantsFloor - p.y, hemRound);
 }
-float maskShoes(vec3 p){ return p.y - (ankleY + .1); }
+float maskShoes(vec3 p){ return p.y - shoeTop; }
 
 void main(){
   vec3 p = vPos, n = normalize(vNor);

@@ -59,8 +59,7 @@ export function regionSpec(body, p, model, outfit) {
 }
 
 // Creases between cuts are rounded by R.round (1.5 grid cells, see fitRegions): the mesher can't
-// resolve a knife edge, it turns into teeth. The pants floor sits on the shin (vertical), above the
-// flat top of the foot (a cut parallel to a surface leaves slivers), overlapping the shoe top.
+// resolve a knife edge, it turns into teeth. Pants floor and shoe top: see fitRegions.
 export const masks = {
   top(R, x, y, z) {
     const ax = Math.abs(x), len = R.wristX - R.shoulderX, k = R.round;
@@ -74,9 +73,9 @@ export const masks = {
     if (R.skirt) return smax(y - (R.waistY + 0.05), R.hemY - y, k);
     const span = R.crotchY - R.ankleY;
     const m = smax(y - R.waistY, (Math.max(0, R.crotchY - y) / span - R.pants) * span, k);
-    return smax(m, R.ankleY + 0.08 - y, k);
+    return smax(m, R.pantsFloor - y, k);
   },
-  shoes(R, x, y) { return y - (R.ankleY + 0.1); },
+  shoes(R, x, y) { return y - R.shoeTop; },
 };
 
 // Everything the sculpt needs, as plain data (runs in a Web Worker): prims carry their joint's
@@ -134,7 +133,7 @@ export function surfacePart(S, grid, which) {
     return finishPart({ ...skin, field: sdf, kind: 'body', layer: REGION.skin });
   }
   const l = layers[which];
-  const make = (body) => new GarmentField(body, { thickness: l.thickness, mask: (x, y, z) => l.mask(R, x, y, z), extra: l.extra, fuzz: l.fuzz, fuzzFreq: fuzzFreqFor(grid.cell), hem: hemFor(grid.cell) });
+  const make = (body) => new GarmentField(body, { thickness: l.thickness, mask: (x, y, z) => l.mask(R, x, y, z), extra: l.extra, fuzz: l.fuzz, profile: l.profile, fuzzFreq: fuzzFreqFor(grid.cell), hem: hemFor(grid.cell) });
   const fl = make(left), fr = make(right);
   const rg = splitRanges(grid);
   const dl = perf.time('  deriveGrid', () => deriveGrid(grid, fl, grid.valL, rg.left)), dr = perf.time('  deriveGrid', () => deriveGrid(grid, fr, grid.valR, rg.right));
@@ -197,13 +196,17 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
   }
   const fat = Math.max(0, p.fat);
   const cell = cellFor(prims, 0.07);
-  const sdfOpts = { inflate: fat * 0.28, clay: p.clay, sag: p.sag * 1.5, seed: p.seed, pad: thick + 0.08, sagFloor: R.crotchY + 0.2, ground: 0.5 * cell };
+  const sdfOpts = { inflate: fat * 0.28, clay: p.clay, sag: p.sag * 1.5, seed: p.seed, pad: thick + 0.08, sagFloor: R.crotchY + 0.2, ground: 0 };
   const sdf = new BodySDF(prims, sdfOpts);
   const plainPrims = prims.map((q) => ({ ...q, matrix: q.matrix.toArray() }));
   const layers = [];
   if (outfit.top !== 'skin') layers.push({ layer: REGION.top, mask: masks.top, thickness: thick, fuzz, share: 0.22 });
-  if (outfit.bottom !== 'skin') layers.push({ layer: REGION.bottom, mask: masks.bottom, thickness: thick, fuzz, extra: skirtCone, share: 0.18 });
-  if (outfit.shoes !== 'skin') layers.push({ layer: REGION.shoes, mask: masks.shoes, thickness: 0.06, share: 0.06 });
+  // pants over shoes (see fitRegions): the cuff thickens over the shoe, the shoe thins inside the pants
+  const over = !R.skirt && outfit.shoes !== 'skin' && outfit.bottom !== 'skin';
+  if (outfit.bottom !== 'skin') layers.push({ layer: REGION.bottom, mask: masks.bottom, thickness: thick, fuzz, extra: skirtCone, share: 0.18,
+    profile: over ? { y: R.shoeTop, w: 0.12, below: Math.max(thick, CUFF), above: thick } : null });
+  if (outfit.shoes !== 'skin') layers.push({ layer: REGION.shoes, mask: masks.shoes, thickness: 0.06, share: 0.06,
+    profile: over ? { y: R.pantsFloor - 0.04, w: 0.1, below: 0.06, above: 0.02 } : null });
 
   const B = p.polyBudget;
   const handJobs = ['A', 'B'].map((side) => {
@@ -225,10 +228,23 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
 // of shirt up the whole neck (non-manifold teeth). Measure the real shell (fat, clay, sag, fuzz)
 // around the hole's axis along the neck, and open the hole to 1.5 cells past it. Mutates
 // input.R (the bake reads the same R, so paint and geometry agree). Deterministic: pure in input.
+const CUFF = 0.11; // pant cuff thickness over a shoe (which thins to 0.02 inside the pants)
+
 export function fitRegions(input) {
   const R = input.R;
   const S = sculptSetup(input);
   R.round = hemFor(S.cell);
+  // Pants floor: one cell above the flat top of the foot (ankleY - 0.08) grown by the cuff's thickness,
+  // or the cuff drapes over the foot as a flat shelf (a cut parallel to it: slivers). Where pants come
+  // down to the shoe, the shoe top rises 2 roundings above the pants' lowest point: the overlap sits
+  // inside the (thickened, see CUFF) cuff instead of both rims fighting in one band thinner than a cell.
+  const bottom = S.layers.find((l) => l.layer === REGION.bottom), shod = input.outfit.shoes !== 'skin';
+  R.pantsFloor = R.ankleY - 0.08 + Math.max(bottom ? bottom.thickness : 0, shod ? CUFF : 0) + 0.07 + R.round / 2;
+  R.shoeTop = R.ankleY + 0.1;
+  if (bottom && shod && !R.skirt) {
+    const low = Math.max(R.hemY + 0.05, R.pantsFloor);
+    if (low < R.shoeTop + 2.5 * R.round) R.shoeTop = low + 2.5 * R.round;
+  }
   if (input.outfit.top === 'skin') return R;
   const top = S.layers.find((l) => l.layer === REGION.top);
   // the neck prim (and lumps on it) alone: arms, traps and humps merge into it and would run the
@@ -249,7 +265,7 @@ export function fitRegions(input) {
     }
     if (ry < limit) rMax = Math.max(rMax, ry);
   }
-  R.neckHole = Math.max(R.neckHole, rMax + 1.5 * S.cell);
+  R.neckHole = Math.max(R.neckHole, rMax + 1.5 * S.cell + R.round / 2); // (+ the hem's reach past the cut)
   return R;
 }
 

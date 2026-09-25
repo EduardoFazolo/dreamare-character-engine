@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { initLandmarker, loadCanonical, makeFace, loadImage, analyzeHair } from './face.js';
 import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
-import { AtlasBaker, skinColor } from './atlas.js';
+import { AtlasBaker } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
 import { BodyRig } from './body.js';
 import { SkinnedCharacter } from './rig.js';
@@ -125,7 +125,8 @@ function rebuild() {
   const t0 = performance.now();
   const uvW = perf.time('face.deform', () => deform(canonUV, params, params.texWarp, canon.index));
   texture = perf.time('face.bake', () => baker.bake(face, uvW, params, params.atlasRes));
-  const skin = perf.time('face.readback+skin', () => skinColor(baker.toCanvas($('#atlas')), uvW));
+  perf.time('face.readback', () => baker.toCanvas($('#atlas')));
+  const skin = perf.time('face.skin', () => baker.skinTone(uvW));
   lastSkin = skin;
   const base = params.geoSource === 'photo' ? face.geo : canon.pos;
   const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), skin, atlas: $('#atlas') }));

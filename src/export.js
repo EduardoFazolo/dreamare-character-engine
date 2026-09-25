@@ -176,7 +176,7 @@ function validate(json, sk, meta) {
   // landmarks and symmetry (warnings)
   for (const [n, e] of Object.entries(meta.nodes)) {
     const d = new THREE.Vector3(...e.position).distanceTo(bp(e.bone));
-    check(d < 0.6, `LANDMARK_REACH_${n}`, `${n} is ${d.toFixed(2)} m from its bone ${e.bone}`, 'warning');
+    check(d < (e.reach || 0.6), `LANDMARK_REACH_${n}`, `${n} is ${d.toFixed(2)} m from its bone ${e.bone}`, 'warning');
   }
   const L = meta.landmarks;
   const asym = (a, b) => Math.abs(a - b) / Math.max(1e-6, (a + b) / 2);

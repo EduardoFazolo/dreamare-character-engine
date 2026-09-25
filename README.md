@@ -21,12 +21,13 @@ Two styles ("Body style"):
 - **Nothing finer than the grid.** Fur/shag noise has a wavelength of at least 4 cells. Where two cuts meet (hems, collar, waist, skirt, hairlines, hat line) the crease is rounded by 1.5 cells. Hair tails are at least 2 cells thick.
 - **No cut runs parallel to a surface.** A near-parallel cut leaves a sliver thinner than a cell, which meshes as non-manifold teeth:
   - The collar hole is fitted to the measured shirt shell around the neck (fat, clay and fuzz included).
-  - The pants floor sits on the shin, not the flat top of the foot.
-  - Feet reach below the ground and are cut flat by a ground plane, so soles are exactly on y = 0 with no vertex clamping.
+  - The pants floor sits above the flat top of the foot.
+  - Feet reach below the ground and are cut flat by a hard ground plane, so soles are exactly on y = 0 with no vertex clamping. The foot pieces are shaped so the cut crosses them at 60 degrees: not tangent (slivers), not a vertical wall (a razor crease).
+- **Layers never interpenetrate.** Hems are rounded just past the cut, so cloth keeps its full thickness above the skin right up to the hem (a plain rounded cut brings thin cloth down onto the skin, and the separately decimated meshes then cross into a jagged line). Where full-length pants meet shoes, the shoe rises inside the pants, the cuff thickens to clear it and the shoe thins where it's hidden, so the outer layer always clears the inner one by more than the meshes' chord error.
 - **Leg passes weld 1:1.** Where the centerline surface isn't a leg's (crotch, skirt), both passes use identical values, so their seam cells match. Any hole left in the centerline band is filled.
 - **After decimation:** zero-volume fins are dropped, folded-back triangle pairs are flipped open, and the outline of a flat sole is locked so it stays on the ground.
 - **Head:**
-  - Hair lies on a proxy of the body's real (fattened) neck, and long hair never crosses in front of it.
+  - Hair lies on a proxy of the body's real (fattened) neck. Below the jaw, long hair only hangs behind the neck's centre plane (never over the throat or chest), and its ends are rounded rather than cut flat.
   - When the hat line trims an extra (like a bun) to less than the grid can mesh, the extra is dropped.
   - A fringe band under a hat brim that's too thin to mesh is lifted away.
 
@@ -44,6 +45,8 @@ Poses: stand, hunch, crouch, gunslinger (with revolver), zombie. Camera: medium,
 - Hair is a shell over the skull, cut by per-style masks (like clothing): bald, buzz (painted stubble), short, bowl, horseshoe, slicked, mullet, long, afro, mohawk, pompadour, bun, ponytail, pigtails, spiky. Extra shapes (bun, tails, quiff) are added on top of the shell. A non-zero hair hue dyes the hair (works on black hair too). **Hairstyle: auto** picks one from the photo.
 - The photo is segmented once per face with MediaPipe's multiclass selfie segmenter (hair / face skin / body skin / clothes): the person's real hair color, a patch of their actual hair (used as the hair texture), and where hair sits (style guess). Hair volume, hue and brightness sliders on top.
 - The skull and hair get their own baked atlas: skin tone that blends into the photo's own edge colors near the face (no pale frame), stubble, strands running down from the crown, AO behind the ears. Material slots: `head`, `hair` (plus `hairStrands` for the extra stringy strands).
+- Skin matches the face. The body, hands and skull wear the face's graded skin tone, sampled with makeup switched off (cheek flush used to make necks pinker than the face). The mask's border samples the photo 12% in, so hair or background at the face's edge never reaches it, and the skull around it reads those same border colors. Bare skin uses a fine, seamless, low-contrast mottle instead of coarse checkers.
+- "Stringy" strands are wisps rooted on the hair shell's lower edge (never on bald skull), hanging straight down, tinted with the shell's own painted color.
 - Hats fit the head: the crown is a sculpted shell around skull + forehead cut at a hat line just above the brow, with a shape per type and a brim or visor sized to the head: bowler, cowboy, fedora, top hat, beanie, baseball cap, flat cap, fez, wizard. Each has its own texture; Hat hue tints it. Under a hat, hair (and buns/tails) only shows below the hat line. About 1 in 5 randomized characters wears one.
 - The head sculpt runs in its own worker (`src/head.worker.js`) next to the body's; it only re-sculpts when the face outline, skull or hair params change.
 

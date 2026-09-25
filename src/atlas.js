@@ -50,7 +50,9 @@ export class AtlasBaker {
     const uv = this.unwrapGeo.attributes.uv.array;
     for (let i = 0; i < 468; i++) {
       pos[i * 3] = uvW[i][0]; pos[i * 3 + 1] = uvW[i][1]; pos[i * 3 + 2] = 0;
-      const inset = this.boundary.has(i) ? 0.06 : 0;
+      // the outline samples the photo 12% in: hair, shadow or background at the face's edge never reach
+      // the mask's border (the skull around it reads these same border colors, see HeadRig.rimColors)
+      const inset = this.boundary.has(i) ? 0.12 : 0;
       const sx = face.lm[i][0] + (fc[0] - face.lm[i][0]) * inset, sy = face.lm[i][1] + (fc[1] - face.lm[i][1]) * inset;
       uv[i * 2] = sx; uv[i * 2 + 1] = 1 - sy;
     }
@@ -84,6 +86,29 @@ export class AtlasBaker {
     return this.rtB.texture;
   }
 
+  // The skin tone the body wears: the same graded texture, but without makeup (cheek flush sits right
+  // on the cheeks, lips and nose red nearby: sampled with them, the neck and hands came out pinker than
+  // the face around them). Re-runs only the grade pass into a spare target; the atlas is untouched.
+  skinTone(uvW) {
+    const u = this.gradeMat.uniforms, n = this.rtB.width, keep = {};
+    for (const k of MAKEUP) { keep[k] = u[k].value; u[k].value = 0; }
+    if (!this.rtS || this.rtS.width !== n) {
+      this.rtS?.dispose();
+      this.rtS = new THREE.WebGLRenderTarget(n, n, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    }
+    this.r.setRenderTarget(this.rtS); this.r.render(this.quadScene, this.cam); this.r.setRenderTarget(null);
+    for (const k of MAKEUP) u[k].value = keep[k];
+    const buf = new Uint8Array(36);
+    const cl = (x) => Math.max(0, Math.min(n - 3, Math.floor(x) - 1));
+    const px = SKIN_POINTS.map((i) => {
+      this.r.readRenderTargetPixels(this.rtS, cl(uvW[i][0] * n), cl(uvW[i][1] * n), 3, 3, buf);
+      const c = [0, 0, 0];
+      for (let k = 0; k < 36; k += 4) { c[0] += buf[k]; c[1] += buf[k + 1]; c[2] += buf[k + 2]; }
+      return c.map((v) => v / 9 / 255);
+    });
+    return medianSkin(px);
+  }
+
   // Current atlas as a top-down canvas (for preview/export).
   toCanvas(canvas) {
     const n = this.rtB.width, buf = new Uint8Array(n * n * 4);
@@ -96,19 +121,13 @@ export class AtlasBaker {
   }
 }
 
-// Robust skin tone from the finished (graded) texture: median of several skin landmarks, so hair,
-// brows or painted makeup at any single point can't turn the body's skin black.
-export function skinColor(canvas, uvW) {
-  const g = canvas.getContext('2d', { willReadFrequently: true }), n = canvas.width;
-  const cl = (x) => Math.max(0, Math.min(n - 3, Math.floor(x) - 1));
-  const px = [50, 280, 205, 425, 151, 9, 199, 36, 266].map((i) => {
-    const d = g.getImageData(cl(uvW[i][0] * n), cl((1 - uvW[i][1]) * n), 3, 3).data;
-    const c = [0, 0, 0];
-    for (let k = 0; k < d.length; k += 4) { c[0] += d[k]; c[1] += d[k + 1]; c[2] += d[k + 2]; }
-    return c.map((v) => v / 9 / 255);
-  });
+// Robust skin tone (see AtlasBaker.skinTone): median of several skin landmarks, so hair or brows at
+// any single point can't turn the body's skin black.
+const MAKEUP = ['socket', 'eyeVoid', 'lips', 'noseRed', 'flush', 'teeth'];
+const SKIN_POINTS = [50, 280, 205, 425, 151, 9, 199, 36, 266];
+function medianSkin(px) {
   const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-  const mid = px.sort((a, b) => lum(a) - lum(b)).slice(2, 7);
+  const mid = px.slice().sort((a, b) => lum(a) - lum(b)).slice(2, 7);
   return [0, 1, 2].map((k) => mid.reduce((s, c) => s + c[k], 0) / mid.length);
 }
 
