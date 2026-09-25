@@ -17,6 +17,19 @@ Two styles ("Body style"):
 - **Clothing layers**: garments are separate shells sampled on the same grid: the body pushed out by a thickness ("Clothes looseness"; fur/shag get a thick fuzzy shell), cut by region masks. The shirt has a round neck hole and sleeve length; bottoms are pants (each leg separate, length) or a skirt/robe ("Bottom") that deliberately bridges the legs; plus shoes. Skin fully covered by a garment is removed.
 - **segmented**: the original PS1-style rigid segments.
 
+**Clean meshes by construction** (no teeth, fins or holes). The body, clothes and hair are meshed on grids. Every rule below exists because breaking it provably produced artifacts:
+- **Nothing finer than the grid.** Fur/shag noise has a wavelength of at least 4 cells. Where two cuts meet (hems, collar, waist, skirt, hairlines, hat line) the crease is rounded by 1.5 cells. Hair tails are at least 2 cells thick.
+- **No cut runs parallel to a surface.** A near-parallel cut leaves a sliver thinner than a cell, which meshes as non-manifold teeth:
+  - The collar hole is fitted to the measured shirt shell around the neck (fat, clay and fuzz included).
+  - The pants floor sits on the shin, not the flat top of the foot.
+  - Feet reach below the ground and are cut flat by a ground plane, so soles are exactly on y = 0 with no vertex clamping.
+- **Leg passes weld 1:1.** Where the centerline surface isn't a leg's (crotch, skirt), both passes use identical values, so their seam cells match. Any hole left in the centerline band is filled.
+- **After decimation:** zero-volume fins are dropped, folded-back triangle pairs are flipped open, and the outline of a flat sole is locked so it stays on the ground.
+- **Head:**
+  - Hair lies on a proxy of the body's real (fattened) neck, and long hair never crosses in front of it.
+  - When the hat line trims an extra (like a bun) to less than the grid can mesh, the extra is dropped.
+  - A fringe band under a hat brim that's too thin to mesh is lifted away.
+
 Sculpt sliders: muscle, fat (negative thins proportionally), hump, lumps/tumors (seeded), clay lumpiness, sag/melt, sleeve and pants/skirt length, clothes looseness, body grime, poly budget. Proportion sliders (head, neck, shoulders, torso, girth, belly, hunch, arms, hands, fingers, legs, feet) still apply to both styles.
 
 **Baked body texture** (`src/bodybake.js`), like a real PS2 character: the sculpted mesh is auto-unwrapped into charts (one per dominant bone, split into side/cap projections, shelf-packed), then painted from 3D. Fabric is sampled triplanar in bind space, so chart seams and tiling seams don't show. Shirt, pants, shoes and skin boundaries are crisp regardless of triangulation, with hems and stitches, belt and buckle, buttons, baked AO and grime. Outfits are presets over CC0 photo textures in `public/textures` (ambientCG, 128px tiles), with hue/saturation/brightness sliders.
@@ -24,6 +37,15 @@ Sculpt sliders: muscle, fat (negative thins proportionally), hump, lumps/tumors 
 **Skinning**: the sculpted body uses smooth weights (inverse distance to each bone's axis, up to 4 bones, no left/right leakage), so elbows, knees and shoulders bend instead of splitting. Head, hat, hair and props stay rigid.
 
 Poses: stand, hunch, crouch, gunslinger (with revolver), zombie. Camera: medium, full, portrait.
+
+## Head and hair
+
+- The photo face stays a mask on the front; the rest of the head is sculpted (`src/headsculpt.js`): cranium, occiput, jaw, ears (Ear size) and a neck stub, plus small spheres along the mask's rim so the skull always swallows the photo's messy border. Wherever the face shows, the skull is pushed behind the mask.
+- Hair is a shell over the skull, cut by per-style masks (like clothing): bald, buzz (painted stubble), short, bowl, horseshoe, slicked, mullet, long, afro, mohawk, pompadour, bun, ponytail, pigtails, spiky. Extra shapes (bun, tails, quiff) are added on top of the shell. A non-zero hair hue dyes the hair (works on black hair too). **Hairstyle: auto** picks one from the photo.
+- The photo is segmented once per face with MediaPipe's multiclass selfie segmenter (hair / face skin / body skin / clothes): the person's real hair color, a patch of their actual hair (used as the hair texture), and where hair sits (style guess). Hair volume, hue and brightness sliders on top.
+- The skull and hair get their own baked atlas: skin tone that blends into the photo's own edge colors near the face (no pale frame), stubble, strands running down from the crown, AO behind the ears. Material slots: `head`, `hair` (plus `hairStrands` for the extra stringy strands).
+- Hats fit the head: the crown is a sculpted shell around skull + forehead cut at a hat line just above the brow, with a shape per type and a brim or visor sized to the head: bowler, cowboy, fedora, top hat, beanie, baseball cap, flat cap, fez, wizard. Each has its own texture; Hat hue tints it. Under a hat, hair (and buns/tails) only shows below the hat line. About 1 in 5 randomized characters wears one.
+- The head sculpt runs in its own worker (`src/head.worker.js`) next to the body's; it only re-sculpts when the face outline, skull or hair params change.
 
 ## Performance
 
@@ -36,11 +58,11 @@ Geometry sliders: ~120-200 ms until the new body appears, 0 ms of main-thread bl
 
 ## Export (any engine)
 
-**Export character** downloads one `name.zip` with `name.glb`, `name.report.json` and `textures/face.png` + `textures/body.png` (already embedded in the GLB; there for engines that want them separately). Files are named `dreamare_<outfit>_<id>`, where the id comes from the character's seed. The goal: a character any engine can use with zero guessing (Three.js, Godot, Unity, Unreal, Blender). Everything the creator knows ships in the file.
+**Export character** downloads one `name.zip` with `name.glb`, `name.report.json` and `textures/face.png` + `textures/body.png` + `textures/head.png` (already embedded in the GLB; there for engines that want them separately). Files are named `dreamare_<outfit>_<id>`, where the id comes from the character's seed. The goal: a character any engine can use with zero guessing (Three.js, Godot, Unity, Unreal, Blender). Everything the creator knows ships in the file.
 
 **Plain glTF 2.0, valid on its own** (Khronos validator: 0 errors, 0 warnings)
 - Meters, +Y up, facing +Z, soles at y = 0. Top-level nodes are `Root` (identity, the ground point between the feet) and `mesh_Character`.
-- One mesh, one skin, 33 joints (`Root` + 32 humanoid bones with Mixamo-style names). Each material slot is a primitive named by purpose: `face`, `skin`, `top`, `bottom`, `shoes`, `hat`, `hair`, `prop`. In the sculpted style, `top`/`bottom`/`shoes`/`skin` share one baked body texture, so they stay separately recolorable.
+- One mesh, one skin, 33 joints (`Root` + 32 humanoid bones with Mixamo-style names). Each material slot is a primitive named by purpose: `face`, `head`, `hair`, `hairStrands`, `skin`, `top`, `bottom`, `shoes`, `hat`, `prop`. In the sculpted style, `top`/`bottom`/`shoes`/`skin` share one baked body texture, so they stay separately recolorable.
 - Bind pose is the VRM 1.0 T-pose: arms along X, palms down, fingers along X, thumbs 45 degrees forward. Sculpted body: smooth skinning, up to 4 influences. Segmented body and head/accessories: rigid, 1 influence.
 - Materials are PBR by default (roughness 1) or unlit (`KHR_materials_unlit`) via "Export materials". The grade and outfit tint are baked into the textures; the PS2 shader is not exported.
 - Clips: `Pose`, `Idle`, `Walk`, all in place, same bone set.

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MOTIONS, OUTFITS } from './body.js';
 import { ps2Material } from './head.js';
-import { sculptInput, sculptCore, regionSpec, REGION_NAMES } from './sculpt.js';
+import { sculptInput, sculptCore, regionSpec, fitRegions, REGION_NAMES } from './sculpt.js';
 import { unwrap, BodyBaker } from './bodybake.js';
 import { perf } from './perf.js';
 import { SCHEMA } from './mutate.js';
@@ -10,9 +10,9 @@ import { SCHEMA } from './mutate.js';
 // Params that cannot change the sculpted body geometry (face, textures, render, pose, accessories).
 // Everything else is part of the sculpt cache key, so geometry is only rebuilt when it can change.
 const NOT_SCULPT = new Set([
-  ...SCHEMA.filter((g) => ['Face mutations', 'Skull (3D only)', 'Where mutations apply', 'Grade', 'Makeup (painted in UV space)', 'Render', 'Outfit color'].includes(g.group))
+  ...SCHEMA.filter((g) => ['Face mutations', 'Skull (3D only)', 'Hair', 'Where mutations apply', 'Grade', 'Makeup (painted in UV space)', 'Render', 'Outfit color'].includes(g.group))
     .flatMap((g) => g.items.map((i) => i[0])),
-  'bodyGrime', 'headScale', 'hunch', 'pose', 'hat', 'hair', 'view', 'anim', 'exportMat', 'atlasRes', 'renderH', 'geoSource',
+  'bodyGrime', 'headScale', 'hunch', 'pose', 'hat', 'hair', 'hairStyle', 'view', 'anim', 'exportMat', 'atlasRes', 'renderH', 'geoSource',
 ]);
 const sculptKey = (p) => JSON.stringify(Object.keys(p).filter((k) => !NOT_SCULPT.has(k)).sort().map((k) => [k, p[k]]));
 
@@ -23,7 +23,7 @@ const sculptKey = (p) => JSON.stringify(Object.keys(p).filter((k) => !NOT_SCULPT
 // clip roles/contacts, bounds). export.js turns this.meta into glTF extras + VRMC_vrm.
 
 export const METERS = 0.16; // one head unit (face width) in meters
-const ACCESSORY = new Set(['hat', 'hair', 'prop']); // material slots that are not body volume
+const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop']); // material slots that are not body volume
 const PROXY = new Set(['top', 'bottom', 'shoes', 'skin']); // driver segment meshes (segmented style only)
 const FINGER = /Hand(Thumb|Index|Middle|Ring|Pinky)/;
 const DENSITY = 1000; // kg/m^3, bodies are roughly water
@@ -144,6 +144,7 @@ export class SkinnedCharacter {
     const model = (o) => new THREE.Matrix4().multiplyMatrices(rootInv, o.matrixWorld);
     const outfit = OUTFITS[p.outfit] || OUTFITS.suit;
     const input = sculptInput(body, p, model, regionSpec(body, p, model, outfit), outfit);
+    fitRegions(input);
     for (const [k, q] of Object.entries(saved)) j[k].quaternion.copy(q);
     body.parts.position.y = savedY;
     body.root.rotation.y = savedYaw;
@@ -194,7 +195,7 @@ export class SkinnedCharacter {
     // every visible driver mesh in model space (head units), tagged with its joint + material slot
     const items = [];
     body.parts.traverse((o) => {
-      if (!o.isMesh || !visibleUnder(o, body.parts)) return;
+      if (!o.isMesh || !visibleUnder(o, body.parts) || !o.geometry.attributes.position) return;
       let n = o.parent;
       while (n && !n.userData.joint) n = n.parent;
       if (!n) return;
@@ -373,11 +374,12 @@ export class SkinnedCharacter {
   sculptGeometry(body, p, model, P, BQ, index) {
     const t0 = performance.now();
     const outfit = OUTFITS[p.outfit] || OUTFITS.suit;
-    const R = regionSpec(body, p, model, outfit);
+    const input = sculptInput(body, p, model, regionSpec(body, p, model, outfit), outfit);
+    const R = perf.time('fitRegions', () => fitRegions(input));
     // normally sculpted in the worker already; synchronous fallback keeps bake() self-sufficient
     let parts = this.parts.get(sculptKey(p));
     if (!parts) {
-      parts = perf.time('sculptBody(sync)', () => sculptCore(sculptInput(body, p, model, R, outfit)));
+      parts = perf.time('sculptBody(sync)', () => sculptCore(input));
       this.store(sculptKey(p), parts);
     }
     const segs = {};
@@ -397,6 +399,7 @@ export class SkinnedCharacter {
     const bakeGeo = geo.clone(); // keeps the bake-only attributes for texture-only rebakes
     geo.deleteAttribute('ao');
     geo.deleteAttribute('layer'); // bake-only attributes
+    geo.deleteAttribute('aux');
     geo.scale(METERS, METERS, METERS);
     const subsets = groups.map((gr) => [gr.name, subset(geo, gr.start, gr.count)]);
     const names = Object.fromEntries(Object.entries(index).map(([n, i]) => [i, n]));
@@ -476,7 +479,8 @@ export class SkinnedCharacter {
       const hipX = hipVerts.reduce((mx, v) => Math.max(mx, sx * v.x), 0);
       empty(`socket_${l}Hip`, 'Hips', new THREE.Vector3(sx * hipX, pos('Hips').y, 0));
     }
-    const headTop = new THREE.Vector3(0, (face ? new THREE.Box3().setFromBufferAttribute(face.g.attributes.position).max.y : all.max.y / METERS) * METERS, pos('Head').z);
+    const skullItem = items.find((it) => it.mat.name === 'head') || face;
+    const headTop = new THREE.Vector3(0, (skullItem ? new THREE.Box3().setFromBufferAttribute(skullItem.g.attributes.position).max.y : all.max.y / METERS) * METERS, pos('Head').z);
     empty('socket_headTop', 'Head', headTop);
     const chestVerts = boneVerts.Spine || [];
     const backZ = chestVerts.reduce((mn, v) => Math.min(mn, v.z), 0);

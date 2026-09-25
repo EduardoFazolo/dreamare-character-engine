@@ -32,7 +32,9 @@ function sdRoundBox(px, py, pz, c, b, r) {
   const ox = Math.max(qx, 0), oy = Math.max(qy, 0), oz = Math.max(qz, 0);
   return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, qy, qz), 0) - r;
 }
-function smin(a, b, k) {
+// smooth max: rounded hems instead of razor creases (which simplification turns into spikes)
+export function smax(a, b, k) { return -smin(-a, -b, k); }
+export function smin(a, b, k) {
   if (k <= 0) return Math.min(a, b);
   const h = Math.max(k - Math.abs(a - b), 0) / k;
   return Math.min(a, b) - h * h * k * 0.25;
@@ -58,8 +60,11 @@ function vnoise(x, y, z, s) {
 export class BodySDF {
   // pad: extra evaluated margin around the body (room for clothing shells); join: limb->torso blend
   // sagFloor: soft tissue can droop down to here but not below (no flesh webbing between the legs)
-  constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18, sagFloor = -Infinity } = {}) {
-    this.inflate = inflate; this.clay = clay; this.sag = sag; this.seed = seed; this.join = join; this.sagFloor = sagFloor;
+  // ground: cut everything below y = 0, rim rounded by this radius (0 = off): soles come out exactly
+  // flat on the ground, no clamping of vertices (which folds triangles over at the sole's rim).
+  // Keep it under half the sole's width: a rounded cut lifts every point closer than that to the rim.
+  constructor(prims, { inflate = 0, clay = 0, sag = 0, seed = 1, pad: extra = 0, join = 0.18, sagFloor = -Infinity, ground = 0 } = {}) {
+    this.inflate = inflate; this.clay = clay; this.sag = sag; this.seed = seed; this.join = join; this.sagFloor = sagFloor; this.ground = ground;
     const pad = inflate + clay * 0.12 + extra;
     this.extraPad = extra;
     this.prims = prims.map((p) => {
@@ -127,6 +132,11 @@ export class BodySDF {
       const s = this.seed;
       n = this.clay * Math.min(1, Math.max(0, (y - 0.25) / 0.6)) * (0.09 * (vnoise(x * 1.6, y * 1.6, z * 1.6, s) - 0.5) + 0.035 * (vnoise(x * 5, y * 5, z * 5, s + 7) - 0.5));
     }
+    if (this.ground) {
+      const k = this.ground;
+      if (out) { out[0] = smax(noA + n, -y, k); out[1] = smax(noB + n, -y, k); }
+      return smax(d + n, -y, k);
+    }
     if (out) { out[0] = noA + n; out[1] = noB + n; }
     return d + n;
   }
@@ -135,7 +145,7 @@ export class BodySDF {
 
   // the body as seen by one leg's pass
   view(exclude) {
-    return { eval: (x, y, z) => this.evalList(x, y, z, this.prims, exclude), gradient(x, y, z) { return gradientOf(this, x, y, z); } };
+    return { ground: this.ground, eval: (x, y, z) => this.evalList(x, y, z, this.prims, exclude), gradient(x, y, z) { return gradientOf(this, x, y, z); } };
   }
 
   gradient(x, y, z) { return gradientOf(this, x, y, z); }
@@ -150,23 +160,33 @@ export function gradientOf(field, x, y, z, h = 0.01) {
   return g.lengthSq() > 0 ? g.normalize() : g.set(0, 1, 0);
 }
 
-// A clothing shell: the body pushed out by `thickness`, optionally unioned with an extra shape
-// (a skirt cone that bridges the legs), cut to a region by `mask` (negative inside).
+// A clothing shell: the body pushed out by `thickness`, cut to a region by `mask` (negative
+// inside), optionally unioned with an extra shape (skirt cone, ponytail...). Extras are not cut by
+// the mask: they carry their own clipping (the skirt clips itself at waist and hem).
+// Everything must be resolvable by the grid that meshes it; finer detail can't be represented and
+// turns into bubbles, non-manifold edges and folded teeth:
+// fuzzFreq: fuzz noise wavelength >= 4 cells (fuzzFreqFor).
+// hem: the rounding radius where the mask cuts the shell (hemFor, 1.5 cells). A cut that meets the
+//   shell at a shallow angle leaves a wedge thinner than a cell at its tip; rounding truncates it.
+export const fuzzFreqFor = (cell) => 1 / (4 * cell);
+export const hemFor = (cell) => 1.5 * cell;
 export class GarmentField {
-  constructor(body, { thickness, mask, extra = null, fuzz = 0 }) {
-    Object.assign(this, { body, thickness, mask, extra, fuzz });
+  constructor(body, { thickness, mask, extra = null, fuzz = 0, fuzzFreq = 3.5, hem = 0.1 }) {
+    Object.assign(this, { body, thickness, mask, extra, fuzz, fuzzFreq, hem });
   }
   fromBody(d, x, y, z) {
     let v = d - this.thickness;
-    if (this.extra) v = Math.min(v, this.extra(x, y, z));
-    if (this.fuzz) v += this.fuzz * (vnoise(x * 9, y * 9, z * 9, 3) - 0.5);
-    return Math.max(v, this.mask(x, y, z));
+    if (this.fuzz) { const f = this.fuzzFreq; v += this.fuzz * (vnoise(x * f, y * f, z * f, 3) - 0.5); }
+    v = smax(v, this.mask(x, y, z), this.hem);
+    v = this.extra ? smin(v, this.extra(x, y, z), this.hem) : v;
+    // (rounding under the shell's thickness: the sole's inside stays exactly on y = 0)
+    return this.body.ground ? smax(v, -y, Math.min(this.body.ground, 0.9 * this.thickness)) : v;
   }
   eval(x, y, z) { return this.fromBody(this.body.eval(x, y, z), x, y, z); }
   gradient(x, y, z) { return gradientOf(this, x, y, z); }
 }
 
-export { sdRoundCone };
+export { sdRoundCone, sdEllipsoid as sdEllipsoidAt, sdRoundBox as sdRoundBoxAt };
 
 function localBounds(p) {
   const min = new THREE.Vector3(), max = new THREE.Vector3();
@@ -200,7 +220,8 @@ export function deriveGrid(grid, garment, val = grid.val, iRange = [0, grid.nx])
       const v = val[row + i];
       // well outside the shell (> 2 cells + fuzz) the garment is positive whatever the mask says,
       // and no surface crossing can touch such a corner: skip the mask there
-      out[row + i] = v >= 999 ? 1e3 : v > far ? v - garment.thickness : garment.fromBody(v, o.x + i * cell, o.y + j * cell, o.z + k * cell);
+      // shells with an extra shape (skirt, hanging hair, tall hats) reach where the body never was
+      out[row + i] = v >= 999 && !garment.extra ? 1e3 : v > far ? v - garment.thickness : garment.fromBody(Math.min(v, 1e3), o.x + i * cell, o.y + j * cell, o.z + k * cell);
     }
   }
   return out;
@@ -360,6 +381,23 @@ export function surfaceNets(grid, val, field, keep = null, iRange = null) {
 
   const tris = [];
   const xKeep = keep ? keep : null;
+  // Split each quad (winding a b c d) along the diagonal whose two triangles agree best in normal.
+  // A fixed diagonal folds non-planar quads on creases (hems, cuts) into teeth; this never does
+  // when the other split is flat, and it's a pure function of the positions (deterministic).
+  const V = verts;
+  const nrm = (p, q, r, out) => {
+    const ux = V[q * 3] - V[p * 3], uy = V[q * 3 + 1] - V[p * 3 + 1], uz = V[q * 3 + 2] - V[p * 3 + 2];
+    const vx = V[r * 3] - V[p * 3], vy = V[r * 3 + 1] - V[p * 3 + 1], vz = V[r * 3 + 2] - V[p * 3 + 2];
+    const nx_ = uy * vz - uz * vy, ny_ = uz * vx - ux * vz, nz_ = ux * vy - uy * vx, l = Math.hypot(nx_, ny_, nz_) || 1;
+    out[0] = nx_ / l; out[1] = ny_ / l; out[2] = nz_ / l;
+  };
+  const n1 = [0, 0, 0], n2 = [0, 0, 0];
+  const agree = (p, q, r, s_) => { nrm(p, q, r, n1); nrm(p, r, s_, n2); return n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2]; };
+  const quad = (a, b, c, d, inside) => {
+    const ac = agree(a, b, c, d), bd = agree(b, c, d, a);
+    if (ac >= bd) { if (inside) tris.push(a, c, d, a, b, c); else tris.push(a, c, b, a, d, c); }
+    else if (inside) tris.push(a, b, d, b, c, d); else tris.push(a, d, b, b, d, c);
+  };
   for (let q = 0; q < blocks.length; q++) {
     const bi = blocks[q][0], bj = blocks[q][1], bk = blocks[q][2];
     const kE = Math.min(bk + B, nz - 1), jE = Math.min(bj + B, ny - 1), iS = Math.max(1, bi, iA), iE = Math.min(bi + B, nx - 1, iB);
@@ -372,15 +410,15 @@ export function surfaceNets(grid, val, field, keep = null, iRange = null) {
         // edge along x: the 4 cells sharing it differ in j,k ; along y: in k,i ; along z: in i,j
         if (inside !== (val[at + 1] < 0) && (!xKeep || xKeep(x0 + cell / 2))) {
           const a0 = cellVert[at], b0 = cellVert[at - SY], c0 = cellVert[at - SY - SZ], d0 = cellVert[at - SZ];
-          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) { if (inside) tris.push(a0, c0, d0, a0, b0, c0); else tris.push(a0, c0, b0, a0, d0, c0); }
+          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) quad(a0, b0, c0, d0, inside);
         }
         if (inside !== (val[at + SY] < 0) && (!xKeep || xKeep(x0))) {
           const a0 = cellVert[at], b0 = cellVert[at - SZ], c0 = cellVert[at - SZ - 1], d0 = cellVert[at - 1];
-          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) { if (inside) tris.push(a0, c0, d0, a0, b0, c0); else tris.push(a0, c0, b0, a0, d0, c0); }
+          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) quad(a0, b0, c0, d0, inside);
         }
         if (inside !== (val[at + SZ] < 0) && (!xKeep || xKeep(x0))) {
           const a0 = cellVert[at], b0 = cellVert[at - 1], c0 = cellVert[at - 1 - SY], d0 = cellVert[at - SY];
-          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) { if (inside) tris.push(a0, c0, d0, a0, b0, c0); else tris.push(a0, c0, b0, a0, d0, c0); }
+          if (a0 >= 0 && b0 >= 0 && c0 >= 0 && d0 >= 0) quad(a0, b0, c0, d0, inside);
         }
       }
     }
@@ -399,14 +437,75 @@ export function splitRanges(grid) {
   return { left: [Math.max(1, i0 - 1), grid.nx], right: [1, Math.min(grid.nx, i0 + 3)] };
 }
 
-export function splitNets(grid, valLeft, valRight, fieldLeft, fieldRight, seamMinY = -Infinity) {
+// shared(x, y, z): below seamMinY, a centerline vertex is still welded when it lies on a surface that
+// doesn't come from a leg (crotch, skirt): true where the legless field is at its surface
+export function splitNets(grid, valLeft, valRight, fieldLeft, fieldRight, seamMinY = -Infinity, shared = null) {
   const r = splitRanges(grid);
+  // Both passes mesh the cells straddling the centerline. Where those corners lie on the shared
+  // surface (torso, crotch, skirt: not a leg), give both passes the very same value there (the pass
+  // that owns that side), so the seam cells produce identical vertices and weld 1:1 into a manifold.
+  // (patched in place over a few columns and restored afterwards: the grid may be shared)
+  const { nx, ny, nz, o, cell } = grid;
+  const i0 = Math.floor(-o.x / cell);
+  const saved = [];
+  for (let i = Math.max(0, i0 - 1); i <= Math.min(nx - 1, i0 + 3); i++) {
+    const x = o.x + i * cell, ownLeft = x >= 0;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      const at = i + nx * (j + ny * k);
+      if (valLeft[at] === valRight[at]) continue;
+      const y = o.y + j * cell;
+      if (y < seamMinY && !(shared && Math.min(Math.abs(valLeft[at]), Math.abs(valRight[at])) < 3 * cell && shared(x, y, o.z + k * cell))) continue;
+      saved.push(at, valLeft[at], valRight[at]);
+      if (ownLeft) valRight[at] = valLeft[at]; else valLeft[at] = valRight[at];
+    }
+  }
   const a = perf.time('pass', () => surfaceNets(grid, valLeft, fieldLeft, (x) => x >= 0, r.left));
   const b = perf.time('pass', () => surfaceNets(grid, valRight, fieldRight, (x) => x < 0, r.right));
-  return perf.time('weld', () => weldSeam(a, b, grid.cell, seamMinY));
+  for (let q = 0; q < saved.length; q += 3) { valLeft[saved[q]] = saved[q + 1]; valRight[saved[q]] = saved[q + 2]; }
+  return perf.time('weld', () => fillSeamHoles(weldSeam(a, b, grid.cell, seamMinY, shared), grid.cell * 1.5));
 }
 
-function weldSeam(a, b, cell, seamMinY) {
+// Surfaces here are closed by construction, so an open boundary loop lying entirely in the centerline
+// band is a seam hole (where the two passes' vertices didn't pair up 1:1, e.g. a sagging crotch apex).
+// Close each with a fan from its centroid, wound against the loop (consistent with its neighbours).
+function fillSeamHoles(mesh, band) {
+  const { positions: P, indices: I } = mesh;
+  const has = new Set(), next = new Map();
+  const key = (a, b) => a * 4294967296 + b;
+  // a hole's boundary edges and their twins all lie on triangles touching the band: scan only those
+  const tris = [];
+  for (let t = 0; t < I.length; t += 3) if (Math.abs(P[I[t] * 3]) <= band || Math.abs(P[I[t + 1] * 3]) <= band || Math.abs(P[I[t + 2] * 3]) <= band) tris.push(t);
+  for (const t of tris) for (let e = 0; e < 3; e++) has.add(key(I[t + e], I[t + (e + 1) % 3]));
+  for (const t of tris) for (let e = 0; e < 3; e++) {
+    const u = I[t + e], v = I[t + (e + 1) % 3];
+    if (!has.has(key(v, u))) { const l = next.get(u); if (l) l.push(v); else next.set(u, [v]); } // boundary u -> v
+  }
+  if (!next.size) return mesh;
+  const pos = Array.from(P), idx = Array.from(I);
+  for (const start of [...next.keys()].sort((a, b) => a - b)) {
+    while (next.get(start)?.length) {
+      const loop = [start];
+      let u = start, ok = true;
+      for (;;) {
+        const l = next.get(u);
+        if (!l || !l.length) { ok = false; break; }
+        const v = l.shift();
+        if (v === start) break;
+        loop.push(v); u = v;
+        if (loop.length > 256) { ok = false; break; }
+      }
+      if (!ok || loop.length < 3 || loop.some((v) => Math.abs(P[v * 3]) > band)) continue;
+      const m = pos.length / 3;
+      let cx = 0, cy = 0, cz = 0;
+      for (const v of loop) { cx += P[v * 3]; cy += P[v * 3 + 1]; cz += P[v * 3 + 2]; }
+      pos.push(cx / loop.length, cy / loop.length, cz / loop.length);
+      for (let i = 0; i < loop.length; i++) idx.push(loop[(i + 1) % loop.length], loop[i], m); // edge v -> u closes u -> v
+    }
+  }
+  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+}
+
+function weldSeam(a, b, cell, seamMinY, shared) {
   const na = a.positions.length / 3, nt = na + b.positions.length / 3, tol = cell * 0.75, band = cell * 1.01;
   const P = new Float32Array(nt * 3);
   P.set(a.positions); P.set(b.positions, a.positions.length);
@@ -416,28 +515,39 @@ function weldSeam(a, b, cell, seamMinY) {
   const used = new Uint8Array(nt);
   for (let t = 0; t < I.length; t++) used[I[t]] = 1;
   // only seam vertices (a thin band at the centerline, above the crotch) take part in welding
+  // candidates: every vertex in the thin centerline band of either pass
   const key = (y, z) => `${Math.floor(y / tol)},${Math.floor(z / tol)}`;
-  const hash = new Map();
-  for (let v = 0; v < na; v++) {
-    if (!used[v] || Math.abs(P[v * 3]) > band || P[v * 3 + 1] < seamMinY) continue;
-    const k = key(P[v * 3 + 1], P[v * 3 + 2]);
-    (hash.get(k) || hash.set(k, []).get(k)).push(v);
-  }
-  const remap = new Int32Array(nt);
-  for (let v = 0; v < nt; v++) remap[v] = v;
-  for (let v = na; v < nt; v++) {
-    if (!used[v] || Math.abs(P[v * 3]) > band || P[v * 3 + 1] < seamMinY) continue;
+  const band_ = (v) => used[v] && Math.abs(P[v * 3]) <= band;
+  const grid_ = (lo, hi) => {
+    const h = new Map();
+    for (let v = lo; v < hi; v++) if (band_(v)) { const k = key(P[v * 3 + 1], P[v * 3 + 2]); (h.get(k) || h.set(k, []).get(k)).push(v); }
+    return h;
+  };
+  const nearest = (v, h) => {
     const y = P[v * 3 + 1], z = P[v * 3 + 2];
     let best = -1, bd = tol * tol;
     for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-      const list = hash.get(`${Math.floor(y / tol) + dy},${Math.floor(z / tol) + dz}`);
+      const list = h.get(`${Math.floor(y / tol) + dy},${Math.floor(z / tol) + dz}`);
       if (!list) continue;
       for (const u of list) {
         const d = (P[u * 3] - P[v * 3]) ** 2 + (P[u * 3 + 1] - y) ** 2 + (P[u * 3 + 2] - z) ** 2;
-        if (d < bd) { bd = d; best = u; }
+        if (d < bd || (d === bd && u < best)) { bd = d; best = u; }
       }
     }
-    if (best >= 0) remap[v] = best;
+    return best;
+  };
+  const hashA = grid_(0, na), hashB = grid_(na, nt);
+  const remap = new Int32Array(nt);
+  for (let v = 0; v < nt; v++) remap[v] = v;
+  // weld mutual-nearest pairs only (1:1, nothing collapses), decided once per pair: above the crotch
+  // (both ends), or on a surface that isn't a leg's (shared, at the pair's midpoint)
+  for (let v = na; v < nt; v++) {
+    if (!band_(v)) continue;
+    const u = nearest(v, hashA);
+    if (u < 0 || nearest(u, hashB) !== v) continue;
+    const ok = (P[u * 3 + 1] >= seamMinY && P[v * 3 + 1] >= seamMinY) ||
+      (shared && shared((P[u * 3] + P[v * 3]) / 2, (P[u * 3 + 1] + P[v * 3 + 1]) / 2, (P[u * 3 + 2] + P[v * 3 + 2]) / 2));
+    if (ok) remap[v] = u;
   }
   // compact in first-use order (same order a Map-based compaction would give)
   const newId = new Int32Array(nt).fill(-1), pos = new Float32Array(nt * 3), idx = new Uint32Array(I.length);
@@ -467,15 +577,106 @@ function orientOutward(sdf, P, I) {
   if (agree < 0) for (let t = 0; t < I.length; t += 3) { const x = I[t + 1]; I[t + 1] = I[t + 2]; I[t + 2] = x; }
 }
 
-// decimate to a triangle budget and drop unused vertices
+// decimate to a triangle budget and drop unused vertices; open borders are locked.
+// The outline of a flat sole (vertices on y = 0 next to one above it) is locked as well: a coplanar
+// region collapses at zero error, and the simplifier would otherwise keep only the rim vertices just
+// above the plane, lifting the sole off the ground.
 export function simplify(mesh, targetTris) {
-  const { positions, indices } = mesh;
-  if (indices.length / 3 <= targetTris) return mesh;
-  const [out] = MeshoptSimplifier.simplify(indices, positions, 3, targetTris * 3, 0.05, ['Regularize']);
-  const [remap, unique] = MeshoptSimplifier.compactMesh(out);
+  const { positions: P, indices: I } = mesh;
+  if (I.length / 3 <= targetTris) return compact(mesh);
+  const lock = new Uint8Array(P.length / 3), EPS = 1e-5;
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t], b = I[t + 1], c = I[t + 2];
+    const ga = Math.abs(P[a * 3 + 1]) < EPS, gb = Math.abs(P[b * 3 + 1]) < EPS, gc = Math.abs(P[c * 3 + 1]) < EPS;
+    if ((ga || gb || gc) && !(ga && gb && gc)) { if (ga) lock[a] = 1; if (gb) lock[b] = 1; if (gc) lock[c] = 1; }
+  }
+  const [out] = MeshoptSimplifier.simplifyWithAttributes(I, P, 3, new Float32Array(0), 0, [], lock, targetTris * 3, 0.05, ['Regularize', 'LockBorder']);
+  return compact({ positions: P, indices: unfold(P, dropFins(out)) });
+}
+
+// Decimation can collapse a region into a zero-volume fin: the same triangle twice with opposite
+// windings (their edges become non-manifold). Such pairs enclose nothing: drop both. An exact
+// duplicate with the same winding is kept once.
+function dropFins(I) {
+  const seen = new Map(), drop = new Uint8Array(I.length / 3);
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t], b = I[t + 1], c = I[t + 2];
+    const lo = Math.min(a, b, c), hi = Math.max(a, b, c), mid = a + b + c - lo - hi;
+    const k = `${lo},${mid},${hi}`;
+    // winding parity: rotate so the smallest index leads, then compare the next one
+    const r = a === lo ? [a, b, c] : b === lo ? [b, c, a] : [c, a, b];
+    const par = r[1] === mid ? 1 : -1;
+    const prev = seen.get(k);
+    if (prev === undefined) { seen.set(k, { t, par }); continue; }
+    if (drop[prev.t / 3]) { seen.set(k, { t, par }); continue; }
+    drop[t / 3] = 1;
+    if (prev.par !== par) drop[prev.t / 3] = 1;
+  }
+  if (!drop.some((d) => d)) return I;
+  const out = [];
+  for (let t = 0; t < I.length; t += 3) if (!drop[t / 3]) out.push(I[t], I[t + 1], I[t + 2]);
+  return new Uint32Array(out);
+}
+
+// Decimation can leave two triangles folded back onto each other across their shared edge (a spike).
+// Swap such an edge to the quad's other diagonal when that strictly opens the fold, keeps both
+// triangles non-degenerate and facing the same way as before, and doesn't duplicate an edge.
+// Edges are visited in index order (deterministic); positions are never moved.
+function unfold(P, indices) {
+  const I = indices.slice();
+  const n1 = [0, 0, 0], n2 = [0, 0, 0], m1 = [0, 0, 0], m2 = [0, 0, 0];
+  const nrm = (a, b, c, out) => {
+    const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+    const vx = P[c * 3] - P[a * 3], vy = P[c * 3 + 1] - P[a * 3 + 1], vz = P[c * 3 + 2] - P[a * 3 + 2];
+    out[0] = uy * vz - uz * vy; out[1] = uz * vx - ux * vz; out[2] = ux * vy - uy * vx;
+    const l = Math.hypot(out[0], out[1], out[2]);
+    if (l > 0) { out[0] /= l; out[1] /= l; out[2] /= l; }
+    return l;
+  };
+  const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+  const key = (a, b) => (a < b ? a * 4294967296 + b : b * 4294967296 + a);
+  for (let pass = 0; pass < 8; pass++) {
+    const E = new Map();
+    for (let t = 0; t < I.length; t += 3) for (let e = 0; e < 3; e++) {
+      const k = key(I[t + e], I[t + (e + 1) % 3]);
+      const l = E.get(k); if (l) l.push(t); else E.set(k, [t]);
+    }
+    const touched = new Uint8Array(I.length / 3);
+    let flips = 0;
+    for (const [k, ts] of E) {
+      if (ts.length !== 2) continue;
+      const [t1, t2] = ts;
+      if (touched[t1 / 3] || touched[t2 / 3]) continue;
+      nrm(I[t1], I[t1 + 1], I[t1 + 2], n1); nrm(I[t2], I[t2 + 1], I[t2 + 2], n2);
+      const d0 = dot(n1, n2);
+      if (d0 >= 0) continue;
+      // orient: t1 = (a, b, c), t2 = (b, a, d)
+      let r = 0; const a0 = Math.floor(k / 4294967296), b0 = k % 4294967296;
+      while (!((I[t1 + r] === a0 && I[t1 + (r + 1) % 3] === b0) || (I[t1 + r] === b0 && I[t1 + (r + 1) % 3] === a0))) r++;
+      const a = I[t1 + r], b = I[t1 + (r + 1) % 3], c = I[t1 + (r + 2) % 3];
+      let d = -1; for (let e = 0; e < 3; e++) if (I[t2 + e] !== a && I[t2 + e] !== b) d = I[t2 + e];
+      if (d < 0 || c === d || E.has(key(c, d))) continue;
+      // new pair (a, d, c) + (d, b, c)
+      if (nrm(a, d, c, m1) < 1e-12 || nrm(d, b, c, m2) < 1e-12) continue;
+      const avg = [n1[0] + n2[0], n1[1] + n2[1], n1[2] + n2[2]];
+      if (dot(m1, m2) <= d0 + 0.1 || dot(m1, avg) <= 0 || dot(m2, avg) <= 0) continue;
+      I[t1] = a; I[t1 + 1] = d; I[t1 + 2] = c;
+      I[t2] = d; I[t2 + 1] = b; I[t2 + 2] = c;
+      touched[t1 / 3] = touched[t2 / 3] = 1;
+      E.delete(k); E.set(key(c, d), [t1, t2]); // later flips in this pass must see the new edge
+      flips++;
+    }
+    if (!flips) break;
+  }
+  return I;
+}
+
+function compact({ positions, indices }) {
+  const idx = indices.slice();
+  const [remap, unique] = MeshoptSimplifier.compactMesh(idx);
   const p = new Float32Array(unique * 3);
   for (let i = 0; i < remap.length; i++) if (remap[i] !== 0xffffffff) p.set(positions.subarray(i * 3, i * 3 + 3), remap[i] * 3);
-  return { positions: p, indices: out };
+  return { positions: p, indices: idx };
 }
 
 // smooth normals from the field and cheap SDF ambient occlusion (crevices, armpits, crotch)

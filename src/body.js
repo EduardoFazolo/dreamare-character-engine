@@ -167,6 +167,7 @@ export class BodyRig {
     const neck = joint('neck', waist, 0, chestH - 0.12, 0);
     mesh(new THREE.CylinderGeometry(neckR, neckR * 1.15, p.neckLen + 0.3, 7, 1, true).translate(0, (p.neckLen + 0.3) / 2, 0), 'skin', neck);
     C(neck, [0, -0.15, 0], [0, p.neckLen + 0.3, 0], neckR * 1.25, neckR, 0.15);
+    this.sculpt.body.at(-1).neck = true; // the shirt's collar hole is fitted to this prim
     this.headAnchor.position.set(0, p.neckLen + 0.2, 0);
     neck.add(this.headAnchor);
 
@@ -209,12 +210,15 @@ export class BodyRig {
       const ankle = joint('ankle' + side, knee, 0, -shin, 0);
       const fs = p.footSize * (outfit.feet || 1);
       mesh(new THREE.BoxGeometry(0.36 * fs * Math.sqrt(g), 0.26, 0.85 * fs).translate(0, -0.1, 0.22 * fs), 'shoes', ankle, false);
-      // shaped foot: heel, arch, wider ball of the foot. Every piece bottoms out at the proxy's sole
-      // height (-0.23) and stays inside its footprint, so ground snapping and contacts don't change.
-      const fw = 0.18 * fs * Math.sqrt(g);
-      S(ankle, { type: 'ellipsoid', c: [0, -0.13, -0.02], r: [fw * 0.72, 0.1, 0.16], k: 0.08, rigid: true });
-      S(ankle, { type: 'box', c: [0, -0.13, 0.2 * fs], b: [fw * 0.8, 0.1, 0.24 * fs], round: 0.08, k: 0.1, rigid: true });
-      S(ankle, { type: 'ellipsoid', c: [0, -0.15, 0.45 * fs], r: [fw, 0.08, 0.2 * fs], k: 0.1, rigid: true });
+      // shaped foot: heel, arch, wider ball of the foot. Every piece stays inside the proxy's footprint
+      // (ground snapping and contacts don't change) and reaches SINK below its sole height (-0.23):
+      // the sculpt's ground plane cuts that off into a flat sole. A sole merely touching the plane
+      // would be tangent to it, and a tangent cut meshes into slivers. The sole stays exactly on y = 0
+      // wherever it is deeper than the plane's rounding radius (half a grid cell, <= 0.035).
+      const fw = 0.18 * fs * Math.sqrt(g), SINK = 0.12, h = SINK / 2;
+      S(ankle, { type: 'ellipsoid', c: [0, -0.13 - h, -0.02], r: [fw * 0.72, 0.1 + h, 0.16], k: 0.08, rigid: true });
+      S(ankle, { type: 'box', c: [0, -0.13 - h, 0.2 * fs], b: [fw * 0.8, 0.1 + h, 0.24 * fs], round: 0.08, k: 0.1, rigid: true });
+      S(ankle, { type: 'ellipsoid', c: [0, -0.15 - h, 0.45 * fs], r: [fw, 0.08 + h, 0.2 * fs], k: 0.1, rigid: true });
       grp = 'torso';
     }
   }

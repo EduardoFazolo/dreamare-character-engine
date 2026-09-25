@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { initLandmarker, loadCanonical, makeFace, loadImage } from './face.js';
+import { initLandmarker, loadCanonical, makeFace, loadImage, analyzeHair } from './face.js';
 import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
 import { AtlasBaker, skinColor } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
@@ -23,7 +23,7 @@ renderer.setPixelRatio(1);
 const canon = await loadCanonical();
 const canonUV = canon.uv.map((u) => [...u]);
 const baker = new AtlasBaker(renderer, canon);
-const rig = new HeadRig(canon);
+const rig = new HeadRig(canon, renderer);
 
 const scene = new THREE.Scene();
 buildEnvironment(scene);
@@ -123,23 +123,23 @@ function rebuild() {
   const my = ++gen;
   perf.reset();
   const t0 = performance.now();
-  const uvW = perf.time('face.deform', () => deform(canonUV, params, params.texWarp));
+  const uvW = perf.time('face.deform', () => deform(canonUV, params, params.texWarp, canon.index));
   texture = perf.time('face.bake', () => baker.bake(face, uvW, params, params.atlasRes));
   const skin = perf.time('face.readback+skin', () => skinColor(baker.toCanvas($('#atlas')), uvW));
   lastSkin = skin;
   const base = params.geoSource === 'photo' ? face.geo : canon.pos;
-  perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp), texture, params));
+  const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), skin, atlas: $('#atlas') }));
   perf.time('driver.update', () => body.update(params, skin, rig.group));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
   PS2.affine.value = params.affine;
   post.uniforms.vhs.value = params.vhs;
-  if (sk.hasSculpt(params)) {
+  if (sk.hasSculpt(params) && !headPending) {
     finishRebuild(t0);
     return (lastRebuild = Promise.resolve());
   }
   $('#bodyInfo').textContent = 'sculpting…';
-  return (lastRebuild = sk.ensureSculpt(body, params).then(() => { if (my === gen) finishRebuild(t0); }));
+  return (lastRebuild = Promise.all([sk.ensureSculpt(body, params), headPending]).then(() => { if (my === gen) finishRebuild(t0); }));
 }
 
 function finishRebuild(t0) {
@@ -298,7 +298,7 @@ $('#export').onclick = () => {
 $('#exportGlb').onclick = async () => {
   await lastRebuild; // never export while a sculpt is still on its way
   const name = `dreamare_${params.outfit}_${(params.seed >>> 0).toString(36)}`;
-  const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas]]);
+  const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas], [rig.headTexture, rig.headCanvas]]);
   const { glb, report } = await exportGLB(sk, canvases, { name, materials: params.exportMat });
   const reportJson = JSON.stringify(report, null, 2);
   if (!report.ok) {
@@ -314,6 +314,7 @@ $('#exportGlb').onclick = async () => {
     'textures/face.png': await pngBytes($('#atlas')),
   };
   if (params.bodyStyle !== 'segmented' && sk.bodyCanvas) files['textures/body.png'] = await pngBytes(sk.bodyCanvas);
+  if (rig.headCanvas) files['textures/head.png'] = await pngBytes(rig.headCanvas);
   download(new Blob([zipSync(files, { level: 6 })], { type: 'application/zip' }), `${name}.zip`);
   status(`exported ${name}.zip (${report.warnings.length} warnings)`);
 };
@@ -366,6 +367,6 @@ renderFaces();
 status(`${faces.length} faces loaded. Drag to turn, scroll to zoom, double-click to reset. Drop your own photos anywhere.`);
 params = randomize(params);
 syncControls();
-window.__app = { roll, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, idle: () => lastRebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera, body };
+window.__app = { roll, randomize, defaults, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, idle: () => lastRebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera, body, analyzeHair, deform, canon, canonUV, rig };
 await rebuild();
 requestAnimationFrame(loop);

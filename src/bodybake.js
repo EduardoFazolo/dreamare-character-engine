@@ -9,7 +9,7 @@ import { REGION_NAMES } from './sculpt.js';
 // parts: [{ positions, normals, ao, indices, skinIndex, skinWeight }] (model space, head units)
 // segs: bone index -> [a, b] (Vector3), the bone's axis used for cylindrical projection
 export function unwrap(parts, segs, R, res) {
-  const P = [], N = [], A = [], SI = [], SW = [], LY = [], charts = new Map();
+  const P = [], N = [], A = [], SI = [], SW = [], LY = [], AX = [], charts = new Map();
   let base = 0;
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
   const tris = [];
@@ -21,10 +21,11 @@ export function unwrap(parts, segs, R, res) {
     }
     P.push(part.positions); N.push(part.normals); A.push(part.ao); SI.push(part.skinIndex); SW.push(part.skinWeight);
     LY.push(new Float32Array(nv).fill(part.layer));
+    AX.push(part.aux || new Float32Array(nv));
     base += nv;
   }
   const pos = concat(P, Float32Array), nor = concat(N, Float32Array), ao = concat(A, Float32Array);
-  const si = concat(SI, Uint16Array), sw = concat(SW, Float32Array), ly = concat(LY, Float32Array);
+  const si = concat(SI, Uint16Array), sw = concat(SW, Float32Array), ly = concat(LY, Float32Array), ax = concat(AX, Float32Array);
 
   // chart per (dominant bone, side|cap)
   for (const v of tris) {
@@ -45,7 +46,7 @@ export function unwrap(parts, segs, R, res) {
     charts.get(key).tris.push(v);
   }
 
-  const outP = [], outN = [], outA = [], outSI = [], outSW = [], outUV = [], outL = [], outTri = [];
+  const outP = [], outN = [], outA = [], outSI = [], outSW = [], outUV = [], outL = [], outX = [], outTri = [];
   const list = [...charts.values()];
   for (const ch of list) {
     const ax = ch.axis;
@@ -111,6 +112,7 @@ export function unwrap(parts, segs, R, res) {
       outN.push(nor[v.i * 3], nor[v.i * 3 + 1], nor[v.i * 3 + 2]);
       outA.push(ao[v.i]);
       outL.push(ch.layer);
+      outX.push(ax[v.i]);
       for (let k = 0; k < 4; k++) { outSI.push(si[v.i * 4 + k]); outSW.push(sw[v.i * 4 + k]); }
       const lu = v.uv[0] - ch.min[0], lv = v.uv[1] - ch.min[1];
       const [cu, cv] = ch.rot ? [lv, lu] : [lu, lv];
@@ -138,6 +140,7 @@ export function unwrap(parts, segs, R, res) {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(outUV, 2));
   geo.setAttribute('ao', new THREE.Float32BufferAttribute(outA, 1));
   geo.setAttribute('layer', new THREE.Float32BufferAttribute(outL, 1));
+  geo.setAttribute('aux', new THREE.Float32BufferAttribute(outX, 1));
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(outSI, 4));
   geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(outSW, 4));
   geo.setIndex(index);
@@ -152,7 +155,8 @@ function concat(arrs, T) {
 }
 
 export class BodyBaker {
-  constructor(renderer) {
+  // fragment/uniforms: optional custom painter (the head uses its own); default paints the body
+  constructor(renderer, { fragment = BAKE_FRAG, uniforms = {} } = {}) {
     this.r = renderer;
     this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
     this.mat = new THREE.ShaderMaterial({
@@ -163,15 +167,16 @@ export class BodyBaker {
         tint2: { value: new THREE.Vector3(0, 1, 1) }, tint3: { value: new THREE.Vector3(0, 1, 1) },
         waistY: { value: 0 }, collarY: { value: 0 }, shoulderX: { value: 1 }, wristX: { value: 2 },
         ankleY: { value: 0 }, crotchY: { value: 0 }, sleeve: { value: 1 }, pants: { value: 1 },
-        skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
+        skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, hemRound: { value: 0.1 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
         belt: { value: 0 }, buttons: { value: 0 }, grime: { value: 0 }, tile: { value: 1 / 0.9 },
         bare: { value: new THREE.Vector4() }, // 1 where a region's fabric is just skin
+        ...uniforms,
       },
       vertexShader: /* glsl */`
-        attribute float ao; attribute float layer;
-        varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer;
-        void main(){ vPos = position; vNor = normal; vAo = ao; vLayer = layer; gl_Position = vec4(uv * 2. - 1., 0., 1.); }`,
-      fragmentShader: BAKE_FRAG,
+        attribute float ao; attribute float layer; attribute float aux;
+        varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer; varying float vAux;
+        void main(){ vPos = position; vNor = normal; vAo = ao; vLayer = layer; vAux = aux; gl_Position = vec4(uv * 2. - 1., 0., 1.); }`,
+      fragmentShader: fragment,
     });
     this.scene = new THREE.Scene();
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.mat);
@@ -209,11 +214,22 @@ export class BodyBaker {
     const u = this.mat.uniforms;
     inputs.forEach((inp, i) => { u['tex' + i].value = inp.map; u['tint' + i].value.set(inp.hue, inp.sat, inp.bright); });
     u.bare.value.set(...inputs.map((inp, i) => (i === 3 || inp.map === inputs[3].map ? 1 : 0)));
-    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k];
+    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'hemRound', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k === 'hemRound' ? 'round' : k];
     u.skirt.value = R.skirt ? 1 : 0;
     u.belt.value = R.details.belt ? 1 : 0;
     u.buttons.value = R.details.buttons ? 1 : 0;
     u.grime.value = grime;
+    return this.paint(geo, res);
+  }
+
+  // render the atlas with the current uniforms, then dilate so chart edges never sample black
+  paint(geo, res) {
+    if (!this.rt || this.rt.width !== res) {
+      this.rt?.dispose(); this.rt2?.dispose();
+      const o = { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter };
+      this.rt = new THREE.WebGLRenderTarget(res, res, o);
+      this.rt2 = new THREE.WebGLRenderTarget(res, res, o);
+    }
     this.mesh.geometry = geo;
     const r = this.r, prev = r.getClearColor(new THREE.Color()), prevA = r.getClearAlpha();
     r.setClearColor(0x000000, 0);
@@ -246,7 +262,7 @@ export class BodyBaker {
 const BAKE_FRAG = /* glsl */`
 uniform sampler2D tex0, tex1, tex2, tex3;
 uniform vec3 tint0, tint1, tint2, tint3; // hue degrees, saturation, brightness
-uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, shoulderY, armBand, toeZ;
+uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, hemRound, shoulderY, armBand, toeZ;
 uniform vec4 bare;
 varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer;
 
@@ -267,17 +283,19 @@ vec3 tri(sampler2D t, vec3 p, vec3 n){
 }
 
 // garment masks (negative inside), must match masks in sculpt.js; -mask = distance to the hem
+float smin_(float a, float b, float k){ float h = max(k - abs(a - b), 0.) / k; return min(a, b) - h * h * k * .25; }
+float smax_(float a, float b, float k){ return -smin_(-a, -b, k); }
 float maskTop(vec3 p){
   float ax = abs(p.x), len = wristX - shoulderX;
   if (ax > shoulderX * .95 && abs(p.y - shoulderY) < armBand) return ((ax - shoulderX) / len - min(sleeve, 1.)) * len;
   float hole = neckHole - length(vec2(p.x, p.z - neckZ));
-  return max(waistY - .15 - p.y, min(hole, p.y - (collarY - .12)));
+  return smax_(waistY - .15 - p.y, smin_(hole, p.y - (collarY - .12), hemRound), hemRound);
 }
 float maskBottom(vec3 p){
-  if (skirt > .5) return max(p.y - (waistY + .05), hemY - p.y);
-  float m = p.y - waistY, span = crotchY - ankleY;
-  if (p.y < crotchY) m = max(m, ((crotchY - p.y) / span - pants) * span);
-  return max(m, ankleY - .02 - p.y);
+  if (skirt > .5) return smax_(p.y - (waistY + .05), hemY - p.y, hemRound);
+  float span = crotchY - ankleY;
+  float m = smax_(p.y - waistY, (max(0., crotchY - p.y) / span - pants) * span, hemRound);
+  return smax_(m, ankleY + .08 - p.y, hemRound);
 }
 float maskShoes(vec3 p){ return p.y - (ankleY + .1); }
 

@@ -1,4 +1,5 @@
 import { OUTFITS, POSES } from './body.js';
+import { HAIR_STYLES, HAT_TYPES } from './headsculpt.js';
 
 // Parameter schema + landmark-driven warps. The same deform() runs in UV space (2D, bakes into
 // the texture) and on the 3D mesh, because both share MediaPipe's 468-landmark indexing.
@@ -24,6 +25,13 @@ export const SCHEMA = [
     ['snout', 'Snout', -1, 2, 0],
     ['cranium', 'Cranium', -0.8, 2.5, 0],
     ['headDepth', 'Head depth', -0.6, 1.5, 0],
+    ['earSize', 'Ear size', 0, 3, 1],
+  ]},
+  { group: 'Hair', items: [
+    ['hairVolume', 'Hair volume', 0.3, 2.5, 1],
+    ['hairHue', 'Hair hue', -180, 180, 0],
+    ['hairBright', 'Hair brightness', 0.3, 1.8, 1],
+    ['hatHue', 'Hat hue', -180, 180, 0],
   ]},
   { group: 'Body', items: [
     ['headScale', 'Head size', 0.6, 2.2, 1.1],
@@ -87,7 +95,6 @@ export const SCHEMA = [
     ['jitter', 'Vertex jitter', 0, 1, 0.6],
     ['affine', 'Affine warp', 0, 1, 0.5],
     ['vhs', 'VHS', 0, 1, 0.6],
-    ['backUV', 'Back of head: edge smear -> skin', 0, 1, 0.55],
   ]},
 ];
 
@@ -103,8 +110,9 @@ export const CHOICES = {
   anim: { label: 'Animation', options: ['idle', 'walk', 'pose'], def: 'idle' },
   exportMat: { label: 'Export materials', options: ['lit', 'unlit'], def: 'lit' },
   outfit: { label: 'Outfit', options: Object.keys(OUTFITS), def: 'suit' },
-  hat: { label: 'Hat', options: ['none', 'cowboy', 'bowler'], def: 'none' },
-  hair: { label: 'Hair', options: ['none', 'stringy'], def: 'none' },
+  hat: { label: 'Hat', options: HAT_TYPES, def: 'none' },
+  hairStyle: { label: 'Hairstyle', options: HAIR_STYLES, def: 'auto' },
+  hair: { label: 'Extra strands', options: ['none', 'stringy'], def: 'none' },
 };
 
 export function defaults() {
@@ -135,7 +143,8 @@ export const centerOf = (P, idx) => {
   return mul(ids.reduce((s, i) => add(s, P[i]), P[ids[0]].map(() => 0)), 1 / ids.length);
 };
 
-export function deform(P, p, k) {
+// tris: optional mesh triangles (flat index array) sharing P's indexing, for the per-op fold check
+export function deform(P, p, k, tris = null, opLimit = Infinity) { // opLimit: debug, first N ops only
   const dim = P[0].length;
   const W = len(sub(P[L.sideR], P[L.sideL]));
   const up = norm(sub(P[L.top], P[L.chin]));
@@ -174,21 +183,86 @@ export function deform(P, p, k) {
   T(P[L.mouthL], 0.1, mul(up, p.asym * 0.04));
   if (fwd) T(P[1], 0.16, mul(fwd, p.snout * 0.12));
 
-  return P.map((q0) => {
-    let d = q0.map(() => 0);
-    for (const o of ops) {
-      const rel = sub(q0, o.c);
-      const w = Math.exp(-dot(rel, rel) / (o.r * o.r));
-      if (w < 1e-4) continue;
-      d = add(d, o.v ? mul(o.v, w) : mul(rel, (o.f - 1) * w));
+  // Fold-free by construction, with headroom for straight-edged triangles. Each op uses the compact
+// falloff w(u) = (1 - u^2)^3, u = d / R (R = 2r, zero outside), and is clamped so its own map keeps
+// at least 35% of the local width everywhere (injective alone is not enough: a triangle spanning a
+// nearly-singular ring flips even when the smooth map does not):
+//   scale:     radial derivative 1 + (f - 1)(w + r w'),  min(w + r w') = -0.653  =>  0.2 <= f <= 2.0
+//   translate: Jacobian det 1 + v . grad w,  max|dw/dr| = 1.717 / R          =>  |v| <= 0.378 R
+// Ops are applied one after another (a composition of injective maps is injective) instead of
+// summing displacements, which is what folded the texture into a "triple nose".
+  const Q = P.map((v) => v.slice());
+  const inside = (o, v) => { const R = 2 * o.r, rel = sub(v, o.c); return dot(rel, rel) < R * R; };
+  const moved = (o, v, s) => {
+    const R = 2 * o.r, rel = sub(v, o.c), d2 = dot(rel, rel);
+    if (d2 >= R * R) return v;
+    const u2 = d2 / (R * R), w = (1 - u2) * (1 - u2) * (1 - u2);
+    if (o.v) {
+      const vl = len(o.v), vmax = 0.378 * R;
+      return add(v, mul(o.v, s * w * (vl > vmax ? vmax / vl : 1)));
     }
-    let q = add(q0, d);
+    const f = Math.min(2.0, Math.max(0.2, o.f));
+    return add(v, mul(rel, (f - 1) * s * w));
+  };
+  // with the mesh topology known, every op is also checked on the actual triangles: if any triangle
+  // it touches would flip, its strength is halved (bisection) until none does -> 0 folds, guaranteed
+  const adj = tris && vertexTris(tris, P.length);
+  for (let n = 0; n < ops.length && n < opLimit; n++) {
+    const o = ops[n];
+    const hit = [];
+    for (let i = 0; i < Q.length; i++) if (inside(o, Q[i])) hit.push(i);
+    if (!hit.length) continue;
+    let s = 1;
+    for (let tries = 0; tries < 12; tries++, s *= 0.5) {
+      const next = new Map(hit.map((i) => [i, moved(o, Q[i], s)]));
+      if (!adj || !flipsAny(Q, next, tris, adj, hit, dim, P)) { for (const [i, v] of next) Q[i] = v; break; }
+    }
+  }
+  if (opLimit !== Infinity) return Q;
+  // global length/width stretch, guarded like the local ops (it can tip an already-rotated triangle)
+  const stretch = (q, s) => {
     const rel = sub(q, C);
-    q = add(q, mul(up, dot(rel, up) * p.long * 0.3 * k));
-    q = add(q, mul(right, dot(rel, right) * p.wide * 0.3 * k));
-    return q;
-  });
+    return add(add(q, mul(up, dot(rel, up) * p.long * 0.3 * k * s)), mul(right, dot(rel, right) * p.wide * 0.3 * k * s));
+  };
+  const all = Q.map((_, i) => i);
+  for (let tries = 0, s = 1; tries < 12; tries++, s *= 0.5) {
+    const next = new Map(all.map((i) => [i, stretch(Q[i], s)]));
+    if (!adj || !flipsAny(Q, next, tris, adj, all, dim, P)) return Q.map((q, i) => next.get(i));
+  }
+  return Q;
 }
+
+const adjCache = new WeakMap();
+function vertexTris(tris, n) {
+  if (adjCache.has(tris)) return adjCache.get(tris);
+  const adj = Array.from({ length: n }, () => []);
+  for (let t = 0; t < tris.length; t += 3) for (let c = 0; c < 3; c++) adj[tris[t + c]].push(t);
+  adjCache.set(tris, adj);
+  return adj;
+}
+
+// would moving the `next` vertices flip any triangle they belong to? (2D: signed area; 3D: normal)
+function flipsAny(Q, next, tris, adj, hit, dim, P0) {
+  const at = (i) => next.get(i) || Q[i];
+  const seen = new Set();
+  for (const i of hit) for (const t of adj[i]) {
+    if (seen.has(t)) continue;
+    seen.add(t);
+    const a = tris[t], b = tris[t + 1], c = tris[t + 2];
+    if (dim === 2) {
+      const before = (Q[b][0] - Q[a][0]) * (Q[c][1] - Q[a][1]) - (Q[c][0] - Q[a][0]) * (Q[b][1] - Q[a][1]);
+      const A = at(a), B = at(b), C = at(c);
+      const after = (B[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (B[1] - A[1]);
+      if (Math.sign(after) !== Math.sign(before) || Math.abs(after) < Math.abs(before) * 0.05) return true;
+    } else {
+      // against the undeformed mesh, so small rotations can't accumulate into a flip across ops
+      const n0 = cross3(sub(P0[b], P0[a]), sub(P0[c], P0[a])), n1 = cross3(sub(at(b), at(a)), sub(at(c), at(a)));
+      if (dot(n0, n1) <= 0.05 * len(n0) * len(n1)) return true;
+    }
+  }
+  return false;
+}
+const cross3 = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
 
 // ---------- randomizer: mostly-normal faces with one or two "signature" deformities ----------
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -247,7 +321,15 @@ export function randomize(base) {
   p.pantsLen = p.bottomType === 'skirt' ? (Math.random() < 0.2 ? 1 : rnd(0.2, 0.65)) : Math.random() < 0.8 ? 1 : pick([0.25, 0.5]);
   p.looseness = Math.random() < 0.2 ? rnd(0.5, 1) : rnd(0, 0.3);
   p.bodyGrime = rnd(0.1, 0.7);
-  p.hat = pick(['none', 'none', 'cowboy', 'bowler']);
+  // about 1 in 5 wears a hat; caps and beanies come in random colors
+  p.hat = Math.random() < 0.2 ? pick(HAT_TYPES.slice(1)) : 'none';
+  p.hatHue = ['cap', 'beanie'].includes(p.hat) ? rnd(-180, 180) : 0;
+  // hair: usually the person's own (from the photo), sometimes a different cut or a wild color
+  p.hairStyle = Math.random() < 0.6 ? 'auto' : pick(HAIR_STYLES.slice(1));
+  p.hairVolume = Math.random() < 0.15 ? rnd(1.5, 2.3) : rnd(0.8, 1.2);
+  p.hairHue = Math.random() < 0.12 ? rnd(-180, 180) : 0;
+  p.hairBright = Math.random() < 0.12 ? rnd(0.4, 1.7) : 1;
+  p.earSize = Math.random() < 0.15 ? rnd(1.8, 3) : rnd(0.8, 1.2);
   p.hair = p.hat === 'none' ? pick(['none', 'stringy']) : pick(['none', 'none', 'stringy']);
   return p;
 }
