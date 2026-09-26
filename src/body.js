@@ -344,6 +344,14 @@ export class BodyRig {
 // Animation "sources": functions of time that pose the driver rig.
 export const MOTIONS = {
   pose: { duration: 1, fps: 2, loop: false, fn: (body, p) => body.pose(p) },
+  // talking: the idle body; the mouth shapes are face morph tracks (faceanim.js faceKeys)
+  talk: {
+    duration: 3, fps: 15,
+    fn: (body, p, t) => {
+      const w = (2 * Math.PI * t) / 3;
+      body.pose(p, p.pose, { waist: [Math.sin(w) * 0.02, 0, 0], neck: [Math.sin(w * 2) * 0.04, Math.sin(w) * 0.08, 0] });
+    },
+  },
   idle: {
     duration: 4, fps: 15,
     fn: (body, p, t) => {

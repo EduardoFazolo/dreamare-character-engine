@@ -5,6 +5,7 @@ import { perf } from './perf.js';
 import { unwrap, BodyBaker } from './bodybake.js';
 import { paintSkinTile } from './skintile.js';
 import { boundaryLoop } from './outline.js';
+import { buildFaceRig, drawMouth, MORPHS, alignToTexture } from './faceanim.js';
 
 // ---------------- PS2-ish material: vertex snapping, gouraud, affine UVs, 15-bit dither, fog ----------------
 export const PS2 = {
@@ -26,14 +27,18 @@ export function ps2Material({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
     },
     vertexShader: /* glsl */`
       #include <common>
+      #include <morphtarget_pars_vertex>
       #include <skinning_pars_vertex>
       uniform vec2 snapRes; uniform float fogNear, fogFar;
       varying vec3 vUvw; varying vec2 vUvP; varying vec3 vLight; varying float vFog;
       void main(){
+        #include <morphinstance_vertex>
         #include <skinbase_vertex>
         #include <beginnormal_vertex>
+        #include <morphnormal_vertex>
         #include <skinnormal_vertex>
         #include <begin_vertex>
+        #include <morphtarget_vertex>
         #include <skinning_vertex>
         vec4 mv = modelViewMatrix * vec4(transformed, 1.);
         vec4 cp = projectionMatrix * mv;
@@ -106,6 +111,11 @@ export class HeadRig {
     this.headMat.name = 'face';
     this.head = new THREE.Mesh(this.geo, this.headMat);
     this.group.add(this.head);
+    // mouth interior (cavity + teeth) behind the cut lips, see faceanim.js
+    this.mouthMat = ps2Material({ map: canvasTex(64, 64, drawMouth), side: THREE.DoubleSide }); // (seen from inside)
+    this.mouthMat.name = 'mouth';
+    this.mouth = new THREE.Mesh(new THREE.BufferGeometry(), this.mouthMat);
+    this.group.add(this.mouth);
 
     // hair shell (and the hidden sculpted skull, which only shapes hair and hats) share one small baked atlas
     this.skullMat = ps2Material(); this.skullMat.name = 'head';
@@ -244,7 +254,9 @@ export class HeadRig {
     const C = [0, (P[10][1] + P[152][1]) / 2 + 0.05, (P[234][2] + P[454][2]) / 2 - 0.08];
     const depth = 0.62 * (1 + p.headDepth * 0.6), cranium = 0.4 + p.cranium * 0.45;
     const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), uv0 = this.canon.uv;
-    for (let i = 0; i < 468; i++) { pos.set(P[i], i * 3); uv.set(uv0[i], i * 2); }
+    // mouth and eye rims moved to where the texture draws them (faceanim.js alignToTexture)
+    const al = alignToTexture(P, uv0, this.last?.uvW || uv0, this.canon.index, this.loop);
+    for (let i = 0; i < 468; i++) { pos.set(al.P[i], i * 3); uv.set(al.uv[i], i * 2); }
     const A = this.last?.uvW || uv0, c0 = [0.5, 0.5], ang = (q) => Math.atan2(q[1] - c0[1], q[0] - c0[0]);
     const target = (v) => { const th = ang(uv0[v]); let wx = 0, wy = 0, ws = 0;
       for (const a of SKIN_ANCHORS) { let d = Math.abs(ang(uv0[a]) - th); d = Math.min(d, 2 * Math.PI - d); const w = Math.exp(-(d * d) / 0.18); wx += A[a][0] * w; wy += A[a][1] * w; ws += w; }
@@ -285,12 +297,15 @@ export class HeadRig {
     const u = b0.map((x, q) => x - a0[q]), w = c1.map((x, q) => x - a0[q]);
     const nn = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
     if (nn[0] * (a0[0] - C[0]) + nn[1] * (a0[1] - C[1]) + nn[2] * (a0[2] - C[2]) < 0) for (let q = hullStart; q < idx.length; q += 3) { const x = idx[q + 1]; idx[q + 1] = idx[q + 2]; idx[q + 2] = x; }
-    const g = this.geo;
-    for (const kk of Object.keys(g.attributes)) g.deleteAttribute(kk);
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    g.setIndex(idx);
-    g.computeVertexNormals(); g.computeBoundingSphere(); g.computeBoundingBox();
+    // face rig: mouth and eyes cut open, eyeballs appended, mouth interior, morph targets (faceanim.js)
+    const rig = buildFaceRig(al.P, al.uv, this.canon.index, pos);
+    const faceTris = this.canon.index.length / 3, keep = [];
+    for (let t = 0; t < idx.length / 3; t++) if (t >= faceTris || !rig.cut.has(t)) keep.push(idx[t * 3], idx[t * 3 + 1], idx[t * 3 + 2]);
+    keep.push(...rig.extra.idx);
+    const allPos = new Float32Array(pos.length + rig.extra.pos.length), allUV = new Float32Array(uv.length + rig.extra.uv.length);
+    allPos.set(pos); allPos.set(rig.extra.pos, pos.length); allUV.set(uv); allUV.set(rig.extra.uv, uv.length);
+    setMesh(this.geo, allPos, allUV, keep, rig.headMorphs);
+    setMesh(this.mouth.geometry, new Float32Array(rig.mouth.pos), new Float32Array(rig.mouth.uv), rig.mouth.idx, rig.mouthMorphs);
   }
 
   apply(key, P) {
@@ -393,6 +408,17 @@ export class HeadRig {
   }
 }
 HeadRig.ids = 0;
+
+// (re)fill a geometry: positions, uvs, index, normals, and relative morph targets named after MORPHS
+function setMesh(g, pos, uv, idx, morphs) {
+  for (const k of Object.keys(g.attributes)) g.deleteAttribute(k);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.morphTargetsRelative = true;
+  g.morphAttributes.position = MORPHS.map((m) => Object.assign(new THREE.BufferAttribute(morphs[m], 3), { name: m }));
+  g.computeVertexNormals(); g.computeBoundingSphere(); g.computeBoundingBox();
+}
 
 // skin the head's mirrored texture paths bounce toward: forehead, its sides, cheeks, lower cheeks, chin
 // (below the lip): reached from the outline without crossing an eye or the mouth

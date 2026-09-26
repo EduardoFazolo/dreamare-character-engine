@@ -107,7 +107,7 @@ export const CHOICES = {
   bodyRes: { label: 'Body texture res', options: [128, 256, 512, 1024], def: 512 },
   bottomType: { label: 'Bottom', options: ['pants', 'skirt'], def: 'pants' },
   pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
-  anim: { label: 'Animation', options: ['idle', 'walk', 'pose'], def: 'idle' },
+  anim: { label: 'Animation', options: ['idle', 'talk', 'walk', 'pose'], def: 'idle' },
   exportMat: { label: 'Export materials', options: ['lit', 'unlit'], def: 'lit' },
   outfit: { label: 'Outfit', options: Object.keys(OUTFITS), def: 'suit' },
   hat: { label: 'Hat', options: HAT_TYPES, def: 'none' },

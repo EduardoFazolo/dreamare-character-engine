@@ -44,6 +44,11 @@ Poses: stand, hunch, crouch, gunslinger (with revolver), zombie, plus creepy one
 - **The head is the face.** The 468-point face mesh is the front of the head, and the rest is a hull grown from the face's own outline: 7 rings shrinking back to a point behind the head, with Cranium and Head depth shaping it. So the head continues the face's contour instead of wrapping a face around a skull. The face shape defaults to **fitted**: the person's proportions from the photo on the canonical model's sculpted depth (Head shape also offers canonical and photo).
 - **The whole head wears the person's real photo texture.** There's no flat skin and no second texture. Past the face's outline, the hull's UVs mirror back into the face at 1:1 scale, bouncing between the outline and a patch of plain skin (forehead, cheeks, chin). Those skin patches are reached without crossing an eye or the mouth, so nothing stretches into streaks and no feature is mirrored onto the head. The face texture sits on a flat skin-tone background with 1–2% edge padding, and its outline samples the first real skin inward from each landmark, so jaw shadows and background never reach the head.
 - A hidden sculpted skull (`src/headsculpt.js`: cranium, occiput, jaw, ears, neck stub) only shapes the hair shell and the fitted hats.
+- **The face moves** (`src/faceanim.js`). MediaPipe's topology tells every vertex its role, so the mouth and eyes are cut open where the canonical mesh seals them: 18 triangles across the inner lips, 14 per eye.
+  - Behind each eye sits an eyeball textured with the photo's own eye, so at rest it looks exactly like the photo, and it rotates to look around.
+  - Behind the lips sits a mouth interior (`mouth` material): a dark cavity plus upper and lower teeth.
+  - Ten morph targets are built from anatomy: `jawOpen` (a rotation about the jaw hinge, weighted below the lip line), `mouthSmile`, `mouthPucker`, `mouthWide`, `eyeBlinkLeft`/`eyeBlinkRight` (the lid rows close to a line), and `eyeLookUp`/`Down`/`Left`/`Right` (the eyeballs rotate).
+  - **Idle** blinks and glances, **Walk** blinks, and **Talk** (a new clip, also in the Animation menu) cycles mouth shapes.
 - Hair is a shell over the skull, cut by per-style masks (like clothing): bald, buzz (painted stubble), short, bowl, horseshoe, slicked, mullet, long, afro, mohawk, pompadour, bun, ponytail, pigtails, spiky. Extra shapes (bun, tails, quiff) are added on top of the shell. A non-zero hair hue dyes the hair (works on black hair too). **Hairstyle: auto** picks one from the photo.
 - The photo is segmented once per face with MediaPipe's multiclass selfie segmenter (hair / face skin / body skin / clothes): the person's real hair color, a patch of their actual hair (used as the hair texture), and where hair sits (style guess). Hair volume, hue and brightness sliders on top.
 - The hair shell gets its own baked atlas: the person's hair texture with strands running down from the crown, and dye. Material slots: `face` (the whole head), `hair` (plus `hairStrands` for the extra stringy strands).
@@ -70,9 +75,10 @@ Geometry sliders: ~120-200 ms until the new body appears, 0 ms of main-thread bl
 - One mesh, one skin, 33 joints (`Root` + 32 humanoid bones with Mixamo-style names). Each material slot is a primitive named by purpose: `face`, `head`, `hair`, `hairStrands`, `skin`, `top`, `bottom`, `shoes`, `hat`, `prop`. In the sculpted style, `top`/`bottom`/`shoes`/`skin` share one baked body texture, so they stay separately recolorable.
 - Bind pose is the VRM 1.0 T-pose: arms along X, palms down, fingers along X, thumbs 45 degrees forward. Sculpted body: smooth skinning, up to 4 influences. Segmented body and head/accessories: rigid, 1 influence.
 - Materials are PBR by default (roughness 1) or unlit (`KHR_materials_unlit`) via "Export materials". The grade and outfit tint are baked into the textures; the PS2 shader is not exported.
-- Clips: `Pose`, `Idle`, `Walk`, all in place, same bone set.
+- Clips: `Pose`, `Idle`, `Walk`, `Talk`, all in place, same bone set, each also animating the face morph weights.
+- Face: 10 named morph targets on `mesh_Character` (`extras.targetNames`, also `extras.character.face`).
 
-**VRM 1.0 (`VRMC_vrm`)**: `meta` plus the `humanoid.humanBones` map, role to node index (hips ... toes, thumb metacarpal, 4 finger proximals). Loads as an avatar in three-vrm, UniVRM, the VRM add-ons for Blender/Godot and VRM4U. Tools that don't know VRM ignore it.
+**VRM 1.0 (`VRMC_vrm`)**: `meta` plus the `humanoid.humanBones` map, role to node index (hips ... toes, thumb metacarpal, 4 finger proximals). `expressions.preset` binds the VRM presets to the face morph targets: aa, ih, ou, ee, oh, blink, blinkLeft, blinkRight, happy, surprised, lookUp, lookDown, lookLeft, lookRight. `lookAt` is expression-driven. Loads as an avatar in three-vrm, UniVRM, the VRM add-ons for Blender/Godot and VRM4U. Tools that don't know VRM ignore it.
 
 **`extras.character`** (on the glTF root and on the `Root` node), all in meters, with node indices:
 - `humanoid`: role -> bone/node. `hinges`: elbow/knee bend axis (bone-local, positive = bend) plus limits.
@@ -84,4 +90,4 @@ Geometry sliders: ~120-200 ms until the new body appears, 0 ms of main-thread bl
 
 **Validation**: every export is checked (humanoid roles, unique names, one skin, identity roots, uniform scale, soles at 0, facing +Z, feet parallel, T-pose arms, weights, clip bone sets, loop continuity, in-place, landmark reach, symmetry). The report is always saved; with any error only the report is downloaded, no `.glb`.
 
-Not included (yet): face blend shapes / VRM expressions, LODs (characters are ~2.5k triangles), twist bones (rigid skinning can't candy-wrap).
+Not included (yet): LODs (characters are ~2.5k triangles), twist bones (rigid skinning can't candy-wrap).

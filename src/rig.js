@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MOTIONS, OUTFITS } from './body.js';
+import { MORPHS, faceKeys } from './faceanim.js';
 import { ps2Material } from './head.js';
 import { sculptInput, sculptCore, regionSpec, fitRegions, REGION_NAMES } from './sculpt.js';
 import { unwrap, BodyBaker } from './bodybake.js';
@@ -22,8 +23,16 @@ const sculptKey = (p) => JSON.stringify(Object.keys(p).filter((k) => !NOT_SCULPT
 // plus everything the creator already knows as metadata (landmarks, sockets, colliders, hinges,
 // clip roles/contacts, bounds). export.js turns this.meta into glTF extras + VRMC_vrm.
 
+// three's applyMatrix4 leaves morph deltas alone: rotate/scale them by the transform's linear part
+function transformMorphs(g, m4) {
+  const list = g.morphAttributes.position;
+  if (!list) return;
+  const m3 = new THREE.Matrix3().setFromMatrix4(m4), v = new THREE.Vector3();
+  for (const a of list) for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i).applyMatrix3(m3); a.setXYZ(i, v.x, v.y, v.z); }
+}
+
 export const METERS = 0.16; // one head unit (face width) in meters
-const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop']); // material slots that are not body volume
+const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop', 'mouth']); // material slots that are not body volume
 const PROXY = new Set(['top', 'bottom', 'shoes', 'skin']); // driver segment meshes (segmented style only)
 const FINGER = /Hand(Thumb|Index|Middle|Ring|Pinky)/;
 const DENSITY = 1000; // kg/m^3, bodies are roughly water
@@ -204,6 +213,7 @@ export class SkinnedCharacter {
       if (!g.attributes.normal) g.computeVertexNormals();
       if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
       g.applyMatrix4(model(o));
+      transformMorphs(g, model(o));
       items.push({ g, joint: n.userData.joint, mat: o.material, local: o.geometry, meshMatrix: o.matrix.clone() });
     });
 
@@ -280,6 +290,7 @@ export class SkinnedCharacter {
       const bone = jointToBone[it.joint];
       if (!bone || (sculpted && PROXY.has(it.mat.name))) continue;
       const g = it.g.clone().scale(METERS, METERS, METERS);
+      transformMorphs(g, new THREE.Matrix4().makeScale(METERS, METERS, METERS));
       const n = g.attributes.position.count;
       const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
       for (let i = 0; i < n; i++) { si[i * 4] = index[bone]; sw[i * 4] = 1; }
@@ -294,6 +305,13 @@ export class SkinnedCharacter {
     }
     const bodyBoxes = [];
     if (sculpted) perf.time('sculpt(all)', () => this.sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes));
+    // face morph targets (faceanim.js): every part carries the same set (zeros where they don't move)
+    for (const list of byMat.values()) for (const g of list) {
+      if (g.morphAttributes.position?.length === MORPHS.length) continue;
+      const n = g.attributes.position.count;
+      g.morphAttributes = { position: MORPHS.map((m) => Object.assign(new THREE.BufferAttribute(new Float32Array(n * 3), 3), { name: m })) };
+      g.morphTargetsRelative = true;
+    }
     const mats = [...byMat.keys()];
     const perMat = mats.map((m) => mergeGeometries(byMat.get(m)));
     const geo = mergeGeometries(perMat, true);
@@ -303,6 +321,8 @@ export class SkinnedCharacter {
     this.content.add(bones.Root);
     this.group.updateMatrixWorld(true);
     const skeleton = new THREE.Skeleton(list);
+    geo.morphTargetsRelative = true;
+    geo.morphAttributes.position.forEach((a, i) => { a.name = MORPHS[i]; }); // (merging drops the names)
     const mesh = new THREE.SkinnedMesh(geo, mats);
     mesh.name = 'mesh_Character';
     mesh.frustumCulled = false;
@@ -589,6 +609,9 @@ export class SkinnedCharacter {
     }
     const tracks = [new THREE.VectorKeyframeTrack('Hips.position', times, hips)];
     for (const [n] of tracked) tracks.push(new THREE.QuaternionKeyframeTrack(`${n}.quaternion`, times, quats[n]));
+    for (const [m, k] of Object.entries(faceKeys(name, motion.duration))) {
+      tracks.push(new THREE.NumberKeyframeTrack(`mesh_Character.morphTargetInfluences[${m}]`, k.map((x) => x[0]), k.map((x) => x[1])));
+    }
     const clipName = name[0].toUpperCase() + name.slice(1);
     const clip = new THREE.AnimationClip(clipName, motion.duration, tracks);
 

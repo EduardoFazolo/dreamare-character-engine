@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { MORPHS } from './faceanim.js';
 
 // Export the baked SkinnedCharacter as binary glTF 2.0 that any engine can load as-is, plus:
 // - VRMC_vrm 1.0 (meta + humanoid bone map by node index) for VRM-aware tools
@@ -59,6 +60,21 @@ function exportMaterial(m, baked, kind) {
   return new THREE.MeshStandardMaterial({ ...opts, roughness: prop ? 0.45 : 1, metalness: prop ? 0.8 : 0 });
 }
 
+// VRM 1.0 presets as weighted combinations of the face morph targets (by index into MORPHS)
+const VRM_EXPR = {
+  aa: { jawOpen: 1 }, ih: { jawOpen: 0.3, mouthWide: 0.6 }, ou: { jawOpen: 0.25, mouthPucker: 1 }, ee: { jawOpen: 0.2, mouthWide: 1 }, oh: { jawOpen: 0.6, mouthPucker: 0.5 },
+  blink: { eyeBlinkLeft: 1, eyeBlinkRight: 1 }, blinkLeft: { eyeBlinkLeft: 1 }, blinkRight: { eyeBlinkRight: 1 },
+  happy: { mouthSmile: 1 }, surprised: { jawOpen: 0.5, eyeLookUp: 0.3 },
+  lookUp: { eyeLookUp: 1 }, lookDown: { eyeLookDown: 1 }, lookLeft: { eyeLookLeft: 1 }, lookRight: { eyeLookRight: 1 },
+};
+function vrmExpressions(node) {
+  return Object.fromEntries(Object.entries(VRM_EXPR).map(([k, w]) => [k, {
+    isBinary: false,
+    morphTargetBinds: Object.entries(w).map(([m, weight]) => ({ node, index: MORPHS.indexOf(m), weight })),
+    overrideBlink: 'none', overrideLookAt: 'none', overrideMouth: 'none',
+  }]));
+}
+
 // Runs inside the exporter once nodes/meshes/animations exist: node indices are known here.
 function annotate(writer, sk, name) {
   const json = writer.json, nodeMap = writer.nodeMap;
@@ -94,7 +110,13 @@ function annotate(writer, sk, name) {
       allowRedistribution: false, modification: 'prohibited',
     },
     humanoid: { humanBones: Object.fromEntries(Object.entries(meta.humanoid).map(([role, h]) => [role, { node: h.node }])) },
+    // face: VRM preset expressions bound to the face morph targets (faceanim.js), look-at by expression
+    expressions: { preset: vrmExpressions(meta.mesh.node) },
+    lookAt: { type: 'expression', offsetFromHeadBone: [0, 0.06, 0.08],
+      rangeMapHorizontalInner: { inputMaxValue: 90, outputScale: 1 }, rangeMapHorizontalOuter: { inputMaxValue: 90, outputScale: 1 },
+      rangeMapVerticalDown: { inputMaxValue: 90, outputScale: 1 }, rangeMapVerticalUp: { inputMaxValue: 90, outputScale: 1 } },
   };
+  meta.face = { morphTargets: MORPHS, expressions: Object.keys(VRM_EXPR), note: 'morph targets on mesh_Character; VRMC_vrm.expressions binds the VRM presets' };
 
   const report = validate(json, sk, meta);
   meta.validation = { errors: report.errors.length, warnings: report.warnings.length };
