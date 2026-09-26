@@ -361,6 +361,7 @@ export function buildFaceRig(P, uv0, index, headPos) {
   // eyeball, textured with the lids' own skin (reads as the socket in shadow). Seen from the side, the eye
   // opening otherwise looked past the eyeball into the empty shell (background showing through). Its
   // vertices are 'face' kind: at the rim the blink moves them exactly like the lids.
+  const socketStart = extraPos.length / 3;
   for (const side of ['Right', 'Left']) {
     const e = eyes[side], ring = [...e.up, ...e.lo.slice(1, -1).reverse()], L = ring.length, b = e.ball;
     const c = [0, 1].map((k) => ring.reduce((s2, i) => s2 + P[i][k], 0) / L), RINGS = 3;
@@ -388,6 +389,7 @@ export function buildFaceRig(P, uv0, index, headPos) {
     const flip = nz[0] * toAxis[0] + nz[1] * toAxis[1] < 0;
     for (const t of tris) extraIdx.push(...(flip ? [t[0], t[2], t[1]] : t));
   }
+  const socketEnd = extraPos.length / 3;
   // eyeballs: their own mesh ('eye' material)
   const eyePos = [], eyeUV = [], eyeIdx = [], eyeKinds = [];
   for (const [side, tag] of [['Right', 'eyeR'], ['Left', 'eyeL']]) {
@@ -407,7 +409,7 @@ export function buildFaceRig(P, uv0, index, headPos) {
   behindFace(mouth.pos, P, faceTris, 0.018, [F.cx, F.mid(F.cx)]);
   const mouthMorphs = deltas(P, F, mouth.pos, new Array(mouth.pos.length / 3).fill('mouth'), mouth.jaw, eyes);
   return { cut: new Set([...inner.eyes, ...inner.mouth]), extra: { pos: extraPos, uv: extraUV, idx: extraIdx }, headMorphs, mouth, mouthMorphs,
-    eyes: { pos: eyePos, uv: eyeUV, idx: eyeIdx }, eyeMorphs, eyeRegions: [EYES.Right, EYES.Left].map((e) => [...e.up, ...e.lo]) };
+    eyes: { pos: eyePos, uv: eyeUV, idx: eyeIdx }, eyeMorphs, socketRange: [socketStart, socketEnd], eyeRegions: [EYES.Right, EYES.Left].map((e) => [...e.up, ...e.lo]) };
 }
 
 // The generated eye texture: sclera (tinted toward the photo's own eye white), iris in the photo's iris

@@ -174,7 +174,14 @@ export class HeadRig {
   update(P, tex, p, { hair = null, skin = [0.8, 0.6, 0.5], uvW = null, atlas = null } = {}) {
     this.headMat.uniforms.map.value = tex;
     this.last = { P, p, hair, skin, uvW, atlas };
-    this.buildHead(P, p);
+    // the head mesh depends only on the face, its texture warp and the head shape: body, outfit, pose...
+    // changes skip the rebuild (only the eye colors/traits are re-checked)
+    let hk = 0;
+    for (const v of P) for (const c of v) hk = (Math.imul(hk, 31) + Math.round(c * 1e4)) | 0;
+    if (uvW) for (const v of uvW) for (const c of v) hk = (Math.imul(hk, 31) + Math.round(c * 1e4)) | 0;
+    const headKey = `${hk}|${p.headDepth}|${p.cranium}`;
+    if (headKey !== this.headKey) { this.headKey = headKey; this.buildHead(P, p); }
+    else if (this.eyeRegions) this.paintEyes(this.eyeRegions, p);
 
     const style = p.hairStyle === 'auto' ? hair?.style || 'short' : p.hairStyle;
     // the sculpted skull only shapes the hair shell and hats: it depends on the face's outline and overall
@@ -261,7 +268,7 @@ export class HeadRig {
     const depth = 0.62 * (1 + p.headDepth * 0.6), cranium = 0.4 + p.cranium * 0.45;
     const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), uv0 = this.canon.uv;
     // mouth and eye rims moved to where the texture draws them (faceanim.js alignToTexture)
-    const al = alignToTexture(P, uv0, this.last?.uvW || uv0, this.canon.index, this.loop);
+    const al = perf.time('head.align', () => alignToTexture(P, uv0, this.last?.uvW || uv0, this.canon.index, this.loop));
     for (let i = 0; i < 468; i++) { pos.set(al.P[i], i * 3); uv.set(al.uv[i], i * 2); }
     const A = this.last?.uvW || uv0, c0 = [0.5, 0.5], ang = (q) => Math.atan2(q[1] - c0[1], q[0] - c0[0]);
     const target = (v) => { const th = ang(uv0[v]); let wx = 0, wy = 0, ws = 0;
@@ -304,12 +311,21 @@ export class HeadRig {
     const nn = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
     if (nn[0] * (a0[0] - C[0]) + nn[1] * (a0[1] - C[1]) + nn[2] * (a0[2] - C[2]) < 0) for (let q = hullStart; q < idx.length; q += 3) { const x = idx[q + 1]; idx[q + 1] = idx[q + 2]; idx[q + 2] = x; }
     // face rig: mouth and eyes cut open, eyeballs appended, mouth interior, morph targets (faceanim.js)
-    const rig = buildFaceRig(al.P, al.uv, this.canon.index, pos);
+    const rig = perf.time('head.faceRig', () => buildFaceRig(al.P, al.uv, this.canon.index, pos));
     const faceTris = this.canon.index.length / 3, keep = [];
     for (let t = 0; t < idx.length / 3; t++) if (t >= faceTris || !rig.cut.has(t)) keep.push(idx[t * 3], idx[t * 3 + 1], idx[t * 3 + 2]);
     keep.push(...rig.extra.idx);
     const allPos = new Float32Array(pos.length + rig.extra.pos.length), allUV = new Float32Array(uv.length + rig.extra.uv.length);
     allPos.set(pos); allPos.set(rig.extra.pos, pos.length); allUV.set(uv); allUV.set(rig.extra.uv, uv.length);
+    // the eyes stay inside the head: eyeball and socket vertices outside the face + hull surface (a warp
+    // pushing an eye to the face's edge made them poke out past the head's silhouette) are pulled back in
+    perf.time('head.inside', () => {
+      const surf = keep.slice(0, keep.length - rig.extra.idx.length), eyePos = new Float32Array(rig.eyes.pos);
+      const s0 = pos.length / 3 + rig.socketRange[0], s1 = pos.length / 3 + rig.socketRange[1], sm = (s0 + s1) >> 1, em = eyePos.length / 6;
+      keepInside(allPos, s0, sm, pos, surf, C); keepInside(allPos, sm, s1, pos, surf, C); // (one eye at a time)
+      keepInside(eyePos, 0, em, pos, surf, C); keepInside(eyePos, em, em * 2, pos, surf, C);
+      rig.eyes.pos = eyePos;
+    });
     setMesh(this.geo, allPos, allUV, keep, rig.headMorphs);
     setMesh(this.mouth.geometry, new Float32Array(rig.mouth.pos), new Float32Array(rig.mouth.uv), rig.mouth.idx, rig.mouthMorphs);
     setMesh(this.eyes.geometry, new Float32Array(rig.eyes.pos), new Float32Array(rig.eyes.uv), rig.eyes.idx, rig.eyeMorphs);
@@ -325,7 +341,8 @@ export class HeadRig {
       });
       en.needsUpdate = true;
     }
-    this.paintEyes(rig.eyeRegions, p);
+    this.eyeRegions = rig.eyeRegions;
+    perf.time('head.paintEyes', () => this.paintEyes(rig.eyeRegions, p));
   }
 
   // Eye colors from the photo's own eye area (in the face texture, where the warped face draws it): the
@@ -476,6 +493,42 @@ export class HeadRig {
   }
 }
 HeadRig.ids = 0;
+
+// Pull points [from, to) of `pts` that lie outside a closed-ish surface (triangles `tris` over `surf`) back
+// just inside it, along the ray from the center C (Moller-Trumbore, the first surface crossing along it)
+function keepInside(pts, from, to, surf, tris, C, margin = 0.012) {
+  // only the triangles facing the points' general direction from C can be hit (flat arrays, no allocation)
+  let gx = 0, gy = 0, gz = 0;
+  for (let v = from; v < to; v++) { gx += pts[v * 3] - C[0]; gy += pts[v * 3 + 1] - C[1]; gz += pts[v * 3 + 2] - C[2]; }
+  const gl = Math.hypot(gx, gy, gz) || 1;
+  const T = [];
+  for (let t = 0; t < tris.length; t += 3) {
+    const a = tris[t] * 3, b = tris[t + 1] * 3, c = tris[t + 2] * 3;
+    const mx = (surf[a] + surf[b] + surf[c]) / 3 - C[0], my = (surf[a + 1] + surf[b + 1] + surf[c + 1]) / 3 - C[1], mz = (surf[a + 2] + surf[b + 2] + surf[c + 2]) / 3 - C[2];
+    if ((mx * gx + my * gy + mz * gz) / (gl * (Math.hypot(mx, my, mz) || 1)) <= 0.35) continue;
+    T.push(surf[a], surf[a + 1], surf[a + 2], surf[b] - surf[a], surf[b + 1] - surf[a + 1], surf[b + 2] - surf[a + 2], surf[c] - surf[a], surf[c + 1] - surf[a + 1], surf[c + 2] - surf[a + 2]);
+  }
+  for (let v = from; v < to; v++) {
+    const dx0 = pts[v * 3] - C[0], dy0 = pts[v * 3 + 1] - C[1], dz0 = pts[v * 3 + 2] - C[2], len = Math.hypot(dx0, dy0, dz0);
+    if (len < 1e-6) continue;
+    const dx = dx0 / len, dy = dy0 / len, dz = dz0 / len;
+    let hit = Infinity;
+    for (let q = 0; q < T.length; q += 9) {
+      const e1x = T[q + 3], e1y = T[q + 4], e1z = T[q + 5], e2x = T[q + 6], e2y = T[q + 7], e2z = T[q + 8];
+      const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x, det = e1x * px + e1y * py + e1z * pz;
+      if (det > -1e-12 && det < 1e-12) continue;
+      const tx = C[0] - T[q], ty = C[1] - T[q + 1], tz = C[2] - T[q + 2], u = (tx * px + ty * py + tz * pz) / det;
+      if (u < 0 || u > 1) continue;
+      const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, w = (dx * qx + dy * qy + dz * qz) / det;
+      if (w < 0 || u + w > 1) continue;
+      const t = (e2x * qx + e2y * qy + e2z * qz) / det;
+      if (t > 1e-4 && t < hit) hit = t;
+    }
+    if (hit === Infinity || len <= hit + 1e-4) continue; // inside or on the surface (the socket's rim is the lids)
+    const k = (hit - margin) / len;
+    pts[v * 3] = C[0] + dx0 * k; pts[v * 3 + 1] = C[1] + dy0 * k; pts[v * 3 + 2] = C[2] + dz0 * k;
+  }
+}
 
 // (re)fill a geometry: positions, uvs, index, normals, and relative morph targets named after MORPHS
 function setMesh(g, pos, uv, idx, morphs) {
