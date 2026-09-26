@@ -2,3 +2,9 @@ node_modules/
 dist/
 public/wasm/
 .DS_Store
+.lupe/
+
+# Lupe
+.lupeignore
+.lupeshared
+.lupe-branch
