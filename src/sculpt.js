@@ -145,7 +145,10 @@ export function surfacePart(S, grid, which) {
 export function handPart(S, n, mesh) {
   const job = S.handJobs[n];
   const hsdf = new BodySDF(job.prims.map((q) => ({ ...q, matrix: new THREE.Matrix4().fromArray(q.matrix) })), job.opts);
-  return finishPart({ ...cull(mesh, S.covered), field: hsdf, kind: job.side === 'A' ? 'handRight' : 'handLeft', layer: REGION.skin });
+  const part = finishPart({ ...cull(mesh, S.covered), field: hsdf, kind: job.side === 'A' ? 'handRight' : 'handLeft', layer: REGION.skin });
+  // a hand is mostly tucked-in surface: full AO turned it muddy grey; keep a third of it
+  for (let i = 0; i < part.ao.length; i++) part.ao[i] = 1 - (1 - part.ao[i]) * 0.35;
+  return part;
 }
 
 // normals + AO (soles are already flat on y = 0: the field has a ground plane)
@@ -209,11 +212,14 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
     profile: over ? { y: R.pantsFloor - 0.04, w: 0.1, below: 0.06, above: 0.02 } : null });
 
   const B = p.polyBudget;
+  // hands: never thinned (thin fingers broke into floating pieces), grid cell sized so the thinnest
+  // fingertip is ~3 cells across (cellFor), fingers joined to the palm with a hand-scale blend (the body's
+  // 0.18 join swallowed them), and enough triangles that decimation can't shatter them
   const handJobs = ['A', 'B'].map((side) => {
-    const hp = hands[side].map(toPrim);
+    const hp = hands[side].map((q) => ({ ...q, matrix: new THREE.Matrix4().fromArray(q.matrix) }));
     return {
       side, prims: hp.map((q) => ({ ...q, matrix: q.matrix.toArray() })), cell: cellFor(hp, 0.022 * p.handSize),
-      opts: { inflate: fat * 0.07, clay: p.clay * 0.3, seed: p.seed }, budget: Math.round(B * 0.1),
+      opts: { inflate: fat * 0.05, clay: p.clay * 0.2, seed: p.seed, join: 0.035 * p.handSize }, budget: Math.max(320, Math.round(B * 0.14)),
     };
   });
   const covered = (x, y, z) => layers.some((l) => l.mask(R, x, y, z) < -0.06);

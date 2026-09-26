@@ -30,24 +30,35 @@ const HEAD_ON_NECK = [0.45, 0.5, 0.35]; // max head rotation on the neck (x nod,
 // or looks down, shoulder x < 0 raises the arm forward, shoulder/hip z spreads (mirrored per side),
 // elbow x < 0 bends, hip x < 0 lifts the thigh, knee x > 0 bends. rot: extra per-joint [x, y, z]
 // (not mirrored), for the asymmetric poses; feet stay flat whatever the legs do.
+// hand shapes: curl of the base, middle and tip finger segments (radians toward the palm), finger spread,
+// and how much the fingers twitch in idle-type motions
+export const HAND_SHAPES = {
+  relaxed: { base: 0.25, mid: 0.35, tip: 0.25, spread: 0.11, twitch: 0.08 },
+  claw: { base: -0.25, mid: 1.0, tip: 0.85, spread: 0.2, twitch: 0.22 },
+  limp: { base: 0.5, mid: 0.6, tip: 0.45, spread: 0.06, twitch: 0.05 },
+  fist: { base: 1.35, mid: 1.4, tip: 1.0, spread: 0.02, twitch: 0.03 },
+  reach: { base: 0.05, mid: 0.12, tip: 0.1, spread: 0.24, twitch: 0.18 },
+  spider: { base: 0.6, mid: 0.2, tip: -0.3, spread: 0.3, twitch: 0.3 },
+};
+
 export const POSES = {
   stand: { waist: 0.04, neck: 0.05, sh: [0.05, 0.1], el: -0.15, hip: [0, 0.04], knee: 0.05 },
-  hunch: { waist: 0.5, neck: 0.45, sh: [-0.35, 0.12], el: -0.35, hip: [-0.25, 0.07], knee: 0.4 },
-  crouch: { waist: 0.75, neck: 0.25, sh: [-1.05, 0.22], el: -0.2, hip: [-1.75, 0.28], knee: 2.2 },
-  gunslinger: { waist: 0, neck: 0.02, sh: [0.05, 0.12], el: -0.2, shA: [-1.4, 0.15], elA: -0.05, hip: [0, 0.12], knee: 0.05, gun: true },
-  zombie: { waist: 0.12, neck: 0.3, sh: [-1.45, 0.06], el: -0.1, hip: [0, 0.05], knee: 0.12 },
+  hunch: { hand: 'claw', waist: 0.5, neck: 0.45, sh: [-0.35, 0.12], el: -0.35, hip: [-0.25, 0.07], knee: 0.4 },
+  crouch: { hand: 'claw', waist: 0.75, neck: 0.25, sh: [-1.05, 0.22], el: -0.2, hip: [-1.75, 0.28], knee: 2.2 },
+  gunslinger: { handA: 'reach', waist: 0, neck: 0.02, sh: [0.05, 0.12], el: -0.2, shA: [-1.4, 0.15], elA: -0.05, hip: [0, 0.12], knee: 0.05 },
+  zombie: { hand: 'reach', waist: 0.12, neck: 0.3, sh: [-1.45, 0.06], el: -0.1, hip: [0, 0.05], knee: 0.12 },
   // creepy ones
-  broken: { waist: 0.1, neck: 0.15, sh: [0.1, 0.02], el: -0.05, hip: [0, 0.05], knee: 0.15, // neck snapped to one side, a shoulder dropped
+  broken: { hand: 'limp', waist: 0.1, neck: 0.15, sh: [0.1, 0.02], el: -0.05, hip: [0, 0.05], knee: 0.15, // neck snapped to one side, a shoulder dropped
     rot: { neck: [0, 0.2, 0.75], head: [0.1, 0.25, 0.45], waist: [0, 0, -0.12], shoulderA: [0.15, 0, 0.18], shoulderB: [-0.1, 0, -0.08], elbowB: [-0.35, 0, 0], kneeA: [0.25, 0, 0] } },
-  lurker: { waist: 1.05, neck: 0.1, sh: [-0.95, 0.05], el: -0.08, hip: [-0.35, 0.16], knee: 0.65, // bent double, arms dangling straight down (sh ~ -waist), head craned up to stare
+  lurker: { hand: 'claw', waist: 1.05, neck: 0.1, sh: [-0.95, 0.05], el: -0.08, hip: [-0.35, 0.16], knee: 0.65, // bent double, arms dangling straight down (sh ~ -waist), head craned up to stare
     rot: { head: [-0.55, 0, 0], neck: [-0.2, 0, 0], shoulderA: [0.1, 0, 0], shoulderB: [-0.15, 0, 0] } },
-  puppet: { waist: -0.05, neck: 0.8, sh: [-2.35, 0.3], el: -0.25, hip: [0, 0.02], knee: 0.12, // marionette: strung up by the wrists, head lolling, a knee lifted
+  puppet: { hand: 'limp', waist: -0.05, neck: 0.8, sh: [-2.35, 0.3], el: -0.25, hip: [0, 0.02], knee: 0.12, // marionette: strung up by the wrists, head lolling, a knee lifted
     rot: { head: [0.3, 0, 0.35], shoulderA: [0.25, 0, 0], shoulderB: [-0.15, 0, 0], waist: [0, 0, 0.08], kneeB: [0.55, 0, 0], hipB: [-0.35, 0, 0] } },
-  stare: { waist: 0, neck: 0, sh: [0.02, -0.02], el: 0, hip: [0, 0.02], knee: 0, // square to the front, head turned hard, shoulders hiked
+  stare: { hand: 'relaxed', waist: 0, neck: 0, sh: [0.02, -0.02], el: 0, hip: [0, 0.02], knee: 0, // square to the front, head turned hard, shoulders hiked
     rot: { neck: [0.05, 1.05, 0], head: [-0.08, 0.6, 0.12], shoulderA: [0, 0, -0.18], shoulderB: [0, 0, 0.18] } },
-  crawler: { waist: 1.2, neck: -0.25, sh: [-1.7, 0.18], el: -0.35, hip: [-1.55, 0.3], knee: 2.1, // low on all fours-ish, hands near the ground, looking up
+  crawler: { hand: 'spider', waist: 1.2, neck: -0.25, sh: [-1.7, 0.18], el: -0.35, hip: [-1.55, 0.3], knee: 2.1, // low on all fours-ish, hands near the ground, looking up
     rot: { head: [-0.7, 0, 0.15], shoulderA: [0.25, 0, 0], elbowA: [-0.3, 0, 0], kneeB: [0.15, 0, 0] } },
-  mantis: { waist: 0.25, neck: 0.25, sh: [-0.75, -0.05], el: -2.25, hip: [0, 0.04], knee: 0.2, // arms folded up, hands under the chin, head cocked
+  mantis: { hand: 'fist', waist: 0.25, neck: 0.25, sh: [-0.75, -0.05], el: -2.25, hip: [0, 0.04], knee: 0.2, // arms folded up, hands under the chin, head cocked
     rot: { head: [0, -0.2, -0.5], shoulderA: [0.1, 0.25, 0], shoulderB: [0.1, -0.25, 0] } },
 };
 
@@ -208,7 +219,6 @@ export class BodyRig {
       E(elbow, [0, -fa * 0.3, 0], [0.2 * g, fa * 0.3, 0.18 * g].map((v) => v * L * (0.85 + 0.35 * m)), 0.1);
       const wrist = joint('wrist' + side, elbow, 0, -fa, 0);
       this.hand(wrist, p, sx, mesh, side);
-      if (side === 'A' && POSES[p.pose]?.gun) this.revolver(wrist, p.handSize, mesh);
 
       const hip = joint('hip' + side, pelvis, sx * hipX, -0.1, 0);
       const th = 2.1 * p.legLen, shin = 2.0 * p.legLen;
@@ -243,42 +253,49 @@ export class BodyRig {
     const hs = p.handSize, g = p.girth;
     const palm = new THREE.BoxGeometry(0.34 * hs, 0.42 * hs, 0.13 * hs).translate(0, -0.21 * hs, 0);
     mesh(palm, 'skin', wrist);
+    // Sculpted hand: palm (+ wrist) in the 'torso' group, each finger and the thumb in its own group, so
+    // fingers join each other with a hard min (never fused into a mitten) and blend into the palm only.
+    // Fingers fan out slightly so their gaps widen to several grid cells toward the tips; they are rigid
+    // (fat swells the palm only: inflated fingers fused back into a mitten).
     const H = (j, prim) => this.sculpt.hands[side].push({ joint: j, ...prim });
     H(wrist, { type: 'box', c: [0, -0.21 * hs, 0], b: [0.17 * hs, 0.21 * hs, 0.065 * hs], round: 0.05 * hs, k: 0.04 * hs });
     H(wrist, { type: 'cone', a: [0, 0.25, 0], b: [0, -0.06 * hs, 0], r1: 0.15 * g, r2: 0.12 * hs, k: 0.06 });
-    const fl = 0.38 * p.fingerLen * hs;
+    // the thumb sits on the +sx edge of the palm (where the T-pose aims it); fingers ordered from the
+    // index (next to the thumb) to the pinky (shortest, far edge)
+    const fl = 0.38 * p.fingerLen * hs, byRank = [0.92, 1, 0.94, 0.76];
+    const LEN = [0, 1, 2, 3].map((i) => byRank[sx > 0 ? 3 - i : i]);
     for (let i = 0; i < 4; i++) {
       const f = new THREE.Group();
-      f.position.set((i - 1.5) * 0.085 * hs, -0.4 * hs, 0);
-      f.rotation.set(-0.25 - i * 0.05, 0, (i - 1.5) * 0.06);
+      f.position.set((i - 1.5) * 0.09 * hs, -0.39 * hs, 0);
+      f.rotation.set(-0.25 - i * 0.05, 0, (i - 1.5) * 0.11);
       f.userData.joint = `finger${side}${i}`;
       this.j[f.userData.joint] = f;
-      mesh(limb(0.04 * hs, 0.03 * hs, fl * (i === 0 || i === 3 ? 0.85 : 1), 5), 'skin', f);
-      H(f, { type: 'cone', a: [0, 0.03, 0], b: [0, -fl * (i === 0 || i === 3 ? 0.85 : 1), 0], r1: 0.045 * hs, r2: 0.036 * hs, k: 0.025 * hs });
+      mesh(limb(0.04 * hs, 0.03 * hs, fl * LEN[i], 5), 'skin', f);
+      this.fingerChain(f, `finger${side}${i}`, fl * LEN[i]);
+      H(f, { type: 'cone', rigid: true, group: `finger${i}`, a: [0, 0.04 * hs, 0], b: [0, -fl * LEN[i], 0], r1: 0.038 * hs, r2: 0.03 * hs, k: 0.02 * hs });
       wrist.add(f);
     }
     const thumb = new THREE.Group();
-    thumb.position.set(-sx * 0.17 * hs, -0.18 * hs, 0.04 * hs);
-    thumb.rotation.set(-0.5, 0, -sx * 0.6);
+    thumb.position.set(sx * 0.16 * hs, -0.14 * hs, 0.03 * hs);
+    thumb.rotation.set(-0.5, 0, sx * 0.6);
     thumb.userData.joint = `thumb${side}`;
     this.j[thumb.userData.joint] = thumb;
     mesh(limb(0.045 * hs, 0.035 * hs, fl * 0.7, 5), 'skin', thumb);
-    H(thumb, { type: 'cone', a: [0, 0.03, 0], b: [0, -fl * 0.7, 0], r1: 0.05 * hs, r2: 0.04 * hs, k: 0.03 * hs });
+    this.fingerChain(thumb, `thumb${side}`, fl * 0.7);
+    H(thumb, { type: 'cone', rigid: true, group: 'thumb', a: [0, 0.03, 0], b: [0, -fl * 0.7, 0], r1: 0.048 * hs, r2: 0.036 * hs, k: 0.02 * hs });
     wrist.add(thumb);
   }
 
-  revolver(wrist, hs, mesh) {
-    const gun = new THREE.Group();
-    gun.position.set(0, -0.3 * hs, 0.12 * hs);
-    mesh(new THREE.BoxGeometry(0.12, 0.34, 0.16).translate(0, 0, -0.04), 'metal', gun, false); // grip
-    const barrel = mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.75, 6).translate(0, -0.3, 0), 'metal', gun, false);
-    barrel.rotation.x = Math.PI / 2 - 0.1;
-    barrel.position.set(0, 0.12, 0.05);
-    const drum = mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.2, 7), 'metal', gun, false);
-    drum.rotation.x = Math.PI / 2; drum.position.set(0, 0.12, 0.12);
-    gun.rotation.x = -Math.PI / 2 + 0.1;
-    wrist.add(gun);
+  // finger skeleton: a digit's joint gets two child joints (middle and tip segments) along its length, so
+  // the finger can curl; the sculpted digit stays one smooth piece (it is straight in the bind pose)
+  fingerChain(base, name, len) {
+    const m = new THREE.Group(), t = new THREE.Group();
+    m.position.set(0, -len * 0.45, 0); t.position.set(0, -len * 0.3, 0);
+    m.userData.joint = name + 'm'; t.userData.joint = name + 't';
+    this.j[name + 'm'] = m; this.j[name + 't'] = t;
+    base.add(m); m.add(t);
   }
+
 
   // Poses/animations are written as driver-joint rotations; rig.js converts them to bone tracks.
   pose(p, poseName = p.pose, extra = {}) {
@@ -298,6 +315,23 @@ export class BodyRig {
       set('knee' + side, P.knee);
       const e = (k) => (extra[k + side] || [0])[0] + (rot[k + side] || [0])[0];
       set('ankle' + side, -(P.hip[0] + e('hip') + P.knee + e('knee')));
+    }
+    // fingers: the pose's hand shape (base, middle, tip curl; curl bends toward the palm, negative bends
+    // back) plus a slow, out-of-phase twitch from the motion (extra.fingers = time)
+    // extra.fingers = [t, duration]: the twitch is whole sine cycles over the clip, so loops close exactly
+    const HAND = HAND_SHAPES[P.hand || 'relaxed'], [tw, tdur] = extra.fingers || [], cyc = tw === undefined ? 0 : (2 * Math.PI * tw) / tdur;
+    for (const [side, sx] of [['A', -1], ['B', 1]]) {
+      const hs = (side === 'A' && P.handA) ? HAND_SHAPES[P.handA] : HAND;
+      for (let i = 0; i < 4; i++) {
+        const b = j[`finger${side}${i}`], m = j[`finger${side}${i}m`], t = j[`finger${side}${i}t`];
+        if (!b || !m) continue;
+        const tws = tw === undefined ? 0 : hs.twitch * Math.sin(cyc * (3 + (i % 2)) + i * 1.7 + (side === 'A' ? 0 : 2.1)) * (0.6 + 0.4 * Math.sin(cyc + i));
+        b.rotation.set(-(hs.base + tws * 0.5) - i * 0.05, 0, (i - 1.5) * hs.spread);
+        m.rotation.set(-(hs.mid + tws), 0, 0);
+        t.rotation.set(-(hs.tip + tws * 0.8), 0, 0);
+      }
+      const th = j['thumb' + side], tm = j['thumb' + side + 'm'], tt = j['thumb' + side + 't'];
+      if (th && tm) { th.rotation.set(-0.5 - hs.base * 0.3, 0, sx * 0.6); tm.rotation.set(-hs.mid * 0.5, 0, 0); tt.rotation.set(-hs.tip * 0.5, 0, 0); }
     }
     // head keeps looking forward-ish (plus the pose's own head rotation, from rot)
     const r = rot.waist?.[0] || 0, rn = rot.neck?.[0] || 0;
@@ -349,7 +383,7 @@ export const MOTIONS = {
     duration: 3, fps: 15,
     fn: (body, p, t) => {
       const w = (2 * Math.PI * t) / 3;
-      body.pose(p, p.pose, { waist: [Math.sin(w) * 0.02, 0, 0], neck: [Math.sin(w * 2) * 0.04, Math.sin(w) * 0.08, 0] });
+      body.pose(p, p.pose, { fingers: [t, 3], waist: [Math.sin(w) * 0.02, 0, 0], neck: [Math.sin(w * 2) * 0.04, Math.sin(w) * 0.08, 0] });
     },
   },
   idle: {
@@ -357,6 +391,7 @@ export const MOTIONS = {
     fn: (body, p, t) => {
       const w = (2 * Math.PI * t) / 4;
       body.pose(p, p.pose, {
+        fingers: [t, 4],
         waist: [Math.sin(w) * 0.02, 0, 0],
         neck: [0, Math.sin(w) * 0.12, 0],
         shoulderA: [Math.sin(w * 2) * 0.03, 0, 0],

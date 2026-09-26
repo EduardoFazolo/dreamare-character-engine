@@ -13,7 +13,7 @@ import { SCHEMA } from './mutate.js';
 const NOT_SCULPT = new Set([
   ...SCHEMA.filter((g) => ['Face mutations', 'Skull (3D only)', 'Hair', 'Where mutations apply', 'Grade', 'Makeup (painted in UV space)', 'Render', 'Outfit color', 'Eyes'].includes(g.group))
     .flatMap((g) => g.items.map((i) => i[0])),
-  'bodyGrime', 'headScale', 'hunch', 'pose', 'hat', 'hair', 'hairStyle', 'view', 'anim', 'exportMat', 'atlasRes', 'renderH', 'geoSource',
+  'bodyGrime', 'handBones', 'headScale', 'hunch', 'pose', 'hat', 'hair', 'hairStyle', 'view', 'anim', 'exportMat', 'atlasRes', 'renderH', 'geoSource',
 ]);
 const sculptKey = (p) => JSON.stringify(Object.keys(p).filter((k) => !NOT_SCULPT.has(k)).sort().map((k) => [k, p[k]]));
 
@@ -41,7 +41,8 @@ const lerp = (a, b, t) => a.clone().lerp(b, t);
 const SIDES = [['Left', 'left', 'B', 1], ['Right', 'right', 'A', -1]]; // character's left is +X
 
 // [bone, parent, driver joint, VRM humanoid role, position fn (virtual bones only)]
-function boneDefs() {
+function boneDefs(p = {}) {
+  const fingerBones = p.handBones !== 'none';
   const d = [
     ['Root', null, null, null, () => new THREE.Vector3()],
     ['Hips', 'Root', 'pelvis', 'hips'],
@@ -52,16 +53,26 @@ function boneDefs() {
     ['Head', 'Neck', 'head', 'head'],
   ];
   for (const [L, l, s] of SIDES) {
-    // index finger sits on the thumb side: finger0 for B (+x), finger3 for A (-x)
-    const fingers = s === 'B' ? ['Index', 'Middle', 'Ring', 'Pinky'] : ['Pinky', 'Ring', 'Middle', 'Index'];
+    // index finger sits on the thumb side (the palm's +sx edge): finger3 for B, finger0 for A
+    const fingers = s === 'B' ? ['Pinky', 'Ring', 'Middle', 'Index'] : ['Index', 'Middle', 'Ring', 'Pinky'];
     const vrm = { Index: 'Index', Middle: 'Middle', Ring: 'Ring', Pinky: 'Little' };
     d.push(
       [`${L}Shoulder`, 'Spine2', 'waist', `${l}Shoulder`, (P) => new THREE.Vector3(P[`${L}Arm`].x * 0.3, P[`${L}Arm`].y, P[`${L}Arm`].z)],
       [`${L}Arm`, `${L}Shoulder`, `shoulder${s}`, `${l}UpperArm`],
       [`${L}ForeArm`, `${L}Arm`, `elbow${s}`, `${l}LowerArm`],
       [`${L}Hand`, `${L}ForeArm`, `wrist${s}`, `${l}Hand`],
+    );
+    // finger skeleton (optional): three bones per digit, VRM metacarpal/proximal/distal (thumb) and
+    // proximal/intermediate/distal (fingers)
+    if (fingerBones) d.push(
       [`${L}HandThumb1`, `${L}Hand`, `thumb${s}`, `${l}ThumbMetacarpal`],
-      ...fingers.map((f, i) => [`${L}Hand${f}1`, `${L}Hand`, `finger${s}${i}`, `${l}${vrm[f]}Proximal`]),
+      [`${L}HandThumb2`, `${L}HandThumb1`, `thumb${s}m`, `${l}ThumbProximal`],
+      [`${L}HandThumb3`, `${L}HandThumb2`, `thumb${s}t`, `${l}ThumbDistal`],
+      ...fingers.flatMap((f, i) => [
+        [`${L}Hand${f}1`, `${L}Hand`, `finger${s}${i}`, `${l}${vrm[f]}Proximal`],
+        [`${L}Hand${f}2`, `${L}Hand${f}1`, `finger${s}${i}m`, `${l}${vrm[f]}Intermediate`],
+        [`${L}Hand${f}3`, `${L}Hand${f}2`, `finger${s}${i}t`, `${l}${vrm[f]}Distal`],
+      ]),
     );
   }
   for (const [L, l, s] of SIDES) {
@@ -88,10 +99,11 @@ const AIM = {
 const HINGES = { LeftForeArm: -1, RightForeArm: -1, LeftLeg: 1, RightLeg: 1 };
 const HINGE_LIMIT = [0, 2.6]; // radians about the declared axis
 
+const digits = (l) => ['ThumbMetacarpal', 'ThumbProximal', 'ThumbDistal', ...['Index', 'Middle', 'Ring', 'Little'].flatMap((f) => [`${f}Proximal`, `${f}Intermediate`, `${f}Distal`])].map((r) => l + r);
 export const MASKS = {
   head: ['neck', 'head'],
-  leftArm: ['leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand', 'leftThumbMetacarpal', 'leftIndexProximal', 'leftMiddleProximal', 'leftRingProximal', 'leftLittleProximal'],
-  rightArm: ['rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand', 'rightThumbMetacarpal', 'rightIndexProximal', 'rightMiddleProximal', 'rightRingProximal', 'rightLittleProximal'],
+  leftArm: ['leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand', ...digits('left')],
+  rightArm: ['rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand', ...digits('right')],
   leftLeg: ['leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToes'],
   rightLeg: ['rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToes'],
 };
@@ -189,7 +201,7 @@ export class SkinnedCharacter {
   // body: BodyRig (already built + posed for the current params), p: params
   bake(body, p) {
     this.dispose();
-    const defs = boneDefs();
+    const defs = boneDefs(p);
     const j = body.j;
     const saved = Object.fromEntries(Object.entries(j).map(([k, o]) => [k, o.quaternion.clone()]));
     const savedY = body.parts.position.y, savedYaw = body.root.rotation.y;
@@ -248,7 +260,8 @@ export class SkinnedCharacter {
       const aim = AIM[name];
       let y;
       if (Array.isArray(aim)) y = new THREE.Vector3(...aim);
-      else if (aim) y = P[aim].clone().sub(P[name]);
+      else if (aim && P[aim]) y = P[aim].clone().sub(P[name]);
+      else if (aim) y = new THREE.Vector3(0, 1, 0).applyQuaternion(JQ[name]).negate(); // (hand without finger bones)
       else y = new THREE.Vector3(0, 1, 0).applyQuaternion(JQ[name]).negate(); // fingers: along the segment
       y.normalize();
       const ref = Math.abs(y.z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
@@ -366,7 +379,8 @@ export class SkinnedCharacter {
   // Sculpted body: SDF mesh -> distance-based skin weights (<= 4 bones) -> unwrap -> baked atlas,
   // one primitive per clothing region, all sharing that atlas.
   sculpt(body, p, model, P, BQ, ctx, index, byMat, boneVerts, bodyBoxes) {
-    const key = sculptKey(p);
+    // (skin weights depend on the skeleton: the finger bones option is part of this cache's key, not of the sculpt's)
+    const key = sculptKey(p) + '|' + (p.handBones || 'full');
     if (this.cache?.key !== key) this.cache = { key, ...this.sculptGeometry(body, p, model, P, BQ, index) };
     const c = this.cache;
     // texture: rebake only when an input changed (outfit textures/tints, skin tone, grime, resolution)
@@ -408,7 +422,10 @@ export class SkinnedCharacter {
       const a = P[name].clone();
       const aim = AIM[name];
       let b;
-      if (typeof aim === 'string') b = P[aim].clone();
+      const child = this.defs.find((d) => d[1] === name && FINGER.test(d[0]));
+      if (FINGER.test(name) && child) b = P[child[0]].clone(); // finger bones: to the next segment
+      else if (typeof aim === 'string' && P[aim]) b = P[aim].clone();
+      else if (FINGER.test(name)) b = a.clone().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(BQ[name]), 0.12 * p.fingerLen * p.handSize);
       else if (Array.isArray(aim)) b = a.clone().addScaledVector(new THREE.Vector3(...aim), name === 'Head' ? 1 : 0.3);
       else b = a.clone().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(BQ[name]), 0.35 * p.fingerLen * p.handSize);
       segs[name] = [a, b];

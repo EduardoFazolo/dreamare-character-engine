@@ -115,6 +115,7 @@ export const CHOICES = {
   bodyRes: { label: 'Body texture res', options: [128, 256, 512, 1024], def: 512 },
   bottomType: { label: 'Bottom', options: ['pants', 'skirt'], def: 'pants' },
   pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
+  handBones: { label: 'Finger bones', options: ['full', 'none'], def: 'full' },
   anim: { label: 'Animation', options: ['idle', 'talk', 'walk', 'pose'], def: 'idle' },
   exportMat: { label: 'Export materials', options: ['lit', 'unlit'], def: 'lit' },
   outfit: { label: 'Outfit', options: Object.keys(OUTFITS), def: 'suit' },

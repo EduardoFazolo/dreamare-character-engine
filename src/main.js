@@ -65,6 +65,9 @@ function frameCamera() {
   }
   camera.position.set(target.x, target.y + dist * 0.06, target.z + dist);
   camera.lookAt(target);
+  // debug: test scripts can aim the camera (window.__app.camOverride = { pos: [x,y,z], at: [x,y,z] })
+  const o = window.__app?.camOverride;
+  if (o) { camera.position.set(...o.pos); camera.lookAt(...o.at); }
   PS2.fogNear.value = dist + 4;
   PS2.fogFar.value = dist + 60;
   body.root.rotation.y = yaw;

@@ -37,7 +37,7 @@ Sculpt sliders: muscle, fat (negative thins proportionally), hump, lumps/tumors 
 
 **Skinning**: the sculpted body uses smooth weights (inverse distance to each bone's axis, up to 4 bones, no left/right leakage), so elbows, knees and shoulders bend instead of splitting. Head, hat, hair and props stay rigid.
 
-Poses: stand, hunch, crouch, gunslinger (with revolver), zombie, plus creepy ones: broken (neck snapped to one side), lurker (bent over, craning up to stare), puppet (strung up by the wrists), stare (head turned hard to you), crawler, mantis. **Random pose** switches the current character's pose instantly (poses never re-sculpt); about 4 in 10 randomized characters get a creepy one. Camera: medium, full, portrait.
+Hands have a full finger skeleton (optional, on by default): each pose sets a hand shape (relaxed, claw, limp, fist, reach, spider) and Idle/Talk add a slow finger twitch. Poses: stand, hunch, crouch, gunslinger (one arm raised, pointing), zombie, plus creepy ones: broken (neck snapped to one side), lurker (bent over, craning up to stare), puppet (strung up by the wrists), stare (head turned hard to you), crawler, mantis. **Random pose** switches the current character's pose instantly (poses never re-sculpt); about 4 in 10 randomized characters get a creepy one. Camera: medium, full, portrait.
 
 ## Head and hair
 
@@ -72,7 +72,7 @@ Geometry sliders: ~120-200 ms until the new body appears, 0 ms of main-thread bl
 
 **Plain glTF 2.0, valid on its own** (Khronos validator: 0 errors, 0 warnings)
 - Meters, +Y up, facing +Z, soles at y = 0. Top-level nodes are `Root` (identity, the ground point between the feet) and `mesh_Character`.
-- One mesh, one skin, 33 joints (`Root` + 32 humanoid bones with Mixamo-style names). Each material slot is a primitive named by purpose: `face`, `head`, `hair`, `hairStrands`, `skin`, `top`, `bottom`, `shoes`, `hat`, `prop`. In the sculpted style, `top`/`bottom`/`shoes`/`skin` share one baked body texture, so they stay separately recolorable.
+- One mesh, one skin, 53 joints (`Root` + 52 humanoid bones with Mixamo-style names, including three bones per finger and thumb). With **Finger bones: none** it's 23 joints and the hands are rigid. Each material slot is a primitive named by purpose: `face`, `head`, `hair`, `hairStrands`, `skin`, `top`, `bottom`, `shoes`, `hat`, `prop`. In the sculpted style, `top`/`bottom`/`shoes`/`skin` share one baked body texture, so they stay separately recolorable.
 - Bind pose is the VRM 1.0 T-pose: arms along X, palms down, fingers along X, thumbs 45 degrees forward. Sculpted body: smooth skinning, up to 4 influences. Segmented body and head/accessories: rigid, 1 influence.
 - Materials are PBR by default (roughness 1) or unlit (`KHR_materials_unlit`) via "Export materials". The grade and outfit tint are baked into the textures; the PS2 shader is not exported.
 - Clips: `Pose`, `Idle`, `Walk`, `Talk`, all in place, same bone set, each also animating the face morph weights.
