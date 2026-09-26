@@ -64,7 +64,8 @@ function exportMaterial(m, baked, kind) {
 const VRM_EXPR = {
   aa: { jawOpen: 1 }, ih: { jawOpen: 0.3, mouthWide: 0.6 }, ou: { jawOpen: 0.25, mouthPucker: 1 }, ee: { jawOpen: 0.2, mouthWide: 1 }, oh: { jawOpen: 0.6, mouthPucker: 0.5 },
   blink: { eyeBlinkLeft: 1, eyeBlinkRight: 1 }, blinkLeft: { eyeBlinkLeft: 1 }, blinkRight: { eyeBlinkRight: 1 },
-  happy: { mouthSmile: 1 }, surprised: { jawOpen: 0.5, eyeLookUp: 0.3 },
+  happy: { mouthSmile: 1 }, surprised: { jawOpen: 0.5, browUp: 1, eyeLookUp: 0.2 },
+  angry: { browDown: 1, mouthWide: 0.3 }, sad: { browInnerUp: 1, mouthPucker: 0.2 }, relaxed: { mouthSmile: 0.4, eyeBlinkLeft: 0.25, eyeBlinkRight: 0.25 },
   lookUp: { eyeLookUp: 1 }, lookDown: { eyeLookDown: 1 }, lookLeft: { eyeLookLeft: 1 }, lookRight: { eyeLookRight: 1 },
 };
 function vrmExpressions(node) {

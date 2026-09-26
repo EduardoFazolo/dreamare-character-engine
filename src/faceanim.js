@@ -15,10 +15,11 @@ export function faceKeys(name, duration) {
   const keys = Object.fromEntries(MORPHS.map((m) => [m, [[0, 0], [duration, 0]]]));
   const pulse = (m, t0, up, hold, down, v = 1) => keys[m].push([t0, 0], [t0 + up, v], [t0 + up + hold, v], [t0 + up + hold + down, 0]);
   const blink = (t) => { pulse('eyeBlinkLeft', t, 0.07, 0.05, 0.1); pulse('eyeBlinkRight', t, 0.07, 0.05, 0.1); };
-  if (name === 'idle') { blink(1.1); blink(3.15); pulse('eyeLookLeft', 0.35, 0.12, 0.9, 0.15, 0.7); pulse('eyeLookRight', 2.0, 0.12, 0.6, 0.15, 0.6); }
+  if (name === 'idle') { blink(1.1); blink(3.15); pulse('eyeLookLeft', 0.35, 0.12, 0.9, 0.15, 0.7); pulse('eyeLookRight', 2.0, 0.12, 0.6, 0.15, 0.6); pulse('browInnerUp', 2.4, 0.3, 0.6, 0.4, 0.5); }
   if (name === 'walk') blink(0.45);
   if (name === 'talk') {
     blink(1.6);
+    pulse('browUp', 0.5, 0.15, 0.5, 0.25, 0.8); pulse('browDown', 1.9, 0.2, 0.5, 0.25, 0.6); // emphasis
     // visemes, deterministic: [jaw, pucker, wide] every 0.14 s, closed at both ends so the loop is clean
     const V = [[0.55, 0, 0], [0.2, 0, 0.8], [0.3, 0.9, 0], [0.45, 0, 0.3], [0.15, 0.5, 0], [0.6, 0.1, 0], [0.25, 0, 0.6], [0.4, 0.6, 0]];
     const tr = { jawOpen: [[0, 0]], mouthPucker: [[0, 0]], mouthWide: [[0, 0]] };
@@ -31,8 +32,13 @@ export function faceKeys(name, duration) {
   return keys;
 }
 
-export const MORPHS = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'eyeLookUp', 'eyeLookDown', 'eyeLookLeft', 'eyeLookRight'];
+export const MORPHS = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'eyeLookUp', 'eyeLookDown', 'eyeLookLeft', 'eyeLookRight', 'browUp', 'browDown', 'browInnerUp'];
 
+// brows (subject's right at -x, left at +x): upper row, lower row, and their inner/outer ends
+const BROWS = [
+  { up: [70, 63, 105, 66, 107], lo: [46, 53, 52, 65, 55], inner: 107, outer: 70 },
+  { up: [300, 293, 334, 296, 336], lo: [276, 283, 282, 295, 285], inner: 336, outer: 300 },
+];
 const LIP_UP = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const LIP_LO = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
 // subject's right eye (-x) and left eye (+x): upper lid, lower lid (corners shared)
@@ -294,6 +300,21 @@ function deltas(P, F, pts, kinds, jawW, eyes) {
       // pucker: lips gathered toward the middle and pushed forward
       const dx = p[0] - F.cx, dy = p[1] - cy, f = Math.exp(-((dx / (F.cornerX * 1.25)) ** 2 + (dy / 0.075) ** 2));
       set('mouthPucker', [-dx * 0.4, -dy * 0.15, 0.035], f);
+      // brows: the photo's own brows move with the skin around them, falling off softly into the forehead
+      // above and fast below (the eyelids stay put). browUp raises both; browDown lowers them and pulls
+      // them together; browInnerUp raises only the inner ends (worried).
+      for (const B of BROWS) {
+        const xs = [...B.up, ...B.lo].map((i) => P[i][0]), x0 = Math.min(...xs), x1 = Math.max(...xs);
+        const out = Math.max(0, x0 - p[0], p[0] - x1), wh = 1 - smooth(0, 0.07, out);
+        if (wh <= 0) continue;
+        const xc = Math.min(x1, Math.max(x0, p[0])), mid = (lineAt(P, B.up, xc) + lineAt(P, B.lo, xc)) / 2, dy = p[1] - mid;
+        const wv = Math.exp(-((dy / (dy > 0 ? 0.16 : 0.035)) ** 2)), wgt = wh * wv;
+        if (wgt < 1e-3) continue;
+        const ix = P[B.inner][0], ox = P[B.outer][0], inner = Math.min(1, Math.max(0, (p[0] - ox) / (ix - ox || 1e-6)));
+        set('browUp', [0, 0.072, 0.006], wgt);
+        set('browDown', [Math.sign(-ix) * 0.022 * inner, -0.048 * (0.5 + 0.5 * inner), 0.012], wgt);
+        set('browInnerUp', [Math.sign(ix) * 0.006 * inner, 0.066 * inner * inner, 0.005], wgt);
+      }
       // blinks: the lid rows move to a closure line, the upper lid carrying the skin above it along
       for (const [side, e] of Object.entries(eyes)) {
         const xs = [...e.up, ...e.lo].map((i) => P[i][0]), x0 = Math.min(...xs), x1 = Math.max(...xs);
