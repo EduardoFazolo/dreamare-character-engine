@@ -1,8 +1,8 @@
 // Face animation: the photo face mesh (MediaPipe's 468-point topology) gets a real mouth and real eyes.
 // - The mouth and eyes are sealed in the canonical mesh by the triangles using only their rim vertices
 //   (18 across the inner lips, 14 per eye): they're cut out.
-// - Behind each eye, an eyeball whose front is textured with the face's own eye (planar-mapped into the
-//   face texture), so at rest it looks exactly like the photo, and it can rotate to look around.
+// - Behind each eye, a generated eyeball (its own 'eye' material: sclera, iris, pupil; see drawEye),
+//   iris centered in the opening, so it reads as an eye whatever the warps did to the photo; it rotates.
 // - Behind the lips, a mouth interior (its own 'mouth' material): a dark cavity and teeth strips.
 // - Morph targets (relative deltas) built from anatomy, since every vertex knows its facial role:
 //   jaw opening (rotation about a jaw pivot, weighted below the lip line), smile, pucker, wide lips,
@@ -168,18 +168,23 @@ function jawDelta(F, p, w) {
   return [0, F.pivot[1] + dy * c - dz * s - p[1], F.pivot[2] + dy * s + dz * c - p[2]];
 }
 
-// Eyeball: a low-poly sphere cap behind the eye opening, front textured with the face's eye
-function eyeball(P, uv0, eye) {
+// Eyeball: a low-poly sphere cap behind the eye opening. UVs: a front projection into the generated eye
+// texture, iris (radius IRIS_UV around the center) sized to 95% of the opening's height
+function eyeball(P, uv0, eye, half) {
   const ring = [...new Set([...eye.up, ...eye.lo])], n = ring.length;
   const c = [0, 1, 2].map((k) => ring.reduce((s, i) => s + P[i][k], 0) / n);
   const R = Math.max(...ring.map((i) => Math.hypot(P[i][0] - c[0], P[i][1] - c[1]))) * 1.2;
-  const zFront = Math.max(...ring.map((i) => P[i][2])) - 0.012;
+  // seated in the socket: its front behind the lids' deepest rim point (in front of it, the ball bulged out)
+  const zFront = Math.min(...ring.map((i) => P[i][2])) - 0.006;
   const center = [c[0], c[1], zFront - R];
   const fit = fitAffine(ring.map((i) => [P[i][0], P[i][1]]), ring.map((i) => uv0[i]));
   // texture read inside the opening only (an ellipse at 80% of the eye's half width/height): rotating the
   // eyeball then slides eye white and corners into view, never the lashes or lid skin around the eye
   const ha = Math.max(...ring.map((i) => Math.abs(P[i][0] - c[0]))), hb = Math.max(...ring.map((i) => Math.abs(P[i][1] - c[1])));
-  const toUV = (x, y) => { const dx = x - c[0], dy = y - c[1], e = Math.hypot(dx / ha, dy / hb), k = e > 0.8 ? 0.8 / e : 1; return fit(c[0] + dx * k, c[1] + dy * k); };
+  const irisR = Math.max(0.012, hb * 0.95);
+  // (the eye texture holds the subject's right eye in its left half, the left eye in its right half)
+  const toUV = (x, y) => [(half + 0.5 + Math.min(0.49, Math.max(-0.49, ((x - c[0]) / irisR) * IRIS_UV))) / 2, 0.5 + ((y - c[1]) / irisR) * IRIS_UV];
+  void fit; void ha;
   const pos = [], uv = [], idx = [], RINGS = 6, SEG = 14, MAXT = (110 * Math.PI) / 180;
   pos.push(center[0], center[1], center[2] + R); uv.push(...toUV(center[0], center[1]));
   for (let r = 1; r <= RINGS; r++) {
@@ -187,7 +192,7 @@ function eyeball(P, uv0, eye) {
     for (let s = 0; s < SEG; s++) {
       const ph = (s / SEG) * Math.PI * 2, x = center[0] + R * Math.sin(th) * Math.cos(ph), y = center[1] + R * Math.sin(th) * Math.sin(ph);
       pos.push(x, y, center[2] + R * Math.cos(th));
-      const q = toUV(x, y); uv.push(Math.min(1, Math.max(0, q[0])), Math.min(1, Math.max(0, q[1])));
+      const q = toUV(x, y); uv.push(q[0], q[1]); // (the eye texture clamps to sclera at its edges)
     }
   }
   const at = (r, s) => (r === 0 ? 0 : 1 + (r - 1) * SEG + (s % SEG));
@@ -318,7 +323,7 @@ function deltas(P, F, pts, kinds, jawW, eyes) {
 // morph deltas for both meshes.
 export function buildFaceRig(P, uv0, index, headPos) {
   const F = frame(P);
-  const eyes = { Right: { ...EYES.Right, ball: eyeball(P, uv0, EYES.Right) }, Left: { ...EYES.Left, ball: eyeball(P, uv0, EYES.Left) } };
+  const eyes = { Right: { ...EYES.Right, ball: eyeball(P, uv0, EYES.Right, 0) }, Left: { ...EYES.Left, ball: eyeball(P, uv0, EYES.Left, 1) } };
   const nHead = headPos.length / 3, inner = interiorTriangles(index);
   const extraPos = [], extraUV = [], extraIdx = [], kinds = new Array(nHead).fill('face');
   // The mouth plate: the triangles between the lips stay, carrying the photo's own mouth (its teeth, painted
@@ -331,12 +336,45 @@ export function buildFaceRig(P, uv0, index, headPos) {
     extraPos.push(P[i][0], P[i][1], P[i][2]); extraUV.push(...uv0[i]); kinds.push('plate');
   }
   for (const t of inner.mouth) extraIdx.push(...[index[t * 3], index[t * 3 + 1], index[t * 3 + 2]].map((v) => dup.get(v) ?? v));
-  // eyeballs appended to the head mesh (same 'face' material and texture)
-  for (const [side, tag] of [['Right', 'eyeR'], ['Left', 'eyeL']]) {
-    const b = eyes[side].ball, base = nHead + extraPos.length / 3;
-    extraPos.push(...b.pos); extraUV.push(...b.uv); extraIdx.push(...b.idx.map((i) => i + base));
-    for (let i = 0; i < b.pos.length / 3; i++) kinds.push(tag);
+  // Eye sockets: a pocket per eye whose rim is the eyelid rim itself, narrowing back into the head behind the
+  // eyeball, textured with the lids' own skin (reads as the socket in shadow). Seen from the side, the eye
+  // opening otherwise looked past the eyeball into the empty shell (background showing through). Its
+  // vertices are 'face' kind: at the rim the blink moves them exactly like the lids.
+  for (const side of ['Right', 'Left']) {
+    const e = eyes[side], ring = [...e.up, ...e.lo.slice(1, -1).reverse()], L = ring.length, b = e.ball;
+    const c = [0, 1].map((k) => ring.reduce((s2, i) => s2 + P[i][k], 0) / L), RINGS = 3;
+    const base = nHead + extraPos.length / 3, back = b.center[2] - b.R * 0.4;
+    for (let r = 0; r <= RINGS; r++) {
+      const t = r / RINGS, sh = 1 - 0.55 * t;
+      for (const i of ring) {
+        extraPos.push(c[0] + (P[i][0] - c[0]) * sh, c[1] + (P[i][1] - c[1]) * sh, r === 0 ? P[i][2] : P[i][2] + (back - P[i][2]) * t);
+        extraUV.push(...uv0[i]); kinds.push('face');
+      }
+    }
+    const cap = nHead + extraPos.length / 3;
+    extraPos.push(c[0], c[1], back - 0.01); extraUV.push(...uv0[ring[0]]); kinds.push('face');
+    const tris = [];
+    for (let r = 0; r < RINGS; r++) for (let k = 0; k < L; k++) {
+      const a0 = base + r * L + k, b0 = base + r * L + ((k + 1) % L), c0 = a0 + L, d0 = b0 + L;
+      tris.push([a0, c0, d0], [a0, d0, b0]);
+    }
+    for (let k = 0; k < L; k++) tris.push([base + RINGS * L + k, cap, base + RINGS * L + ((k + 1) % L)]);
+    // wind so the inside of the pocket faces out of the eye opening (the side you see through it)
+    const at = (v) => { const j = (v - nHead) * 3; return [extraPos[j], extraPos[j + 1], extraPos[j + 2]]; };
+    const [p0, p1, p2] = tris[L * 2].map(at), u = p1.map((x, k) => x - p0[k]), w = p2.map((x, k) => x - p0[k]);
+    const nz = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    const mid = p0.map((x, k) => (x + p1[k] + p2[k]) / 3), toAxis = [c[0] - mid[0], c[1] - mid[1], 0];
+    const flip = nz[0] * toAxis[0] + nz[1] * toAxis[1] < 0;
+    for (const t of tris) extraIdx.push(...(flip ? [t[0], t[2], t[1]] : t));
   }
+  // eyeballs: their own mesh ('eye' material)
+  const eyePos = [], eyeUV = [], eyeIdx = [], eyeKinds = [];
+  for (const [side, tag] of [['Right', 'eyeR'], ['Left', 'eyeL']]) {
+    const b = eyes[side].ball, base = eyePos.length / 3;
+    eyePos.push(...b.pos); eyeUV.push(...b.uv); eyeIdx.push(...b.idx.map((i) => i + base));
+    for (let i = 0; i < b.pos.length / 3; i++) eyeKinds.push(tag);
+  }
+  const eyeMorphs = deltas(P, F, new Float32Array(eyePos), eyeKinds, new Float32Array(eyeKinds.length), eyes);
   const allHead = new Float32Array(headPos.length + extraPos.length);
   allHead.set(headPos); allHead.set(extraPos, headPos.length);
   const headMorphs = deltas(P, F, allHead, kinds, null, eyes);
@@ -347,7 +385,84 @@ export function buildFaceRig(P, uv0, index, headPos) {
   for (let t = 0; t < index.length; t += 3) faceTris.push([index[t], index[t + 1], index[t + 2]]);
   behindFace(mouth.pos, P, faceTris, 0.018, [F.cx, F.mid(F.cx)]);
   const mouthMorphs = deltas(P, F, mouth.pos, new Array(mouth.pos.length / 3).fill('mouth'), mouth.jaw, eyes);
-  return { cut: new Set([...inner.eyes, ...inner.mouth]), extra: { pos: extraPos, uv: extraUV, idx: extraIdx }, headMorphs, mouth, mouthMorphs };
+  return { cut: new Set([...inner.eyes, ...inner.mouth]), extra: { pos: extraPos, uv: extraUV, idx: extraIdx }, headMorphs, mouth, mouthMorphs,
+    eyes: { pos: eyePos, uv: eyeUV, idx: eyeIdx }, eyeMorphs, eyeRegions: [EYES.Right, EYES.Left].map((e) => [...e.up, ...e.lo]) };
+}
+
+// The generated eye texture: sclera (tinted toward the photo's own eye white), iris in the photo's iris
+// color with radial fibres and a dark limbal ring, pupil, a small highlight; plus the character's traits:
+// redness (bloodshot, heaviest at the corners), veins (branching vessels from the edges), yellowing, pupil
+// size. Drawn into a square of side h at x0 (one eye). PS2-ish, deterministic in `seed`.
+export const IRIS_UV = 0.2;
+export function drawEye(g, x0, h, { sclera = [0.92, 0.88, 0.84], iris = [0.35, 0.25, 0.18], pupil = 0.42, voidEye = 0, red = 0, veins = 0, yellow = 0, seed = 1 } = {}) {
+  let st = (seed * 2654435761) >>> 0;
+  const rand = () => { st = (st + 0x6d2b79f5) >>> 0; let t = st; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const C = (c, k = 1, a = 1) => `rgba(${c.map((v) => Math.max(0, Math.min(255, v * 255 * k)) | 0).join(',')},${a})`;
+  const w = h, cx = x0 + w / 2, cy = h / 2, R = IRIS_UV * w;
+  g.save(); g.beginPath(); g.rect(x0, 0, w, h); g.clip();
+  // sclera: yellowing, then redness pooling at the corners
+  const sc = sclera.map((v, k) => v * (1 - yellow * [0.02, 0.1, 0.45][k]));
+  const bg = g.createRadialGradient(cx, cy, R, cx, cy, w * 0.55);
+  bg.addColorStop(0, C(sc)); bg.addColorStop(0.7, C(sc, 0.93)); bg.addColorStop(1, C([sc[0], sc[1] * 0.8, sc[2] * 0.8], 0.8));
+  g.fillStyle = bg; g.fillRect(x0, 0, w, h);
+  // (the eye opening only shows a band about the iris's height and ~0.4 w to each side of the center:
+  // redness and veins are drawn there)
+  if (red > 0) {
+    g.fillStyle = `rgba(215,70,70,${0.35 * red})`; g.fillRect(x0, 0, w, h); // an overall bloodshot tint
+    for (const side of [-1, 1]) {
+      const px = cx + side * w * 0.36, rg = g.createRadialGradient(px, cy, 0, px, cy, w * 0.22);
+      rg.addColorStop(0, `rgba(170,20,25,${0.8 * red})`); rg.addColorStop(1, 'rgba(170,20,25,0)');
+      g.fillStyle = rg; g.fillRect(x0, 0, w, h);
+    }
+  }
+  // veins: branching random walks from the corners toward the iris, mostly horizontal
+  const nV = Math.round(veins * 12);
+  for (let k = 0; k < nV; k++) {
+    const side = k % 2 ? 1 : -1, a = (side > 0 ? 0 : Math.PI) + (rand() - 0.5) * 1.1, r0 = w * (0.28 + 0.14 * rand());
+    let x = cx + Math.cos(a) * r0, y = cy + Math.sin(a) * r0 * 0.6, dir = a + Math.PI + (rand() - 0.5) * 0.6, width = 2.2;
+    g.strokeStyle = `rgba(${150 + rand() * 60 | 0},20,25,${0.55 + 0.4 * veins})`;
+    for (let s2 = 0; s2 < 9 && Math.hypot(x - cx, y - cy) > R * 1.05; s2++) {
+      const nx = x + Math.cos(dir) * w * 0.03, ny = y + Math.sin(dir) * w * 0.03;
+      g.lineWidth = width; g.beginPath(); g.moveTo(x, y); g.lineTo(nx, ny); g.stroke();
+      if (rand() < 0.3) { const bd = dir + (rand() < 0.5 ? -1 : 1) * 0.9; g.lineWidth = Math.max(1, width * 0.6); g.beginPath(); g.moveTo(nx, ny); g.lineTo(nx + Math.cos(bd) * w * 0.05, ny + Math.sin(bd) * w * 0.035); g.stroke(); }
+      x = nx; y = ny; dir += (rand() - 0.5) * 0.7; width = Math.max(1, width * 0.9);
+    }
+  }
+  if (voidEye > 0.5) { g.fillStyle = '#050304'; g.beginPath(); g.arc(cx, cy, R * 1.6, 0, Math.PI * 2); g.fill(); lidShade(g, x0, w, h); g.restore(); return; }
+  const ig = g.createRadialGradient(cx, cy, R * 0.2, cx, cy, R);
+  ig.addColorStop(0, C(iris, 1.25)); ig.addColorStop(0.75, C(iris)); ig.addColorStop(1, C(iris, 0.35));
+  g.fillStyle = ig; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+  for (let k = 0; k < 28; k++) {
+    const a = (k / 28) * Math.PI * 2, r0 = R * pupil * 1.1, r1 = R * (0.75 + 0.2 * ((k * 7) % 5) / 5);
+    g.strokeStyle = C(iris, k % 2 ? 1.4 : 0.6); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); g.stroke();
+  }
+  g.fillStyle = '#060405'; g.beginPath(); g.arc(cx, cy, R * pupil, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.55)'; g.beginPath(); g.arc(cx - R * 0.32, cy - R * 0.3, R * 0.09, 0, Math.PI * 2); g.fill();
+  lidShade(g, x0, w, h);
+  g.restore();
+}
+
+// the socket's shadow over the eye: the upper lid casts a band across its top, the lower lid a softer one,
+// and the corners sink into shadow (texture v runs up: the canvas top is the eye's bottom)
+function lidShade(g, x0, w, h) {
+  const cy = h / 2, R = IRIS_UV * w;
+  const top = g.createLinearGradient(0, cy + R * 1.05, 0, cy + R * 0.2); // upper lid (canvas below center)
+  top.addColorStop(0, 'rgba(20,8,10,0.55)'); top.addColorStop(1, 'rgba(20,8,10,0)');
+  g.fillStyle = top; g.fillRect(x0, cy + R * 0.2, w, h);
+  const bot = g.createLinearGradient(0, cy - R * 1.05, 0, cy - R * 0.5);
+  bot.addColorStop(0, 'rgba(20,8,10,0.3)'); bot.addColorStop(1, 'rgba(20,8,10,0)');
+  g.fillStyle = bot; g.fillRect(x0, 0, w, cy - R * 0.5);
+  const vg = g.createRadialGradient(x0 + w / 2, cy, R * 1.3, x0 + w / 2, cy, w * 0.5);
+  vg.addColorStop(0, 'rgba(20,8,10,0)'); vg.addColorStop(1, 'rgba(20,8,10,0.4)');
+  g.fillStyle = vg; g.fillRect(x0, 0, w, h);
+}
+
+// hue rotation (degrees) of an rgb color, keeping luminance
+export function hueShift([r, g, b], deg) {
+  const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a), k = 1 / 3, q = Math.sqrt(k);
+  const m = [c + (1 - c) * k, k * (1 - c) - q * s, k * (1 - c) + q * s];
+  return [r * m[0] + g * m[1] + b * m[2], r * m[2] + g * m[0] + b * m[1], r * m[1] + g * m[2] + b * m[0]].map((v) => Math.min(1, Math.max(0, v)));
 }
 
 // the mouth material's texture: dark cavity (bottom half), lower and upper teeth strips (PS2-ish, yellowed)

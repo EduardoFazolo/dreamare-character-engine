@@ -5,7 +5,7 @@ import { perf } from './perf.js';
 import { unwrap, BodyBaker } from './bodybake.js';
 import { paintSkinTile } from './skintile.js';
 import { boundaryLoop } from './outline.js';
-import { buildFaceRig, drawMouth, MORPHS, alignToTexture } from './faceanim.js';
+import { buildFaceRig, drawMouth, drawEye, hueShift, MORPHS, alignToTexture } from './faceanim.js';
 
 // ---------------- PS2-ish material: vertex snapping, gouraud, affine UVs, 15-bit dither, fog ----------------
 export const PS2 = {
@@ -116,6 +116,12 @@ export class HeadRig {
     this.mouthMat.name = 'mouth';
     this.mouth = new THREE.Mesh(new THREE.BufferGeometry(), this.mouthMat);
     this.group.add(this.mouth);
+    // generated eyeballs (faceanim.js drawEye), colored after the photo's eyes
+    this.eyeTex = canvasTex(256, 128, (g, w, h) => { drawEye(g, 0, h); drawEye(g, h, h); }); // right eye | left eye
+    this.eyeMat = ps2Material({ map: this.eyeTex });
+    this.eyeMat.name = 'eye';
+    this.eyes = new THREE.Mesh(new THREE.BufferGeometry(), this.eyeMat);
+    this.group.add(this.eyes);
 
     // hair shell (and the hidden sculpted skull, which only shapes hair and hats) share one small baked atlas
     this.skullMat = ps2Material(); this.skullMat.name = 'head';
@@ -165,9 +171,9 @@ export class HeadRig {
 
   // extra: { hair: analyzeHair(face) result, skin: [r,g,b] face skin tone, uvW: the warped face UVs }
   // Returns null when the head is ready, or a promise that resolves once its sculpt is applied.
-  update(P, tex, p, { hair = null, skin = [0.8, 0.6, 0.5], uvW = null } = {}) {
+  update(P, tex, p, { hair = null, skin = [0.8, 0.6, 0.5], uvW = null, atlas = null } = {}) {
     this.headMat.uniforms.map.value = tex;
-    this.last = { P, p, hair, skin, uvW };
+    this.last = { P, p, hair, skin, uvW, atlas };
     this.buildHead(P, p);
 
     const style = p.hairStyle === 'auto' ? hair?.style || 'short' : p.hairStyle;
@@ -306,6 +312,68 @@ export class HeadRig {
     allPos.set(pos); allPos.set(rig.extra.pos, pos.length); allUV.set(uv); allUV.set(rig.extra.uv, uv.length);
     setMesh(this.geo, allPos, allUV, keep, rig.headMorphs);
     setMesh(this.mouth.geometry, new Float32Array(rig.mouth.pos), new Float32Array(rig.mouth.uv), rig.mouth.idx, rig.mouthMorphs);
+    setMesh(this.eyes.geometry, new Float32Array(rig.eyes.pos), new Float32Array(rig.eyes.uv), rig.eyes.idx, rig.eyeMorphs);
+    // the eyeballs take the face's normal at each eye (lit like the skin around them, sunk in the socket),
+    // not their own sphere normals (which lit each one as a glossy ball popping out of the face)
+    {
+      const fn = this.geo.attributes.normal, en = this.eyes.geometry.attributes.normal, half = en.count / 2;
+      rig.eyeRegions.forEach((reg, e) => {
+        const n = [0, 0, 0];
+        for (const i of reg) { n[0] += fn.getX(i); n[1] += fn.getY(i); n[2] += fn.getZ(i); }
+        const l = Math.hypot(...n) || 1;
+        for (let v = e * half; v < (e + 1) * half; v++) en.setXYZ(v, n[0] / l, n[1] / l, n[2] / l);
+      });
+      en.needsUpdate = true;
+    }
+    this.paintEyes(rig.eyeRegions, p);
+  }
+
+  // Eye colors from the photo's own eye area (in the face texture, where the warped face draws it): the
+  // iris from its darkest pixels, the sclera from its brightest, pulled toward white; so the generated eye
+  // sits in the face without looking pasted on. Repainted only when the colors change.
+  paintEyes(regions, p) {
+    const atlas = this.last?.atlas, uvW = this.last?.uvW;
+    let iris = [0.32, 0.22, 0.16], sclera = [0.9, 0.86, 0.82];
+    if (atlas && uvW) {
+      const n = atlas.width, d = atlas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, n, n).data, px = [];
+      for (const reg of regions) {
+        const xs = reg.map((i) => uvW[i][0]), ys = reg.map((i) => uvW[i][1]);
+        const cx = xs.reduce((a, b) => a + b) / xs.length, cy = ys.reduce((a, b) => a + b) / ys.length;
+        const rx = (Math.max(...xs) - Math.min(...xs)) * 0.35, ry = (Math.max(...ys) - Math.min(...ys)) * 0.35;
+        for (let k = 0; k < 60; k++) {
+          const a = k * 2.399, r = Math.sqrt((k + 0.5) / 60), u = cx + Math.cos(a) * r * rx, v = cy + Math.sin(a) * r * ry;
+          const o = (Math.min(n - 1, Math.max(0, Math.floor((1 - v) * n))) * n + Math.min(n - 1, Math.max(0, Math.floor(u * n)))) * 4;
+          px.push([d[o] / 255, d[o + 1] / 255, d[o + 2] / 255]);
+        }
+      }
+      const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+      px.sort((a, b) => lum(a) - lum(b));
+      const avg = (arr) => [0, 1, 2].map((k) => arr.reduce((s2, c) => s2 + c[k], 0) / arr.length);
+      iris = avg(px.slice(Math.floor(px.length * 0.1), Math.floor(px.length * 0.35)));
+      const li = lum(iris), sat = 1.4; // a touch more colorful and never pitch black, so it reads as an iris
+      iris = iris.map((c) => Math.min(1, Math.max(0.05, li + (c - li) * sat + 0.06)));
+      // eye whites are never paper white in a photo: about 1.15x the skin's luminance (capped), slightly
+      // toward the photo's own brightest eye pixels, mostly neutral with a trace of the skin's warmth
+      const hi = avg(px.slice(Math.floor(px.length * 0.8))), sk = this.last.skin, sl = lum(sk);
+      const target = Math.min(0.82, Math.max(0.4, sl * 1.25));
+      sclera = [0, 1, 2].map((k) => target * (0.85 + 0.15 * sk[k] / Math.max(sl, 0.02)) * 0.8 + hi[k] * 0.2);
+    }
+    // the character's eye traits (Eyes sliders); Odd eye gives one eye (deterministically chosen) a
+    // different iris, redness or pupil, the rest of the time both eyes are identical
+    const base = { sclera, iris: hueShift(iris, p.eyeHue || 0), pupil: p.eyePupil ?? 0.42, voidEye: p.eyeVoid, red: p.eyeRed || 0, veins: p.eyeVeins || 0, yellow: p.eyeYellow || 0, seed: (p.seed | 0) + 11 };
+    const odd = p.eyeOdd || 0, pickOdd = ((p.seed | 0) >>> 3) % 3, other = { ...base, seed: base.seed + 7 };
+    if (odd > 0) {
+      if (pickOdd === 0) other.iris = hueShift(base.iris, 60 + 120 * odd);
+      else if (pickOdd === 1) other.red = Math.min(1, base.red + odd), other.veins = Math.min(1, base.veins + odd * 0.8);
+      else other.pupil = base.pupil > 0.5 ? 0.22 : 0.75;
+    }
+    const side = ((p.seed | 0) >>> 5) % 2, eyeR = side ? other : base, eyeL = side ? base : other;
+    const key = JSON.stringify([eyeR, eyeL]);
+    if (key === this.eyeKey) return;
+    this.eyeKey = key;
+    const c = this.eyeTex.image, g = c.getContext('2d');
+    drawEye(g, 0, c.height, eyeR); drawEye(g, c.height, c.height, eyeL);
+    this.eyeTex.needsUpdate = true;
   }
 
   apply(key, P) {

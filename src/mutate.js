@@ -83,6 +83,14 @@ export const SCHEMA = [
     ['grime', 'Grime', 0, 1, 0.2],
     ['levels', 'Color levels', 3, 32, 20],
   ]},
+  { group: 'Eyes', items: [
+    ['eyeRed', 'Redness (bloodshot)', 0, 1, 0],
+    ['eyeVeins', 'Veins', 0, 1, 0],
+    ['eyeYellow', 'Yellowing', 0, 1, 0],
+    ['eyePupil', 'Pupil size', 0.2, 0.85, 0.42],
+    ['eyeHue', 'Iris hue shift', -180, 180, 0],
+    ['eyeOdd', 'Odd eye (asymmetry)', 0, 1, 0],
+  ]},
   { group: 'Makeup (painted in UV space)', items: [
     ['socket', 'Sunken eyes', 0, 1.5, 0.4],
     ['eyeVoid', 'Void eyes', 0, 1, 0],
@@ -331,5 +339,13 @@ export function randomize(base) {
   p.hairBright = Math.random() < 0.12 ? rnd(0.4, 1.7) : 1;
   p.earSize = Math.random() < 0.15 ? rnd(1.8, 3) : rnd(0.8, 1.2);
   p.hair = p.hat === 'none' ? pick(['none', 'stringy']) : pick(['none', 'none', 'stringy']);
+  // eyes: clean most of the time, quirks sometimes; ~95% symmetric
+  const some = (chance, lo, hi) => (Math.random() < chance ? rnd(lo, hi) : 0);
+  p.eyeRed = some(0.25, 0.2, 1);
+  p.eyeVeins = some(0.3, 0.2, 1);
+  p.eyeYellow = some(0.12, 0.2, 0.8);
+  p.eyePupil = Math.random() < 0.15 ? pick([rnd(0.2, 0.28), rnd(0.65, 0.85)]) : rnd(0.36, 0.5);
+  p.eyeHue = Math.random() < 0.12 ? rnd(-180, 180) : rnd(-15, 15);
+  p.eyeOdd = Math.random() < 0.05 ? rnd(0.5, 1) : 0;
   return p;
 }

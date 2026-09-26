@@ -11,7 +11,7 @@ import { SCHEMA } from './mutate.js';
 // Params that cannot change the sculpted body geometry (face, textures, render, pose, accessories).
 // Everything else is part of the sculpt cache key, so geometry is only rebuilt when it can change.
 const NOT_SCULPT = new Set([
-  ...SCHEMA.filter((g) => ['Face mutations', 'Skull (3D only)', 'Hair', 'Where mutations apply', 'Grade', 'Makeup (painted in UV space)', 'Render', 'Outfit color'].includes(g.group))
+  ...SCHEMA.filter((g) => ['Face mutations', 'Skull (3D only)', 'Hair', 'Where mutations apply', 'Grade', 'Makeup (painted in UV space)', 'Render', 'Outfit color', 'Eyes'].includes(g.group))
     .flatMap((g) => g.items.map((i) => i[0])),
   'bodyGrime', 'headScale', 'hunch', 'pose', 'hat', 'hair', 'hairStyle', 'view', 'anim', 'exportMat', 'atlasRes', 'renderH', 'geoSource',
 ]);
@@ -32,7 +32,7 @@ function transformMorphs(g, m4) {
 }
 
 export const METERS = 0.16; // one head unit (face width) in meters
-const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop', 'mouth']); // material slots that are not body volume
+const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop', 'mouth', 'eye']); // material slots that are not body volume
 const PROXY = new Set(['top', 'bottom', 'shoes', 'skin']); // driver segment meshes (segmented style only)
 const FINGER = /Hand(Thumb|Index|Middle|Ring|Pinky)/;
 const DENSITY = 1000; // kg/m^3, bodies are roughly water
