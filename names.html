@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dreamare Names</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <aside id="panel">
+    <h1>DREAMARE</h1>
+    <nav class="tabs"><a href="/">Characters</a><a href="/scenario.html">Scenarios</a><a class="on" href="/names.html">Names</a></nav>
+    <div class="buttons">
+      <button id="generate" style="grid-column: span 2">Generate</button>
+      <button id="copyAll" title="copy every name on the page">Copy all</button>
+      <button id="copyKept" title="copy the names you kept">Copy kept</button>
+    </div>
+    <div id="controls"></div>
+  </aside>
+  <main>
+    <p id="status">click a name to copy it · ☆ keeps it</p>
+    <section id="names" class="namegrid"></section>
+    <h2 class="kepthead">Kept</h2>
+    <section id="kept" class="namegrid kept"></section>
+  </main>
+  <script type="module" src="/src/names/main.js"></script>
+</body>
+</html>

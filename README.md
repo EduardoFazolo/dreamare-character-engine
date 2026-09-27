@@ -57,6 +57,68 @@ Hands have a full finger skeleton (optional, on by default): each pose sets a ha
 - Hats fit the head: the crown is a sculpted shell around skull + forehead cut at a hat line just above the brow, with a shape per type and a brim or visor sized to the head: bowler, cowboy, fedora, top hat, beanie, baseball cap, flat cap, fez, wizard. Each has its own texture; Hat hue tints it. Under a hat, hair (and buns/tails) only shows below the hat line. About 1 in 5 randomized characters wears one.
 - The head sculpt runs in its own worker (`src/head.worker.js`) next to the body's; it only re-sculpts when the face outline, skull or hair params change.
 
+## Scenarios (`/scenario.html`)
+
+A second tab builds seeded outdoor places in the style of an old, empty PS1/PS2 RPG field (`src/scenario/`). It uses the same vertex snap, affine UVs, dither and VHS pass as the character page.
+
+**The Dunes**: overcast grass dunes that dissolve into fog.
+
+- **Look**:
+  - The sky meets the fog exactly at the horizon, so nothing has an edge.
+  - The colours are muted time-of-day keys: grey dawn, overcast noon, bruised dusk, night. The post pass drains the colour and lifts the blacks.
+  - Lighting is gouraud with baked vertex colour. `src/scenario/material.js` handles grass, bare sand on steep slopes, the wet shore, the worn path, dark hollows and blob shadows under every object. Merged props use flat normals, for faceted PS1 shading.
+- **Layout**:
+  - You stand on a low rise. A worn path meanders to a lone house with one warm window.
+  - Along the path: an empty bus stop, lamp posts that light at dusk, and an old fence with missing posts.
+  - Just off the path stands an old paned phone booth, its door hanging open and creaking, with a dim TELEPHONE sign and a failing bulb. Its stained lining glows at night and dims when the bulb stutters. The receiver is off the hook, hanging inside on its coiled cord and still swaying slightly, as if someone just let go.
+  - Around you: a few bare trees, sparse pale grass, and telephone poles walking off into the fog both ways.
+  - Far away, a radio tower's red light blinks through the haze.
+  - Dark still water lies to one side, with a pier running out into the fog.
+  - Sometimes someone stands at the edge of the fog, facing you.
+- **Sliders**:
+  - Place: seed, dune height, prop density.
+  - Mood: time of day, sky hue, fog, and **wrongness**. Wrongness tilts and floats props, drops planks and posts, lights the window at noon, and makes the figure likelier and closer.
+  - Render: resolution, colour, VHS, texture warp.
+- **Controls**:
+  - View mode: drag to look, wheel to step along your view, "drift" slowly turns the camera.
+  - **Walk (WASD)**: click the view to look with the mouse (pointer lock), WASD or arrows to walk, Shift to run, Esc to release the mouse. You follow the ground and can walk out along the pier; you stop at the water and bump into poles, trees and the house. The figure is only ever at a distance: get within 9 m and it's gone.
+  - **Full screen** shows the 4:3 frame letterboxed.
+  - **● Rec (vertical)** records a TikTok clip: while recording, the game renders natively in 9:16 (180×320 game pixels at the default resolution, output 1080×1920, 30 fps) and captures what you hear (the phone's 3D audio, when wired; otherwise the clip is silent). Click again to stop and it saves an MP4 (H.264 + AAC), or a WebM where the browser can't encode MP4. Walk mode works while recording.
+- **Sound** (`src/scenario/audio.js`, WebAudio): not wired by default. Set `PHONE_AUDIO` in `src/scenario/main.js` to an imported audio file's url, and it plays on repeat from the booth's dangling receiver. It starts on your first click or key press, because browsers need a gesture, and the Sound button appears to mute it. Recordings include it.
+  - The song is normalised to a −1 dBFS peak.
+  - Phone speaker chain:
+    - a steep 300 Hz–3.3 kHz phone-line band with a 1.7 kHz presence bump;
+    - a 1.3 ms comb for the plastic handset cavity;
+    - soft clipping for a small speaker;
+    - faint line hiss.
+  - It's positioned in 3D with an HRTF panner at the receiver, which follows the receiver as it sways. The earpiece is directional: it's loudest out of the open door, with a cone that's 0.4× to the sides and behind.
+  - Distance loss is custom: amplitude ∝ d^−1.6, faded to silence between 12 and 26 m, because a small speaker doesn't carry. Highs thin out with distance. The signal stays nearly dry so it's pinned to the receiver.
+  - The booth's solid back wall muffles it further (lowpass to 900 Hz, −5 dB).
+  - Measured relative to the phone's own output: inside the booth −6 dB, 2 m in front −15, 8 m −33, 15 m −42, 25 m silent (−86), 2 m to the side −21, 2 m behind −26 and muffled.
+- Everything is deterministic in the seed; a rebuild takes ~120 ms.
+- **Export scenario (GLB)** bakes the materials to unlit textured materials with vertex colours (validator: 0 errors). `extras.scenario` carries the params, the spawn point and the fog colour and range.
+
+## Names (`/names.html`)
+
+A third tab generates names in a genteel, mouthful, old-English style with a little French (`src/names/gen.js`, seeded, no dependencies).
+
+- **People** use weighted patterns:
+  - given name + surname (*Cecil Thimbleworth*);
+  - double-barrelled (*Winifred Ashby-Crumb*);
+  - title + surname (*Mr Gristlecombe*);
+  - spelled-out initials (*Emm. Tee. Muttonfold*);
+  - *Old* + nickname + an invented lump (*Old Pim Holwub*);
+  - *de la* (*Eustace de la Marrow*);
+  - sometimes a title in front of a full name.
+- **Surnames** are built like real English ones, a root plus *-worth, -combe, -wick, -hurst, -bottom*..., from plain roots or odd domestic ones (*treacle, gristle, custard, thimble*). Lumps come from a small sound generator: round vowels, one consonant pile-up, always sayable.
+- **The mouthful check** keeps names of 4–9 syllables with some b/p/m/g/d weight. The Salad Fingers originals are blocked.
+- **Places** (general or coastal):
+  - *Nettlecombe Pier*, *The Cumberwick Field*;
+  - *Nether Plumbage*, *Cobblebridge-upon-Gravy*;
+  - *Nanny Radhurst's Sands*, *St Enid's Sands*.
+- **Sliders**: whimsy (plausible British → full nonsense), French, titles, how many, seed. Click a name to copy it; ☆ keeps it in this browser's list; *Copy all* and *Copy kept* copy the lists.
+- **Scenarios use it**: every seed has a coastal place name. It's shown in the panel and fades in over the picture as an old-RPG area card, drawn into the frame so full screen and recordings show it; click the name to show it again. It's saved in the export (`extras.scenario.name`) and the file names (`spindleham-flats-42.glb`).
+
 ## Performance
 
 - **Dependency-aware rebuilds**: the body sculpt is cached by a key of only the params that can change its geometry. Face, grade, makeup, outfit color, grime, render, pose and accessory changes never re-sculpt (~20 ms); the body texture is re-baked on the GPU only when its inputs change. Animated bounds are computed at export only.
