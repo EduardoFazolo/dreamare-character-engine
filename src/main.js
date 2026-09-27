@@ -189,7 +189,29 @@ function requestRebuild() {
   requestAnimationFrame(() => { rebuildQueued = false; rebuild(); });
 }
 
+// Wireframe overlay (the "wireframe" switch): a second SkinnedMesh sharing the character's geometry,
+// skeleton and morph weights, drawn as lines over the shaded one, so it follows animation, expressions
+// and the webcam exactly. Rebuilt when the character's mesh is.
+const wireMat = new THREE.MeshBasicMaterial({ color: 0x40ffd0, wireframe: true, transparent: true, opacity: 0.55, depthWrite: false });
+let wire = null;
+function updateWire() {
+  const on = $('#wire').checked, src = sk.mesh;
+  if (wire && (!on || wire.userData.src !== src)) { wire.removeFromParent(); wire = null; }
+  if (!on || !src) return;
+  if (!wire) {
+    wire = new THREE.SkinnedMesh(src.geometry, wireMat);
+    wire.bind(src.skeleton, src.bindMatrix);
+    wire.frustumCulled = false;
+    wire.userData.src = src;
+    wire.renderOrder = 10;
+    src.parent.add(wire);
+  }
+  wire.morphTargetInfluences = src.morphTargetInfluences; // (the same array: expressions show too)
+  wire.position.copy(src.position); wire.quaternion.copy(src.quaternion); wire.scale.copy(src.scale);
+}
+
 function renderFrame(t) {
+  updateWire();
   post.uniforms.time.value = t;
   renderer.setRenderTarget(lowRT);
   renderer.render(scene, camera);
@@ -215,7 +237,7 @@ function loop(ms) {
   if (paused || !faces.length) return;
   const t = ms / 1000;
   idle += 1 / 60;
-  const sway = idle > 2 ? Math.sin(t * 0.6) * 0.45 : 0;
+  const sway = idle > 2 && !window.__app?.camLive ? Math.sin(t * 0.6) * 0.45 : 0; // (no idle sway while the webcam drives it)
   body.root.rotation.y = yaw + sway;
   sk.update(Math.min(0.1, t - (lastT ?? t)));
   lastT = t;
@@ -395,5 +417,7 @@ status(`${faces.length} faces loaded. Drag to turn, scroll to zoom, double-click
 params = randomize(params);
 syncControls();
 window.__app = { roll, randomize, defaults, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, idle: () => lastRebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera, body, analyzeHair, deform, canon, canonUV, rig };
+// experimental: webcam-driven character (experimental/webcam.js), loaded lazily
+import('../experimental/webcam.js').then((m) => m.mount(window.__app)).catch((e) => console.warn('experimental webcam unavailable', e));
 await rebuild();
 requestAnimationFrame(loop);
