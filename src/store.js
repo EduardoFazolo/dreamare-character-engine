@@ -34,10 +34,61 @@ export const del = (store, key) => tx(store, 'readwrite', (s) => s.delete(key));
 export const all = (store) => tx(store, 'readonly', (s) => s.getAll());
 export const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-// ---- the current scene ----
-export function emptyScene(name = 'Untitled scene') { const now = Date.now(); return { id: uid(), savedId: null, name, terrain: null, actors: [], created: now, updated: now }; }
-export async function currentScene() { let s = await get('meta', 'current'); if (!s) { s = emptyScene(); await put('meta', 'current', s); } return s; }
-export async function setCurrentScene(s) { s.updated = Date.now(); await put('meta', 'current', s); bump(); return s; }
+// ---- scenes: files in scenes/ (dev server), so they can be edited in the app and by hand / by Claude ----
+// Each scene is scenes/<id>.json; meta 'currentFile' remembers which one the editor has open. Without the dev
+// server (a static build) scenes fall back to this browser's IndexedDB.
+export const slugify = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'scene';
+let filesP = null;
+export const sceneFiles = () => (filesP ||= fetch('/__scenes').then((r) => r.ok).catch(() => false));
+const lastWritten = new Map(); // id -> the JSON this tab last wrote (so its own saves don't come back as outside edits)
+export const writtenText = (id) => lastWritten.get(id);
+const sceneText = (s) => JSON.stringify(s, null, 2) + '\n';
+export async function listScenes() {
+  if (!(await sceneFiles())) return all('scenes');
+  return (await fetch('/__scenes').then((r) => r.json())).filter((s) => !s.error);
+}
+export async function readScene(id) {
+  if (!(await sceneFiles())) return get('scenes', id);
+  const r = await fetch(`/__scenes/${id}`); if (r.status === 404) return null;
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || 'could not read the scene');
+  return j;
+}
+export async function writeScene(s) {
+  if (!(await sceneFiles())) return put('scenes', s.id, s);
+  const text = sceneText(s); lastWritten.set(s.id, text);
+  await fetch(`/__scenes/${s.id}`, { method: 'PUT', body: text });
+}
+export async function removeScene(id) { if (!(await sceneFiles())) return del('scenes', id); await fetch(`/__scenes/${id}`, { method: 'DELETE' }); }
+export async function freeSceneId(name) { const taken = new Set((await listScenes()).map((s) => s.id)); const base = slugify(name); let id = base, n = 2; while (taken.has(id)) id = `${base}-${n++}`; return id; }
+
+export function emptyScene(name = 'Untitled scene', id = uid()) { const now = Date.now(); return { id, name, terrain: null, actors: [], props: [], shots: [], ambience: {}, created: now, updated: now }; }
+// scenes saved in this browser before scenes became files: written out once
+async function migrate() {
+  if (localStorage.getItem('dreamare.scenesMigrated')) return;
+  try {
+    const have = new Set((await listScenes()).map((s) => s.id)), old = await all('scenes');
+    for (const sc of old) { const id = await freeSceneId(sc.name); if (!have.has(id)) { const { savedId, savedAt, thumb, ...rest } = sc; await writeScene({ ...rest, id }); have.add(id); } }
+    const cur = await get('meta', 'current');
+    if (cur && (cur.actors?.length || cur.terrain) && !cur.savedId) { const id = await freeSceneId(cur.name); const { savedId, savedAt, ...rest } = cur; await writeScene({ ...rest, id }); await put('meta', 'currentFile', id); }
+    localStorage.setItem('dreamare.scenesMigrated', '1');
+  } catch { /* try again next time */ }
+}
+export async function currentScene() {
+  if (!(await sceneFiles())) { let s = await get('meta', 'current'); if (!s) { s = emptyScene(); await put('meta', 'current', s); } return s; }
+  await migrate();
+  const id = await get('meta', 'currentFile');
+  let s = id && (await readScene(id).catch(() => null));
+  if (!s) { const list = await listScenes(); s = list.sort((a, b) => b.updated - a.updated)[0]; }
+  if (!s) { s = emptyScene('Untitled scene', await freeSceneId('Untitled scene')); await writeScene(s); }
+  if (s.id !== id) await put('meta', 'currentFile', s.id);
+  return s;
+}
+export async function openScene(id) { await put('meta', 'currentFile', id); bump(); }
+export async function setCurrentScene(s) {
+  s.updated = Date.now();
+  if (!(await sceneFiles())) { await put('meta', 'current', s); bump(); return s; }
+  await writeScene(s); await put('meta', 'currentFile', s.id); bump(); return s;
+}
 
 // other tabs hear about changes to the current scene (so the editor refreshes when a character is sent)
 const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('dreamare-scene') : null;

@@ -10,12 +10,12 @@ import { generate } from '../scenario/gen.js';
 import { createStage, bakeForExport } from '../scenario/stage.js';
 import { VILLAGE } from '../scenario/biomes.js';
 import { menubar } from '../menubar.js';
-import { makeRig, detect, retarget, applyPose, snapshot, lerpPose, breathe, HANDLES, handlePos, dragHandle, dragStart, toRoot, toWorld, sitPose, hipsAt } from './pose.js';
+import { makeRig, detect, retarget, applyPose, snapshot, lerpPose, breathe, HANDLES, handlePos, dragHandle, dragStart, toRoot, toWorld, sitPose, hipsAt, compilePose, PRESETS } from './pose.js';
 import { PROPS, CATEGORIES, buildProp } from '../scenario/props.js';
 import { assetList, importedList, importFile, loadVoice, playVoice, setListener, audioCtx, rawBytes, voiceStream } from './voice.js';
 import { align, segments as speechSegments, loadCaptions, saveCaptions, cueAt } from './captions.js';
 import { AMBIENCES, startBed, stopBed, setVolume as bedVolume, playing as bedPlaying, stopAll as stopBeds } from './ambience.js';
-import { currentScene, setCurrentScene, emptyScene, onSceneChange, get, put, del, all, uid, newActor } from '../store.js';
+import { currentScene, setCurrentScene, emptyScene, onSceneChange, get, put, del, all, uid, newActor, listScenes, removeScene, freeSceneId, openScene, writtenText, sceneFiles } from '../store.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (t) => ($('#status').textContent = t);
@@ -84,19 +84,20 @@ async function spawnActor(a) {
   root.userData.actorId = a.id;
   scene.add(root);
   actors.set(a.id, o);
-  if (a.pose) o.mixer.stopAllAction(); else setAnim(o, a.anim);
+  if (a.pose?.bones) o.mixer.stopAllAction(); else if (!a.pose) setAnim(o, a.anim);
   place(o);
   return o;
 }
 // a still pose (from a photo, the library or the handles) replaces the clip; it arrives smoothly
 function setPose(o, pose, { tween = true } = {}) {
-  const from = o.data.pose || snapshot(o.rig); // from wherever the body is now (the clip's current frame)
+  const from = rawPose(o) || snapshot(o.rig); // from wherever the body is now (the clip's current frame)
+  o.compiled = null;
   o.mixer.stopAllAction(); o.action = null;
   o.data.pose = pose; o.data.breathe ??= true;
   o.tween = tween ? { from, t: 0 } : null;
   autosave();
 }
-function clearPose(o) { o.data.pose = null; o.tween = null; setAnim(o, o.data.anim === 'Custom' ? 'Idle' : o.data.anim); autosave(); }
+function clearPose(o) { o.data.pose = null; o.compiled = null; o.lookCamera = false; o.tween = null; setAnim(o, o.data.anim === 'Custom' ? 'Idle' : o.data.anim); autosave(); }
 function setAnim(o, name) {
   const clip = o.clips.find((c) => c.name === name) || o.clips.find((c) => c.name === 'Idle') || o.clips.find((c) => c.name === 'Pose') || o.clips[0];
   o.action?.stop();
@@ -106,7 +107,7 @@ function place(o) {
   const a = o.data, st = a.seat && props.get(a.seat.prop)?.built.seats[a.seat.idx];
   if (st) { // sitting: hang the character under the seat anchor, hips on it (it rocks / swings with the prop)
     if (o.root.parent !== st) st.add(o.root);
-    if (!o.sitOffset) { applyPose(o.rig, a.pose); o.root.position.set(0, 0, 0); o.root.scale.setScalar(1); o.sitOffset = hipsAt(o.rig); }
+    if (!o.sitOffset) { const rp = rawPose(o); if (rp) applyPose(o.rig, rp); o.root.position.set(0, 0, 0); o.root.scale.setScalar(1); o.sitOffset = hipsAt(o.rig); }
     const turn = a.seatRot || 0; // turned on the seat, around the hips
     o.root.rotation.set(0, turn, 0); o.root.scale.setScalar(a.scale);
     o.root.position.copy(o.sitOffset).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn).multiplyScalar(-a.scale);
@@ -126,6 +127,49 @@ function settle(a) {
   return true;
 }
 
+// ---------------- references in scene files ----------------
+// Scene files may say where things are by reference instead of raw numbers (so they can be written by hand):
+//   point: [x, y, z] | [x, z] (on the ground) | "spawn" | "camera" | "<actor or prop id / name>" | { at: <point>, offset: [x, y, z] }
+//   place: { from: "spawn" | "<id>", right: m, forward: m }   (relative to that thing's own facing)
+//   face:  "spawn" | "camera" | "<id>" | [x, z]
+//   character: "<name in the library>"  (instead of charId)
+let library = []; // [{ id, name }]
+function findEntity(ref) {
+  if (typeof ref !== 'string') return null;
+  const r = ref.toLowerCase(), pr = [...props.values()].find((p) => p.data.id === ref || (p.data.name || '').toLowerCase() === r);
+  if (pr) return { kind: 'prop', pr };
+  const o = [...actors.values()].find((x) => x.data.id === ref || x.data.name.toLowerCase() === r || x.data.name.split(' ')[0].toLowerCase() === r);
+  return o ? { kind: 'actor', o } : null;
+}
+function spawnFrame() { const y = world.homeYaw; return { pos: new THREE.Vector3(0, world.floor(0, 0), 0), fwd: new THREE.Vector3(-Math.sin(y), 0, -Math.cos(y)) }; }
+function resolvePoint(ref) {
+  if (ref == null) return null;
+  if (Array.isArray(ref)) return ref.length === 2 ? new THREE.Vector3(ref[0], world.floor(ref[0], ref[1]), ref[1]) : new THREE.Vector3(...ref);
+  if (typeof ref === 'object' && ref.at != null) { const p = resolvePoint(ref.at); return p && p.add(new THREE.Vector3(...(ref.offset || [0, 0, 0]))); }
+  if (ref === 'spawn') return spawnFrame().pos.add(new THREE.Vector3(0, 1.6, 0));
+  if (ref === 'camera') return camera.position.clone();
+  const e = findEntity(ref);
+  if (e?.kind === 'actor') { e.o.root.updateWorldMatrix(true, true); return e.o.rig.bones.Head.getWorldPosition(new THREE.Vector3()); }
+  if (e?.kind === 'prop') { const g = e.pr.built.group; const b = new THREE.Box3().setFromObject(g); return new THREE.Vector3(g.position.x, (b.min.y + b.max.y) / 2, g.position.z); }
+  return null;
+}
+function resolvePlace(d) { // fills d.x / d.z from d.place (kept in the file, so the scene stays readable)
+  const pl = d.place; if (!pl) return;
+  let pos, fwd;
+  if (!pl.from || pl.from === 'spawn') ({ pos, fwd } = spawnFrame());
+  else { const e = findEntity(pl.from); if (!e) return; const obj = e.kind === 'prop' ? e.pr.built.group : e.o.root, r = e.kind === 'prop' ? e.pr.data.rotY : e.o.data.rotY; pos = obj.getWorldPosition(new THREE.Vector3()); fwd = new THREE.Vector3(Math.sin(r || 0), 0, Math.cos(r || 0)); }
+  const right = new THREE.Vector3(-fwd.z, 0, fwd.x).multiplyScalar(pl.from && pl.from !== 'spawn' ? -1 : 1); // a thing's own right hand; the spawn's is the viewer's right
+  const p = pos.clone().addScaledVector(fwd, pl.forward || 0).addScaledVector(right, pl.right || 0);
+  d.x = p.x; d.z = p.z;
+}
+function resolveFace(d) { if (d.face == null) return; const t = d.face === 'camera' ? camera.position : resolvePoint(d.face); if (t) d.rotY = Math.atan2(t.x - d.x, t.z - d.z); }
+function resolveCharacter(a) { if (!a.charId && a.character) { const c = library.find((l) => l.name.toLowerCase() === String(a.character).toLowerCase()); if (c) { a.charId = c.id; if (!a.name) a.name = c.name; } } a.name ||= a.character || 'someone'; }
+// the character library, written to library/characters.json so scenes can be written by hand (names -> ids)
+async function refreshLibrary() {
+  library = (await all('characters')).map((c) => ({ id: c.id, name: c.name, created: c.created }));
+  if (await sceneFiles()) fetch('/__library/characters', { method: 'PUT', body: JSON.stringify({ note: 'written by the scene editor: characters you can put in scenes (by name or id)', characters: library }, null, 2) }).catch(() => {});
+}
+
 // ---------------- props ----------------
 const props = new Map(); // propId -> { data, built }
 let selectedProp = null, picking = null; // picking: { propId } while choosing who sits
@@ -140,7 +184,7 @@ function syncProps() {
   for (const d of rec.props) {
     let pr = props.get(d.id);
     if (!pr) { const built = buildProp(d.kind); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built }; props.set(d.id, pr); scene.add(built.group); }
-    pr.data = d; placeProp(pr);
+    pr.data = d; resolvePlace(d); resolveFace(d); placeProp(pr);
   }
   if (selectedProp && !props.has(selectedProp)) selectedProp = null;
 }
@@ -180,6 +224,7 @@ function standUp(o, quiet) {
 }
 
 async function syncActors() {
+  for (const a of rec.actors) { resolveCharacter(a); if (!a.seat) { resolvePlace(a); a.x ??= 0; a.z ??= 0; a.rotY ??= 0; a.scale ??= 1; resolveFace(a); } }
   let moved = false;
   for (const a of rec.actors) moved = settle(a) || moved;
   if (moved) autosave();
@@ -190,12 +235,30 @@ async function syncActors() {
     if (o) { o.data = a; place(o); } else await spawnActor(a);
   }
   if (selected && !actors.has(selected)) selected = null;
+  compileDirected();
   updateRing();
 }
+// directed poses ({ preset, look, leftHand… } in the file) compile to bones once everyone is placed
+function compileDirected() {
+  for (const o of actors.values()) {
+    const spec = o.data.pose;
+    if (!spec || spec.bones || !(spec.preset || spec.look || spec.leftHand || spec.rightHand)) { o.compiled = null; o.lookCamera = false; continue; }
+    const key = JSON.stringify([spec, o.data.x, o.data.z, o.data.rotY, o.data.seat]);
+    o.lookCamera = spec.look === 'camera';
+    if (o.compiledKey === key && o.compiled) continue;
+    o.mixer.stopAllAction(); o.action = null; place(o); o.root.updateWorldMatrix(true, true);
+    const T = (k) => (spec[k] == null || spec[k] === 'camera' ? null : resolvePoint(spec[k])?.toArray() || null);
+    o.compiled = compilePose(o.rig, { preset: spec.preset || (o.data.seat ? 'sit' : 'stand'), hipsDown: spec.hipsDown, look: T('look'), leftHand: T('leftHand'), rightHand: T('rightHand'), leftFoot: T('leftFoot'), rightFoot: T('rightFoot') });
+    o.compiledKey = key; o.data.breathe ??= true; o.sitOffset = null; place(o);
+  }
+}
+const rawPose = (o) => o.compiled || (o.data.pose?.bones ? o.data.pose : null);
 
 // ---------------- load / reload ----------------
 async function load(fresh = true) {
   rec = await currentScene();
+  rec.actors ||= []; rec.props ||= []; rec.shots ||= []; rec.ambience ||= {};
+  if (fresh || !library.length) await refreshLibrary();
   renderPoses();
   const rebuilt = buildTerrain(false);
   syncProps();
@@ -206,6 +269,15 @@ async function load(fresh = true) {
   renderPanel();
 }
 onSceneChange(() => load(false)); // e.g. a character was sent from another tab
+// the scene file changed on disk (edited by hand / by Claude): reload it, unless this tab has unsaved edits
+import.meta.hot?.on('scenes:changed', async ({ file }) => {
+  if (!rec || file !== `${rec.id}.json` || saveT) { if (file !== `${rec?.id}.json`) renderScenes(); return; }
+  const disk = await fetch(`/__scenes/${rec.id}`).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  if (!disk) return;
+  let text; try { text = JSON.stringify(JSON.parse(disk), null, 2) + '\n'; } catch { status(`scenes/${rec.id}.json has an error: fix it and save`); return; }
+  if (text === writtenText(rec.id)) return; // our own save coming back
+  await load(false); status(`scenes/${rec.id}.json changed on disk: reloaded`);
+});
 
 // ---------------- camera ----------------
 // Fly: WASD / arrows move level (gliding over the terrain at your height), Space up, C down, Shift fast, Alt slow,
@@ -385,8 +457,8 @@ canvas.addEventListener('pointermove', (e) => {
     cam.pos.addScaledVector(right(), -dx * kk).addScaledVector(up, dy * kk);
   } else if (drag.kind === 'move' && (selected || selectedProp)) {
     setRay(e); const p = groundPoint();
-    if (p && selectedProp) { const pr = props.get(selectedProp); pr.data.x = p.x; pr.data.z = p.z; placeProp(pr); updateRing(); }
-    else if (p) { const o = actors.get(selected); if (o.data.seat) standUp(o, true); o.data.x = p.x; o.data.z = p.z; place(o); updateRing(); }
+    if (p && selectedProp) { const pr = props.get(selectedProp); delete pr.data.place; pr.data.x = p.x; pr.data.z = p.z; placeProp(pr); updateRing(); }
+    else if (p) { const o = actors.get(selected); if (o.data.seat) standUp(o, true); delete o.data.place; delete o.data.face; o.data.x = p.x; o.data.z = p.z; place(o); updateRing(); }
   }
 });
 const endLook = () => { rmb = false; };
@@ -472,7 +544,8 @@ function pickHandle() {
 }
 function startHandleDrag(name, e) {
   const o = actors.get(selected);
-  if (!o.data.pose) setPose(o, snapshot(o.rig), { tween: false }); // editing an animated character: start from its current frame
+  if (o.compiled) { o.data.pose = structuredClone(o.compiled); o.compiled = null; } // editing a directed pose by hand: it becomes a plain pose
+  if (!o.data.pose?.bones) setPose(o, snapshot(o.rig), { tween: false }); // editing an animated character: start from its current frame
   applyPose(o.rig, o.data.pose); // clean pose (no breath) under the drag
   const P = toWorld(o.rig, handlePos(o.rig, name));
   hdrag = { o, name, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), P), ctx: { ...dragStart(o.rig), handle0: handlePos(o.rig, name) } };
@@ -527,7 +600,7 @@ function turnToward(bone, target, amount, maxAngle) { // rotate a bone (world-sp
   bone.updateMatrixWorld(true);
 }
 function updateLook(o, dt) {
-  const a = o.data; o.lookW = THREE.MathUtils.clamp((o.lookW || 0) + (a.lookAtMe ? dt : -dt) / 0.35, 0, 1);
+  const a = o.data; o.lookW = THREE.MathUtils.clamp((o.lookW || 0) + (a.lookAtMe || o.lookCamera ? dt : -dt) / 0.35, 0, 1);
   if (o.lookW <= 0) { if (o.eyesTouched) { for (const m of eyeMeshes(o)) for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = 0; o.eyesTouched = false; } return; }
   const w = o.lookW * o.lookW * (3 - 2 * o.lookW), neck = o.rig.bones.Neck, head = o.rig.bones.Head;
   o.root.updateWorldMatrix(true, true);
@@ -769,8 +842,8 @@ async function addActorAt(charId, p) {
 
 // ---------------- panel ----------------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-function renderPanel() { renderAmbience(); $('#sceneName').value = rec.name; renderMeta(); renderTerrain(); renderActorList(); renderActorBox(); renderLibrary(); renderMood(); renderScenes(); }
-function renderMeta() { $('#sceneMeta').textContent = `${rec.actors.length} character${rec.actors.length === 1 ? '' : 's'} · ${rec.savedId ? `saved ${new Date(rec.savedAt || rec.updated).toLocaleString()}` : 'not saved yet (autosaved as the working copy)'}`; }
+function renderPanel() { renderAmbience(); renderShots(); $('#sceneName').value = rec.name; renderMeta(); renderTerrain(); renderActorList(); renderActorBox(); renderLibrary(); renderMood(); renderScenes(); }
+function renderMeta() { $('#sceneMeta').textContent = `${rec.actors.length} character${rec.actors.length === 1 ? '' : 's'} · scenes/${rec.id}.json (saves as you go)`; }
 function renderTerrain() {
   const t = rec.terrain;
   $('#terrainBox').innerHTML = t
@@ -818,12 +891,13 @@ function renderActorBox() {
     <div class="row"><span>${a.seat ? 'turn on seat' : 'turn'}</span><input type="range" min="-3.1416" max="3.1416" step="0.01" value="${(() => { const v = a.seat ? a.seatRot || 0 : a.rotY; return Math.atan2(Math.sin(v), Math.cos(v)); })()}"><output></output></div>
     <div class="row"><span>scale</span><input type="range" min="0.4" max="2" step="0.01" value="${a.scale}"><output>${a.scale.toFixed(2)}</output></div>
     <div class="buttons"><button data-a="dup">Duplicate</button><button data-a="face">Face the camera</button><button data-a="look" class="${a.lookAtMe ? 'on' : ''}" style="grid-column: span 2" title="only the face turns to you; the eyes look straight into the camera">${a.lookAtMe ? '◉ Looking at you' : '◎ Look at me'}</button>${a.seat ? '<button data-a="stand" style="grid-column: span 2">Stand up</button>' : ''}</div>
-    <p class="meta">pose ${a.pose ? '<b>(custom, still)</b>' : '(playing the animation)'}</p>
+    <p class="meta">pose ${o.compiled ? `<b>(directed: ${esc(a.pose.preset || 'stand')})</b>` : a.pose ? '<b>(custom, still)</b>' : '(playing the animation)'}</p>
     <div class="buttons">
       <button data-a="photo">From photo…</button><button data-a="cam">From webcam…</button>
       <button data-a="edit" class="${editPose ? 'on' : ''}" style="grid-column: span 2" title="drag the coloured handles: hands, feet, head, chest, hips">${editPose ? 'Editing pose: drag the handles' : 'Edit pose (handles)'}</button>
       <label><input type="checkbox" data-a="mirror"> mirror photo</label><label><input type="checkbox" data-a="breathe" ${a.breathe !== false ? 'checked' : ''}> breathing</label>
       <button data-a="savepose" ${a.pose ? '' : 'disabled'}>Save to poses</button><button data-a="anim" ${a.pose ? '' : 'disabled'}>Back to animation</button>
+      <div class="row" style="grid-column: span 2"><span>preset</span><select data-a="preset"><option value="">—</option>${PRESETS.map((p) => `<option ${a.pose?.preset === p ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
     </div>
     <input type="file" accept="image/*" data-a="file" hidden>
     <p class="meta">voice line ${a.voice ? `<b>${esc(a.voice.name)}</b>` : '(none)'}</p>
@@ -908,6 +982,7 @@ function renderActorBox() {
   };
   box.querySelector('[data-a=cam]').onclick = () => openWebcam(o);
   box.querySelector('[data-a=edit]').onclick = () => { editPose = !editPose; renderActorBox(); status(editPose ? 'drag a handle: blue hands, green feet, yellow head, orange chest, pink hips (crouch)' : ''); };
+  box.querySelector('[data-a=preset]').onchange = (e) => { if (!e.target.value) return; a.pose = { preset: e.target.value, ...(a.pose && !a.pose.bones ? { look: a.pose.look, leftHand: a.pose.leftHand, rightHand: a.pose.rightHand } : {}) }; o.compiledKey = null; compileDirected(); autosave(); renderActorBox(); };
   box.querySelector('[data-a=breathe]').onchange = (e) => { a.breathe = e.target.checked; autosave(); };
   box.querySelector('[data-a=anim]').onclick = () => { clearPose(o); editPose = false; renderActorBox(); };
   box.querySelector('[data-a=savepose]').onclick = async () => {
@@ -996,13 +1071,13 @@ function renderMood() {
 let terrainPending = 0;
 function requestTerrain() { cancelAnimationFrame(terrainPending); terrainPending = requestAnimationFrame(() => { buildTerrain(false); for (const o of actors.values()) place(o); updateRing(); autosave(); }); }
 async function renderScenes() {
-  const list = (await all('scenes')).sort((x, y) => y.updated - x.updated), box = $('#sceneList');
-  if (!list.length) { box.innerHTML = '<p class="hint">Saved scenes show up here.</p>'; return; }
+  const list = (await listScenes()).sort((x, y) => y.updated - x.updated), box = $('#sceneList');
+  if (!list.length) { box.innerHTML = '<p class="hint">Scenes show up here.</p>'; return; }
   box.replaceChildren(...list.map((s) => {
-    const d = document.createElement('div'); d.className = 'scenerow' + (s.id === rec.savedId ? ' on' : '');
-    d.innerHTML = `<div><b>${esc(s.name)}</b><br><span class="meta">${new Date(s.updated).toLocaleString()} · ${s.actors.length} char · ${esc(s.terrain?.name || 'default village')}</span></div><button data-a="load">Load</button><button data-a="del" title="delete this saved scene">×</button>`;
+    const d = document.createElement('div'); d.className = 'scenerow' + (s.id === rec.id ? ' on' : '');
+    d.innerHTML = `<div><b>${esc(s.name)}</b><br><span class="meta">${new Date(s.updated).toLocaleString()} · ${(s.actors || []).length} char · ${esc(s.terrain?.name || 'default village')}</span></div><button data-a="load">Open</button><button data-a="del" title="delete this scene (its file)">×</button>`;
     d.querySelector('[data-a=load]').onclick = () => openSaved(s);
-    d.querySelector('[data-a=del]').onclick = async () => { if (!confirm(`Delete the saved scene “${s.name}”?`)) return; await del('scenes', s.id); if (rec.savedId === s.id) { rec.savedId = null; autosave(); } renderScenes(); renderMeta(); };
+    d.querySelector('[data-a=del]').onclick = async () => { if (!confirm(`Delete the scene “${s.name}” (scenes/${s.id}.json)?`)) return; await removeScene(s.id); if (rec.id === s.id) { await newScene(true); } renderScenes(); };
     return d;
   }));
 }
@@ -1010,10 +1085,15 @@ async function renderScenes() {
 $('#sceneName').onchange = () => { rec.name = $('#sceneName').value.trim() || 'Untitled scene'; autosave(); stage.drawCard(rec.name); };
 // go to a saved scene (it becomes the working copy)
 async function openSaved(s) {
+  await flushSave();
   stopBeds(); for (const v of speaking.values()) v.stop();
-  rec = { ...structuredClone(s), id: uid(), savedId: s.id, savedAt: s.updated };
-  delete rec.thumb;
-  await setCurrentScene(rec); selected = null; terrainKey = ''; await load(true); status(`opened “${s.name}”`);
+  await openScene(s.id); selected = null; selectedProp = null; terrainKey = ''; await load(true); status(`opened “${s.name}” (scenes/${s.id}.json)`);
+}
+async function flushSave() { if (saveT) { clearTimeout(saveT); saveT = 0; await setCurrentScene(rec); } }
+async function newScene(force) {
+  await flushSave();
+  const sc = emptyScene('Untitled scene', await freeSceneId('Untitled scene')); await setCurrentScene(sc);
+  selected = null; selectedProp = null; terrainKey = ''; await load(true); if (!force) status(`new scene: scenes/${sc.id}.json`);
 }
 // a small picture of the view, so saved scenes are easy to recognise in the finder
 function viewThumb() {
@@ -1021,19 +1101,16 @@ function viewThumb() {
   const c = document.createElement('canvas'); c.width = 160; c.height = 120; c.getContext('2d').drawImage(canvas, 0, 0, 160, 120);
   return c.toDataURL('image/jpeg', 0.75);
 }
+// the scene is its file and saves as you go; Save writes now (and a thumbnail), Save as new forks a copy
 async function saveScene(asNew) {
-  const id = asNew || !rec.savedId ? uid() : rec.savedId, now = Date.now();
-  const copy = { ...structuredClone(rec), id, updated: now, thumb: viewThumb() }; delete copy.savedId; delete copy.savedAt;
-  await put('scenes', id, copy);
-  rec.savedId = id; rec.savedAt = now; await setCurrentScene(rec);
-  renderMeta(); renderScenes(); status(`saved “${rec.name}”`);
+  if (asNew) { const copy = { ...structuredClone(rec), id: await freeSceneId(rec.name), created: Date.now() }; rec = copy; }
+  clearTimeout(saveT); saveT = 0; await setCurrentScene(rec);
+  put('meta', `thumb:${rec.id}`, viewThumb()).catch(() => {});
+  renderMeta(); renderScenes(); status(`saved scenes/${rec.id}.json`);
 }
 $('#save').onclick = () => saveScene(false);
 $('#saveAs').onclick = () => saveScene(true);
-$('#newScene').onclick = async () => {
-  if (rec.actors.length && !rec.savedId && !confirm('Start a new, empty scene? This one was never saved.')) return;
-  rec = emptyScene(); await setCurrentScene(rec); selected = null; terrainKey = ''; await load(true);
-};
+$('#newScene').onclick = () => newScene(false);
 $('#fullscreen').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : canvas.parentElement.requestFullscreen?.()); // the wrapper: subtitles come along
 $('#walkMode').onclick = () => {
   walking = !walking; keys.clear();
@@ -1090,8 +1167,9 @@ $('#importInput').onchange = async (e) => {
       if (!(await get('audio', au.id))) await put('audio', au.id, { id: au.id, name: au.name, data: unb64(au.data), created: Date.now() });
       if (au.cues && !(await loadCaptions(`db:${au.id}`))) await saveCaptions(`db:${au.id}`, { src: `db:${au.id}`, cues: au.cues, created: Date.now() });
     }
-    rec = { ...j.scene, id: uid(), savedId: null }; await setCurrentScene(rec); selected = null; terrainKey = ''; await load(true);
-    status(`imported “${rec.name}” (${j.characters.length} characters) as the current scene: save it to keep it in the list`);
+    await flushSave();
+    const { savedId, savedAt, thumb, ...sc } = j.scene; rec = { ...sc, id: await freeSceneId(sc.name) }; await setCurrentScene(rec); selected = null; selectedProp = null; terrainKey = ''; await load(true);
+    status(`imported “${rec.name}” (${j.characters.length} characters) as scenes/${rec.id}.json`);
   } catch (err) { status(`could not import ${f.name}: ${err.message}`); }
 };
 
@@ -1102,9 +1180,10 @@ function frame(now) {
   placeCamera(dt);
   for (const pr of props.values()) pr.built.update?.(t);
   for (const o of actors.values()) {
-    if (!o.data.pose) { o.mixer.update(dt); continue; }
-    if (o.tween) { o.tween.t = Math.min(1, o.tween.t + dt / 0.35); const k = o.tween.t * o.tween.t * (3 - 2 * o.tween.t); applyPose(o.rig, lerpPose(o.tween.from, o.data.pose, k)); if (o.tween.t >= 1) o.tween = null; }
-    else applyPose(o.rig, o.data.pose);
+    const rp = rawPose(o);
+    if (!rp) { o.mixer.update(dt); continue; }
+    if (o.tween) { o.tween.t = Math.min(1, o.tween.t + dt / 0.35); const k = o.tween.t * o.tween.t * (3 - 2 * o.tween.t); applyPose(o.rig, lerpPose(o.tween.from, rp, k)); if (o.tween.t >= 1) o.tween = null; }
+    else applyPose(o.rig, rp);
     if (o.data.breathe && !(hdrag && hdrag.o === o)) breathe(o.rig, t, (o.data.id.charCodeAt(0) % 7) * 0.9); // each breathes on its own rhythm
   }
   for (const o of actors.values()) updateLook(o, dt);
@@ -1125,7 +1204,8 @@ function frame(now) {
 // ---------------- open scene: a quick finder over the saved scenes (⌘O) ----------------
 async function openFinder() {
   document.querySelector('.finder')?.remove();
-  const scenes = (await all('scenes')).sort((a, b) => b.updated - a.updated);
+  const scenes = (await listScenes()).sort((a, b) => b.updated - a.updated);
+  for (const sc of scenes) sc.thumb = await get('meta', `thumb:${sc.id}`).catch(() => null);
   const wrap = document.createElement('div'); wrap.className = 'finder';
   wrap.innerHTML = `<div class="finderbox"><input placeholder="find a scene: its name, a character, the place…" spellcheck="false"><div class="finderlist"></div><p class="meta">↑ ↓ to choose · Enter to open · Esc to close</p></div>`;
   document.body.appendChild(wrap);
@@ -1138,9 +1218,9 @@ async function openFinder() {
     hits = scenes.filter((sc) => { const h = hay(sc).toLowerCase(); return words.every((w) => h.includes(w)); });
     k = Math.min(k, Math.max(0, hits.length - 1));
     list.replaceChildren(...(hits.length ? hits.map((sc, i) => {
-      const row = document.createElement('div'); row.className = 'findrow' + (i === k ? ' on' : '') + (sc.id === rec.savedId ? ' current' : '');
+      const row = document.createElement('div'); row.className = 'findrow' + (i === k ? ' on' : '') + (sc.id === rec.id ? ' current' : '');
       const who = (sc.actors || []).map((a) => a.name.split(' ')[0]);
-      row.innerHTML = `${sc.thumb ? `<img src="${sc.thumb}" alt="">` : '<div class="nothumb"></div>'}<div><b>${esc(sc.name)}</b>${sc.id === rec.savedId ? ' <span class="meta">(open)</span>' : ''}<br><span class="meta">${esc(sc.terrain?.name || 'default village')} · ${who.length ? esc([...new Set(who)].join(', ')) : 'nobody'} · ${new Date(sc.updated).toLocaleString()}</span></div>`;
+      row.innerHTML = `${sc.thumb ? `<img src="${sc.thumb}" alt="">` : '<div class="nothumb"></div>'}<div><b>${esc(sc.name)}</b>${sc.id === rec.id ? ' <span class="meta">(open)</span>' : ''}<br><span class="meta">${esc(sc.terrain?.name || 'default village')} · ${who.length ? esc([...new Set(who)].join(', ')) : 'nobody'} · ${new Date(sc.updated).toLocaleString()}</span></div>`;
       row.onmouseenter = () => { k = i; list.querySelectorAll('.findrow').forEach((r, j) => r.classList.toggle('on', j === k)); };
       row.onclick = () => { close(); openSaved(sc); };
       return row;
@@ -1158,6 +1238,22 @@ async function openFinder() {
   wrap.onpointerdown = (e) => { if (e.target === wrap) close(); };
   draw(); input.focus();
 }
+
+// ---------------- shots: named viewpoints stored in the scene ----------------
+function renderShots() {
+  const box = $('#shotBox'); if (!box) return;
+  rec.shots ||= [];
+  box.innerHTML = rec.shots.map((sh, k) => `<div class="scenerow"><div><b>${esc(sh.name)}</b></div><button data-go="${k}">Go</button><button data-rm="${k}" title="remove this shot">×</button></div>`).join('') + '<div class="buttons"><button id="addShot" style="grid-column: span 2">+ Save this view as a shot</button></div>';
+  box.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => goShot(rec.shots[+b.dataset.go]); });
+  box.querySelectorAll('[data-rm]').forEach((b) => { b.onclick = () => { rec.shots.splice(+b.dataset.rm, 1); autosave(); renderShots(); }; });
+  $('#addShot').onclick = () => {
+    const name = prompt('Name this shot', `shot ${rec.shots.length + 1}`); if (!name) return;
+    const look = cam.pos.clone().addScaledVector(fwd(), 5);
+    rec.shots.push({ name, pos: cam.pos.toArray().map((v) => +v.toFixed(3)), look: look.toArray().map((v) => +v.toFixed(3)) }); autosave(); renderShots();
+  };
+}
+// a shot: { name, pos: <point>, look: <point> } (points can be references: "rocking-chair", { at: "Reginald", offset: [...] })
+function goShot(sh) { if (walking) $('#walkMode').click(); const p = resolvePoint(sh.pos), t = resolvePoint(sh.look); if (!p || !t) { status(`shot “${sh.name}” points at something that isn't in the scene`); return; } flyTo(p, t); }
 
 // ---------------- the top bar ----------------
 const press = (id) => () => $(id).click();
@@ -1189,6 +1285,6 @@ addEventListener('keydown', (e) => { // ⌘S / Ctrl+S save, with Shift: save as 
   if ((e.metaKey || e.ctrlKey) && e.code === 'KeyO') { e.preventDefault(); openFinder(); }
 });
 
-window.__editor = { openFinder, startRec, stopRec, alignScript, loadCaptions, speaking, speak, playScene, renderActorBox, THREE, pickActor, pickProp, setRay, __ray: () => ray, handles, get selected() { return selected; }, get selectedProp() { return selectedProp; }, get rec() { return rec; }, actors, props, spawnProp, seatActor, selectProp, openMenu, get picking() { return picking; }, select, addActor, load, camera, cam, stage, poseFromImage, setPose, get world() { return world; }, set editPose(v) { editPose = v; } };
+window.__editor = { goShot, resolvePoint, refreshLibrary, get library() { return library; }, openFinder, startRec, stopRec, alignScript, loadCaptions, speaking, speak, playScene, renderActorBox, THREE, pickActor, pickProp, setRay, __ray: () => ray, handles, get selected() { return selected; }, get selectedProp() { return selectedProp; }, get rec() { return rec; }, actors, props, spawnProp, seatActor, selectProp, openMenu, get picking() { return picking; }, select, addActor, load, camera, cam, stage, poseFromImage, setPose, get world() { return world; }, set editPose(v) { editPose = v; } };
 await load(true);
 requestAnimationFrame(frame);

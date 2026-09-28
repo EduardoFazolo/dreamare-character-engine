@@ -211,6 +211,11 @@ A fourth tab composes scenes: a terrain from Scenarios plus characters from the 
     - a 0.45 m hips crouch leaves the planted feet where they were;
     - every rotation is kept unit-length, so after any sequence of drags the bones carry no scale (measured: 0.0000). Before this fix, drift compounded into stretched, giant limbs.
     - Accuracy on real photos is MediaPipe's: good for clear full-body shots, poor for tiny or occluded figures, which report "no person found".
+- **Scenes are files** in `scenes/` (format: `scenes/README.md`). The editor saves as you go, and reloads live when a file changes on disk, unless it has unsaved edits.
+  - Files can say where things are by reference (`"place": { "from": "spawn", "right": -1.5, "forward": 6 }`, `"face": "rocking-chair"`, characters by library name) and how people stand (`"pose": { "preset": "crouch", "look": "reginald", "rightHand": { "at": "rocking-chair" } }`, compiled with the IK).
+  - **Shots** are named viewpoints, whose position and target can also be references.
+  - `library/characters.json` (written by the editor) lists the characters a scene can use.
+  - Scenes saved in the browser before this are copied out to files once. Without the dev server (a static build), scenes fall back to browser storage.
 - **Scenes:**
   - The current scene autosaves as a working copy. It can be named (the name is the title card), saved (**Save scene** updates the saved one, **Save as new** forks it), and **loaded** from the list of saved scenes.
   - **New scene** starts empty. Storage is this browser's IndexedDB.

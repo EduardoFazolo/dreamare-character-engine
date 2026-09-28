@@ -291,3 +291,58 @@ export function sitPose(rig) {
 }
 // the hips joint in the character root's own space (unscaled), for the current bones
 export function hipsAt(rig) { rig.root.updateMatrixWorld(true); return rig.root.worldToLocal(rig.bones.Hips.getWorldPosition(new THREE.Vector3())); }
+
+// ---------------- directed poses: a preset plus targets, compiled with the IK ----------------
+// spec = { preset: 'stand' | 'sit' | 'crouch' | 'kneel' | 'arms-up' | 'reach' | 't-pose',
+//          look: [x,y,z] (world),  leftHand / rightHand / leftFoot / rightFoot: [x,y,z] (world),  hipsDown: metres }
+// Targets arrive already resolved to world points (the editor resolves names like "rocking-chair" or "camera").
+export const PRESETS = ['stand', 'sit', 'crouch', 'kneel', 'arms-up', 'reach', 't-pose'];
+function standPose(rig) {
+  resetRest(rig);
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  for (const s of ['Left', 'Right']) {
+    const x = s === 'Left' ? 1 : -1; // Left bones sit on the character's +x side
+    aim(rig, `${s}Arm`, V(0.14 * x, -1, 0.04));
+    aim(rig, `${s}ForeArm`, V(0.05 * x, -1, 0.14));
+  }
+  rig.root.updateMatrixWorld(true);
+}
+function presetPose(rig, name) {
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  if (name === 't-pose') { resetRest(rig); return; }
+  if (name === 'sit') { sitPose(rig); return; }
+  standPose(rig);
+  if (name === 'arms-up') for (const s of ['Left', 'Right']) { const x = s === 'Left' ? 1 : -1; aim(rig, `${s}Arm`, V(0.25 * x, 1, 0.1)); aim(rig, `${s}ForeArm`, V(0.1 * x, 1, 0.05)); }
+  if (name === 'reach') { aim(rig, 'RightArm', V(-0.12, 0.05, 1)); aim(rig, 'RightForeArm', V(-0.05, 0.08, 1)); }
+  if (name === 'crouch' || name === 'kneel') {
+    const ctx = dragStart(rig), h0 = handlePos(rig, 'Hips');
+    const legLen = ctx.reach.Left;
+    if (name === 'crouch') {
+      dragHandle(rig, 'Hips', h0.clone().add(V(0, -legLen * 0.38, -legLen * 0.08)), { ...ctx, handle0: h0 });
+      for (const n of ['Spine', 'Spine1']) rig.bones[n].quaternion.multiply(_q.setFromAxisAngle(V(1, 0, 0), 0.18)).normalize(); // lean in
+    } else { // kneeling on the left knee, the right foot planted forward
+      rig.bones.Hips.position.y -= legLen * 0.42 / (rig.skelRoot.scale.y || 1);
+      rig.root.updateMatrixWorld(true);
+      aim(rig, 'RightUpLeg', V(-0.05, -0.2, 1)); aim(rig, 'RightLeg', V(0, -1, 0.02)); aim(rig, 'RightFoot', V(0, -0.35, 1));
+      aim(rig, 'LeftUpLeg', V(0.05, -1, 0.15)); aim(rig, 'LeftLeg', V(0, -0.1, -1)); aim(rig, 'LeftFoot', V(0, -0.2, -1));
+      rig.root.updateMatrixWorld(true); ground(rig);
+    }
+  }
+  rig.root.updateMatrixWorld(true);
+}
+// compile a spec to a stored pose ({ bones, hips }); world targets need the character already placed in the scene
+export function compilePose(rig, spec) {
+  presetPose(rig, spec.preset || 'stand');
+  if (spec.hipsDown) {
+    const ctx = dragStart(rig), h0 = handlePos(rig, 'Hips');
+    dragHandle(rig, 'Hips', h0.clone().add(new THREE.Vector3(0, -spec.hipsDown / (rig.root.scale.y || 1), 0)), { ...ctx, handle0: h0 });
+  }
+  const ctx = { ...dragStart(rig) };
+  for (const [key, bone] of [['leftHand', 'LeftHand'], ['rightHand', 'RightHand'], ['leftFoot', 'LeftFoot'], ['rightFoot', 'RightFoot']]) {
+    if (!Array.isArray(spec[key])) continue;
+    dragHandle(rig, bone, toRoot(rig, new THREE.Vector3(...spec[key])), ctx);
+  }
+  if (Array.isArray(spec.look)) dragHandle(rig, 'Head', toRoot(rig, new THREE.Vector3(...spec.look)), ctx);
+  rig.root.updateMatrixWorld(true);
+  return snapshot(rig);
+}
