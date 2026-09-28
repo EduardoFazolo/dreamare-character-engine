@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dreamare Slides</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <aside id="panel">
+    <input id="deckName" class="scenename" spellcheck="false" title="the deck's name" />
+    <p id="deckMeta" class="meta"></p>
+    <div class="buttons">
+      <button id="newDeck">New deck</button>
+      <button id="addBlank" title="a slide with no picture (dark)">+ Text slide</button>
+      <button id="exportVideo" class="primary" style="grid-column: span 2" title="a vertical 1080x1920 slideshow video for TikTok">Export video</button>
+      <button id="exportPng" style="grid-column: span 2" title="the slides as numbered 1080x1920 PNGs in a zip">Export as images</button>
+    </div>
+    <details open><summary>Selected slide</summary><div id="slideBox"></div></details>
+    <details open><summary>Decks</summary><div id="deckList"></div></details>
+  </aside>
+  <main>
+    <section id="stage" class="slidestage">
+      <div class="slidemain"><canvas id="slideView" width="1080" height="1920"></canvas></div>
+      <aside class="sidepanel slidepics">
+        <h2>Pictures</h2>
+        <p class="meta">📷 Snapshot (K) in the editor lands here; or add your own.</p>
+        <div class="buttons"><button id="upload" style="grid-column: span 2">Add image…</button></div>
+        <input type="file" id="uploadInput" accept="image/*" multiple hidden />
+        <div id="shotList" class="shotlist"></div>
+      </aside>
+    </section>
+    <div id="strip" class="strip"></div>
+    <p id="status">click a picture to put it on the selected slide · write the text in the panel</p>
+  </main>
+  <script type="module" src="/src/slides/main.js"></script>
+</body>
+</html>

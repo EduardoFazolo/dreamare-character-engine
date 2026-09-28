@@ -120,10 +120,19 @@ The Scenarios tab has two views: **World map** and **Scene**.
   - Archetypes: village, farmland, pine moor, dead wood, fungal, birch mere, heath, salt flats, willow fen.
 - **The village is exact**: `VILLAGE` rebuilds the original scene bit for bit. Every original feature keeps its place in the one random sequence, gated by a switch, and every added feature has its own random stream. This was verified by fingerprinting every mesh's vertices, colours, UVs, normals, transforms, material colours and texture pixels across 8 configurations, before and after.
 
+## The top bar
+
+Every tab shares a desktop-style bar (`src/menubar.js`): **DREAMARE** and the menus on the left, the five tabs on the right. Menus open on click, switch on hover while one is open, and close on Esc or a click outside.
+
 ## Scene editor (`/editor.html`)
 
 A fourth tab composes scenes: a terrain from Scenarios plus characters from the Characters tab (`src/editor/main.js`, storage in `src/store.js`).
 
+- **Menus:**
+  - **Scene:** New, Save (⌘S), Save as new (⇧⌘S), **Open scene… (⌘O)**, Import scene file…, Export scene file, Export GLB.
+    - **Open scene** is a finder over the saved scenes. Type any part of a scene's name, a character's name, the place or a prop (every word must match), use ↑ ↓, and Enter to go there. Each saved scene keeps a small thumbnail of the view from when it was saved.
+  - **View:** Full screen, Walk mode (checked while on), Reset view (Home).
+  - **Play:** Play scene / Stop (P), Record vertical video / Stop and save, Snapshot for Slides (K).
 - **Getting things in:**
   - **Characters → Send to scene ▸** runs the normal validated export (unlit materials), names the character with the name generator, takes a thumbnail, and adds it to the current scene. Press again for another; the character goes into the library.
   - **Scenarios → Set scene ▸** sets the current scene's terrain. It's stored as the generator's inputs (seed, biome, neighbours, mood) and rebuilt in the editor, so it's identical and tiny.
@@ -208,6 +217,35 @@ A fourth tab composes scenes: a terrain from Scenarios plus characters from the 
 - **Export:**
   - **Export GLB** writes the whole scene as one file: baked terrain plus characters in their current pose with their original materials, and `extras.scene` with the terrain inputs and actors. Validator: 0 errors; skinned-mesh-under-parent warnings only.
   - **Export file** writes a `.scene.json` with the characters' GLBs inside. **Import** restores it anywhere, library included.
+
+## Slides (`/slides.html`)
+
+Vertical slideshow decks for TikTok, from your own scenes and your own words (`src/slides/main.js`).
+
+- **Pictures:** in the Editor, frame a shot and press **📷 Snapshot** (or **K**). A clean 1080×1920 frame, with no selection ring, handles, subtitles or title card, lands in the Slides tab's Pictures panel. **Add image…** takes your own files too.
+- **Slides:**
+  - each is a picture plus your text;
+  - look: TikTok box, outlined, or the dreamy serif;
+  - position: top / middle / low, all clear of TikTok's bottom fifth;
+  - text size, and how long it stays on screen (1–10 s).
+  - Reorder, duplicate or delete slides; **+ Text slide** makes a dark slide with just text.
+- **Decks** are saved in this browser (name them, reopen them from the list).
+- **Export video:** a 1080×1920 MP4 (WebM where MP4 isn't supported) with each slide for its own duration and a soft 0.4 s cut between them. **Export as images** gives numbered PNGs in a zip.
+
+## Items (`/items.html`)
+
+An inventory screen and item editor (`src/items/`).
+
+- **Items are files:** one JSON per item in `items/`, holding your fields (name, category, held, stored, description, lore, effects as name/value pairs) and a **model**.
+  - Edits in the tab save to the file automatically (a dev-server endpoint in `vite.config.js`; ⌘S saves at once).
+  - A file changed on disk, by hand or by Claude from a prompt, updates the open page live. Your unsaved edits are never overwritten by a change from disk.
+- **The screen:** category tabs, item slots with thumbnails, a turning model in the PS2 look on a softly lit backdrop, then the name, description, lore, effects and No. Held / Stored. Drag to turn the model, the wheel zooms, double-click resumes the turntable.
+- **The model** is a list of simple parts (`src/items/model.js`), in metres, sitting on y = 0 and facing +Z.
+  - Shapes: box, cylinder, cone, sphere (partial too), torus (arcs too), and lathe (a profile of radius/height points spun around the vertical axis, for lanterns, bottles and bells).
+  - Materials: brass, iron, rust, silver, wood, bone, leather, cloth, paper, stone, dark, and glass / glow, which are lit from within.
+  - Each part has a name, colour, position, rotation (degrees) and scale. The Model section edits all of it, lathe profiles included, and adds, duplicates or deletes parts.
+- **Menus:** Item → New, Save, Duplicate, Export model (GLB, with the item's fields as metadata), Delete; View → Turntable.
+- Two example items, an oil lantern and a telephone receiver, come with a model and a name only.
 
 ## Names (`/names.html`)
 

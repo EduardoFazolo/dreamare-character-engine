@@ -78,10 +78,10 @@ export function createStage(canvas) {
     renderer.setSize(Math.round(w * scale), Math.round(h * scale), false);
     fitCard();
   }
-  function render(t) {
+  function render(t, { card: showCard = true } = {}) {
     post.uniforms.time.value = t;
     const a = t - cardT0; // card: fade in, hold, fade out
-    card.material.opacity = Math.min(THREE.MathUtils.smoothstep(a, 0.4, 1.4), 1 - THREE.MathUtils.smoothstep(a, 4.2, 5.4)); card.visible = card.material.opacity > 0.001;
+    card.material.opacity = Math.min(THREE.MathUtils.smoothstep(a, 0.4, 1.4), 1 - THREE.MathUtils.smoothstep(a, 4.2, 5.4)); card.visible = showCard && card.material.opacity > 0.001;
     renderer.setRenderTarget(lowRT); renderer.render(scene, camera);
     renderer.setRenderTarget(null); renderer.render(postScene, postCam);
   }

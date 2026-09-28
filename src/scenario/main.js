@@ -5,6 +5,8 @@ import { PS2 } from '../head.js';
 import { generate } from './gen.js';
 import { createStage, bakeForExport } from './stage.js';
 import { setSceneTerrain } from '../store.js';
+import { menubar } from '../menubar.js';
+menubar();
 import { createPhoneAudio } from './audio.js';
 import { placeName } from '../names/gen.js';
 import { VILLAGE, randomBiome } from './biomes.js';

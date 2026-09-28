@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dreamare Items</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <aside id="panel">
+    <input id="itemName" class="scenename" spellcheck="false" placeholder="item name" />
+    <p id="itemMeta" class="meta"></p>
+    <details open><summary>Item</summary><div id="itemBox"></div></details>
+    <details open><summary>Effects</summary><div id="effectsBox"></div></details>
+    <details open><summary>Model</summary><div id="modelBox"></div></details>
+  </aside>
+  <main>
+    <section class="inv">
+      <header class="invhead"><span class="invtitle">Inventory</span><div id="cats" class="cats"></div></header>
+      <div class="invbody">
+        <div id="slots" class="slots"></div>
+        <div class="invmid">
+          <div class="invview"><canvas id="itemView"></canvas></div>
+          <div class="counts"><div><span>No. Held</span><b id="heldOut"></b></div><div><span>Stored</span><b id="storedOut"></b></div></div>
+        </div>
+        <div class="invtext">
+          <h2 id="nameOut"></h2>
+          <div id="descOut" class="desc"></div>
+          <div id="loreOut" class="lore"></div>
+        </div>
+        <div class="inveffects"><h3>Effects</h3><div id="effectsOut"></div></div>
+      </div>
+    </section>
+    <p id="status">items are files in items/ · edits save to them automatically</p>
+  </main>
+  <script type="module" src="/src/items/main.js"></script>
+</body>
+</html>

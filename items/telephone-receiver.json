@@ -1,0 +1,309 @@
+{
+  "id": "telephone-receiver",
+  "name": "Telephone Receiver",
+  "category": "Tools",
+  "held": 1,
+  "stored": 0,
+  "description": "",
+  "lore": "",
+  "effects": [],
+  "model": {
+    "parts": [
+      {
+        "name": "mouthpiece",
+        "shape": "cylinder",
+        "material": "dark",
+        "color": "#2b2a2e",
+        "pos": [
+          0,
+          0.1,
+          0.012
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radiusTop": 0.03,
+        "radiusBottom": 0.024,
+        "height": 0.028,
+        "segments": 10
+      },
+      {
+        "name": "mouthpiece grille",
+        "shape": "cylinder",
+        "material": "iron",
+        "color": "#8a8680",
+        "pos": [
+          0,
+          0.1,
+          0.027
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radiusTop": 0.02,
+        "radiusBottom": 0.02,
+        "height": 0.004,
+        "segments": 10
+      },
+      {
+        "name": "handle",
+        "shape": "box",
+        "material": "dark",
+        "color": "#2b2a2e",
+        "pos": [
+          0,
+          0.19,
+          -0.012
+        ],
+        "rot": [
+          -8,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "size": [
+          0.028,
+          0.16,
+          0.022
+        ]
+      },
+      {
+        "name": "earpiece",
+        "shape": "cylinder",
+        "material": "dark",
+        "color": "#2b2a2e",
+        "pos": [
+          0,
+          0.28,
+          0.012
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radiusTop": 0.032,
+        "radiusBottom": 0.026,
+        "height": 0.03,
+        "segments": 10
+      },
+      {
+        "name": "earpiece holes",
+        "shape": "cylinder",
+        "material": "iron",
+        "color": "#8a8680",
+        "pos": [
+          0,
+          0.28,
+          0.028
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radiusTop": 0.02,
+        "radiusBottom": 0.02,
+        "height": 0.004,
+        "segments": 10
+      },
+      {
+        "name": "cord coil 1",
+        "shape": "torus",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0.0,
+          0.012,
+          0.0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "tube": 0.003,
+        "segments": 8
+      },
+      {
+        "name": "cord coil 2",
+        "shape": "torus",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0.0,
+          0.023,
+          0.0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "tube": 0.003,
+        "segments": 8
+      },
+      {
+        "name": "cord coil 3",
+        "shape": "torus",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0.0,
+          0.034,
+          0.0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "tube": 0.003,
+        "segments": 8
+      },
+      {
+        "name": "cord coil 4",
+        "shape": "torus",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0.0,
+          0.045,
+          0.0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "tube": 0.003,
+        "segments": 8
+      },
+      {
+        "name": "cord coil 5",
+        "shape": "torus",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0.0,
+          0.055999999999999994,
+          0.0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "tube": 0.003,
+        "segments": 8
+      },
+      {
+        "name": "cord coil 6",
+        "shape": "torus",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0.0,
+          0.06699999999999999,
+          0.0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "tube": 0.003,
+        "segments": 8
+      },
+      {
+        "name": "cord to handset",
+        "shape": "cylinder",
+        "material": "dark",
+        "color": "#1e1d20",
+        "pos": [
+          0,
+          0.086,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radiusTop": 0.004,
+        "radiusBottom": 0.004,
+        "height": 0.02,
+        "segments": 5
+      }
+    ]
+  }
+}

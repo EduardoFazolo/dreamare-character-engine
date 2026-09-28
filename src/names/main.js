@@ -1,5 +1,7 @@
 // Names tab: browse seeded people / place names, copy them, keep the good ones.
 import { personName, placeName } from './gen.js';
+import { menubar } from '../menubar.js';
+menubar();
 
 const $ = (s) => document.querySelector(s);
 // [key, label, min, max, step]

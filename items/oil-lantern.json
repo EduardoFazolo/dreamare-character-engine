@@ -1,0 +1,339 @@
+{
+  "id": "oil-lantern",
+  "name": "Oil Lantern",
+  "category": "Tools",
+  "held": 1,
+  "stored": 0,
+  "description": "",
+  "lore": "",
+  "effects": [],
+  "model": {
+    "parts": [
+      {
+        "name": "fuel tank",
+        "shape": "lathe",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "segments": 10,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0.07,
+            0
+          ],
+          [
+            0.078,
+            0.012
+          ],
+          [
+            0.074,
+            0.03
+          ],
+          [
+            0.05,
+            0.036
+          ],
+          [
+            0,
+            0.036
+          ]
+        ]
+      },
+      {
+        "name": "glass",
+        "shape": "lathe",
+        "material": "glass",
+        "color": "#f2c27a",
+        "pos": [
+          0,
+          0.036,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "segments": 10,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0.042,
+            0
+          ],
+          [
+            0.058,
+            0.04
+          ],
+          [
+            0.063,
+            0.09
+          ],
+          [
+            0.054,
+            0.14
+          ],
+          [
+            0.034,
+            0.165
+          ],
+          [
+            0,
+            0.165
+          ]
+        ]
+      },
+      {
+        "name": "wick flame",
+        "shape": "cone",
+        "material": "glow",
+        "color": "#ffd890",
+        "pos": [
+          0,
+          0.09,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.012,
+        "height": 0.04,
+        "segments": 6
+      },
+      {
+        "name": "cage bar 1",
+        "shape": "box",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          0.046669047558312145,
+          0.12,
+          0.04666904755831214
+        ],
+        "rot": [
+          0,
+          -45,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "size": [
+          0.006,
+          0.17,
+          0.006
+        ]
+      },
+      {
+        "name": "cage bar 2",
+        "shape": "box",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          -0.04666904755831214,
+          0.12,
+          0.046669047558312145
+        ],
+        "rot": [
+          0,
+          -135,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "size": [
+          0.006,
+          0.17,
+          0.006
+        ]
+      },
+      {
+        "name": "cage bar 3",
+        "shape": "box",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          -0.04666904755831215,
+          0.12,
+          -0.04666904755831214
+        ],
+        "rot": [
+          0,
+          -225,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "size": [
+          0.006,
+          0.17,
+          0.006
+        ]
+      },
+      {
+        "name": "cage bar 4",
+        "shape": "box",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          0.046669047558312124,
+          0.12,
+          -0.04666904755831215
+        ],
+        "rot": [
+          0,
+          -315,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "size": [
+          0.006,
+          0.17,
+          0.006
+        ]
+      },
+      {
+        "name": "cage ring",
+        "shape": "torus",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          0,
+          0.2,
+          0
+        ],
+        "rot": [
+          90,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.05,
+        "tube": 0.005,
+        "segments": 12
+      },
+      {
+        "name": "cap",
+        "shape": "cone",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          0,
+          0.228,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.058,
+        "height": 0.05,
+        "segments": 10
+      },
+      {
+        "name": "vent",
+        "shape": "cylinder",
+        "material": "dark",
+        "color": "#3a342c",
+        "pos": [
+          0,
+          0.262,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radiusTop": 0.012,
+        "radiusBottom": 0.014,
+        "height": 0.026,
+        "segments": 8
+      },
+      {
+        "name": "handle",
+        "shape": "torus",
+        "material": "brass",
+        "color": "#b8914e",
+        "pos": [
+          0,
+          0.305,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "radius": 0.042,
+        "tube": 0.006,
+        "segments": 14
+      }
+    ]
+  }
+}

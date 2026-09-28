@@ -8,11 +8,9 @@
 </head>
 <body>
   <aside id="panel">
-    <h1>DREAMARE</h1>
-    <nav class="tabs"><a href="/">Characters</a><a href="/scenario.html">Scenarios</a><a href="/names.html">Names</a><a class="on" href="/editor.html">Editor</a></nav>
     <input id="sceneName" class="scenename" spellcheck="false" title="the scene's name" />
     <p id="sceneMeta" class="meta"></p>
-    <div class="buttons">
+    <div class="buttons" hidden id="sceneButtons">
       <button id="save" class="primary" title="save this scene (updates it if it was saved before)">Save scene</button>
       <button id="saveAs" title="save as a new scene">Save as new</button>
       <button id="newScene" title="start an empty scene">New scene</button>
@@ -23,7 +21,8 @@
       <input type="file" id="importInput" accept=".json,application/json" hidden />
       <button id="playScene" class="primary" title="everyone with a voice line speaks (P)">▶ Play scene</button>
       <button id="record" title="record a vertical 1080x1920 clip with the voices and subtitles (click again to stop and save)">● Rec (vertical)</button>
-      <button id="walkMode" style="grid-column: span 2" title="walk around with WASD, look with the mouse">Walk (WASD)</button>
+      <button id="walkMode" title="walk around with WASD, look with the mouse">Walk (WASD)</button>
+      <button id="snapshot" title="a clean vertical 1080x1920 picture of this view, for the Slides tab (K)">📷 Snapshot</button>
     </div>
     <details open><summary>Terrain</summary><div id="terrainBox"></div></details>
     <details open><summary>Characters in the scene</summary><div id="actorList"></div><div id="actorBox"></div></details>

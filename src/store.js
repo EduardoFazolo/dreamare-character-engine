@@ -4,15 +4,17 @@
 //   meta:       'current' -> the scene being edited (a working copy; savedId links it to a saved scene)
 //   poses:      the pose library                          { id, name, thumb, pose: { bones, hips }, created }
 //   audio:      imported voice lines                      { id, name, data: ArrayBuffer, created }
+//   decks:      slide decks (Slides tab)                  { id, name, slides: [{ id, image, text, style }], created, updated }
+//   shots:      editor snapshots for slides               { id, image (jpeg data url), scene, actors, place, props, created }
 //   captions:   per audio source ('asset:…' / 'db:…')     { src, cues: [{ start, end, text }], model, created }
 // Files (scene export / import) are the portable save; this is per-browser convenience.
 
-const DB = 'dreamare', VERSION = 4; // 2: + poses, 3: + audio, 4: + captions
+const DB = 'dreamare', VERSION = 5; // 2: + poses, 3: + audio, 4: + captions, 5: + decks, shots
 let dbp = null;
 function db() {
   dbp ||= new Promise((ok, fail) => {
     const req = indexedDB.open(DB, VERSION);
-    req.onupgradeneeded = () => { const d = req.result; for (const s of ['characters', 'scenes', 'meta', 'poses', 'audio', 'captions']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s); };
+    req.onupgradeneeded = () => { const d = req.result; for (const s of ['characters', 'scenes', 'meta', 'poses', 'audio', 'captions', 'decks', 'shots']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s); };
     req.onsuccess = () => ok(req.result);
     req.onerror = () => fail(req.error);
   });

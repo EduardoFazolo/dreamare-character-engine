@@ -9,6 +9,7 @@ import { ps2Material } from '../head.js';
 import { generate } from '../scenario/gen.js';
 import { createStage, bakeForExport } from '../scenario/stage.js';
 import { VILLAGE } from '../scenario/biomes.js';
+import { menubar } from '../menubar.js';
 import { makeRig, detect, retarget, applyPose, snapshot, lerpPose, breathe, HANDLES, handlePos, dragHandle, dragStart, toRoot, toWorld, sitPose, hipsAt } from './pose.js';
 import { PROPS, CATEGORIES, buildProp } from '../scenario/props.js';
 import { assetList, importedList, importFile, loadVoice, playVoice, setListener, audioCtx, rawBytes, voiceStream } from './voice.js';
@@ -434,6 +435,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Home') { resetCamera(false); }
   if (e.code === 'Escape') { closeMenu(); if (picking) { endPicking(); status('cancelled'); } }
   if (e.code === 'KeyP') { $('#playScene').click(); return; } // play / stop the scene
+  if (e.code === 'KeyK' && !e.repeat) { takeShot(); return; } // snapshot for slides
   if (e.code === 'KeyF' && selected) frameActor(selected);
   const pr = selectedProp && props.get(selectedProp);
   if (pr) {
@@ -711,6 +713,21 @@ function syncAmbience(gesture = false) { // start / stop beds to match the scene
 const armAmbience = () => { if (!ambienceArmed && Object.keys(rec?.ambience || {}).length) syncAmbience(true); };
 addEventListener('pointerdown', armAmbience, true); addEventListener('keydown', armAmbience, true);
 
+// ---------------- snapshot for slides: a clean vertical 1080x1920 frame of what the camera sees ----------------
+async function takeShot() {
+  if (recorder) { status('stop the recording first'); return; }
+  const res = terrainParams().res, ringWas = ring.visible, handlesWas = handles.visible, capsWas = capsBox.style.visibility;
+  ring.visible = false; handles.visible = false;
+  stage.setRes(res, true); stage.render(performance.now() / 1000, { card: false }); // one vertical frame: no editor markers, no title card
+  const c = document.createElement('canvas'); c.width = 1080; c.height = 1920; c.getContext('2d').drawImage(canvas, 0, 0, 1080, 1920);
+  stage.setRes(res, false); ring.visible = ringWas; handles.visible = handlesWas; capsBox.style.visibility = capsWas;
+  const id = uid();
+  await put('shots', id, { id, image: c.toDataURL('image/jpeg', 0.9), scene: rec.name, place: rec.terrain?.name, actors: rec.actors.map((a) => a.name), props: (rec.props || []).map((p) => p.kind), created: Date.now() });
+  canvas.classList.add('flash'); setTimeout(() => canvas.classList.remove('flash'), 180);
+  $('#status').innerHTML = `snapshot saved for <a href="/slides.html">Slides ▸</a> (1080×1920)`;
+}
+$('#snapshot').onclick = takeShot;
+
 // ---------------- context menu (right click) ----------------
 let menuEl = null, menuT = 0;
 function closeMenu() { menuEl?.remove(); menuEl = null; }
@@ -984,19 +1001,29 @@ async function renderScenes() {
   box.replaceChildren(...list.map((s) => {
     const d = document.createElement('div'); d.className = 'scenerow' + (s.id === rec.savedId ? ' on' : '');
     d.innerHTML = `<div><b>${esc(s.name)}</b><br><span class="meta">${new Date(s.updated).toLocaleString()} · ${s.actors.length} char · ${esc(s.terrain?.name || 'default village')}</span></div><button data-a="load">Load</button><button data-a="del" title="delete this saved scene">×</button>`;
-    d.querySelector('[data-a=load]').onclick = async () => {
-      rec = { ...structuredClone(s), id: uid(), savedId: s.id, savedAt: s.updated };
-      await setCurrentScene(rec); selected = null; terrainKey = ''; await load(true); status(`loaded “${s.name}”`);
-    };
+    d.querySelector('[data-a=load]').onclick = () => openSaved(s);
     d.querySelector('[data-a=del]').onclick = async () => { if (!confirm(`Delete the saved scene “${s.name}”?`)) return; await del('scenes', s.id); if (rec.savedId === s.id) { rec.savedId = null; autosave(); } renderScenes(); renderMeta(); };
     return d;
   }));
 }
 
 $('#sceneName').onchange = () => { rec.name = $('#sceneName').value.trim() || 'Untitled scene'; autosave(); stage.drawCard(rec.name); };
+// go to a saved scene (it becomes the working copy)
+async function openSaved(s) {
+  stopBeds(); for (const v of speaking.values()) v.stop();
+  rec = { ...structuredClone(s), id: uid(), savedId: s.id, savedAt: s.updated };
+  delete rec.thumb;
+  await setCurrentScene(rec); selected = null; terrainKey = ''; await load(true); status(`opened “${s.name}”`);
+}
+// a small picture of the view, so saved scenes are easy to recognise in the finder
+function viewThumb() {
+  stage.render(performance.now() / 1000, { card: false });
+  const c = document.createElement('canvas'); c.width = 160; c.height = 120; c.getContext('2d').drawImage(canvas, 0, 0, 160, 120);
+  return c.toDataURL('image/jpeg', 0.75);
+}
 async function saveScene(asNew) {
   const id = asNew || !rec.savedId ? uid() : rec.savedId, now = Date.now();
-  const copy = { ...structuredClone(rec), id, updated: now }; delete copy.savedId; delete copy.savedAt;
+  const copy = { ...structuredClone(rec), id, updated: now, thumb: viewThumb() }; delete copy.savedId; delete copy.savedAt;
   await put('scenes', id, copy);
   rec.savedId = id; rec.savedAt = now; await setCurrentScene(rec);
   renderMeta(); renderScenes(); status(`saved “${rec.name}”`);
@@ -1095,6 +1122,73 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-window.__editor = { startRec, stopRec, alignScript, loadCaptions, speaking, speak, playScene, renderActorBox, THREE, pickActor, pickProp, setRay, __ray: () => ray, handles, get selected() { return selected; }, get selectedProp() { return selectedProp; }, get rec() { return rec; }, actors, props, spawnProp, seatActor, selectProp, openMenu, get picking() { return picking; }, select, addActor, load, camera, cam, stage, poseFromImage, setPose, get world() { return world; }, set editPose(v) { editPose = v; } };
+// ---------------- open scene: a quick finder over the saved scenes (⌘O) ----------------
+async function openFinder() {
+  document.querySelector('.finder')?.remove();
+  const scenes = (await all('scenes')).sort((a, b) => b.updated - a.updated);
+  const wrap = document.createElement('div'); wrap.className = 'finder';
+  wrap.innerHTML = `<div class="finderbox"><input placeholder="find a scene: its name, a character, the place…" spellcheck="false"><div class="finderlist"></div><p class="meta">↑ ↓ to choose · Enter to open · Esc to close</p></div>`;
+  document.body.appendChild(wrap);
+  const input = wrap.querySelector('input'), list = wrap.querySelector('.finderlist');
+  let hits = [], k = 0;
+  const hay = (sc) => [sc.name, sc.terrain?.name, ...(sc.actors || []).map((a) => a.name), ...(sc.props || []).map((p) => PROPS[p.kind]?.label || p.kind)].filter(Boolean).join(' · ');
+  const close = () => wrap.remove();
+  const draw = () => {
+    const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    hits = scenes.filter((sc) => { const h = hay(sc).toLowerCase(); return words.every((w) => h.includes(w)); });
+    k = Math.min(k, Math.max(0, hits.length - 1));
+    list.replaceChildren(...(hits.length ? hits.map((sc, i) => {
+      const row = document.createElement('div'); row.className = 'findrow' + (i === k ? ' on' : '') + (sc.id === rec.savedId ? ' current' : '');
+      const who = (sc.actors || []).map((a) => a.name.split(' ')[0]);
+      row.innerHTML = `${sc.thumb ? `<img src="${sc.thumb}" alt="">` : '<div class="nothumb"></div>'}<div><b>${esc(sc.name)}</b>${sc.id === rec.savedId ? ' <span class="meta">(open)</span>' : ''}<br><span class="meta">${esc(sc.terrain?.name || 'default village')} · ${who.length ? esc([...new Set(who)].join(', ')) : 'nobody'} · ${new Date(sc.updated).toLocaleString()}</span></div>`;
+      row.onmouseenter = () => { k = i; list.querySelectorAll('.findrow').forEach((r, j) => r.classList.toggle('on', j === k)); };
+      row.onclick = () => { close(); openSaved(sc); };
+      return row;
+    }) : [Object.assign(document.createElement('p'), { className: 'hint', textContent: scenes.length ? 'no saved scene matches' : 'no saved scenes yet: Scene > Save scene (⌘S)' })]));
+    list.querySelector('.findrow.on')?.scrollIntoView({ block: 'nearest' });
+  };
+  input.oninput = () => { k = 0; draw(); };
+  input.onkeydown = (e) => {
+    if (e.key === 'ArrowDown') { k = Math.min(hits.length - 1, k + 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { k = Math.max(0, k - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter' && hits[k]) { close(); openSaved(hits[k]); }
+    else if (e.key === 'Escape') close();
+    e.stopPropagation(); // typing here never flies the camera
+  };
+  wrap.onpointerdown = (e) => { if (e.target === wrap) close(); };
+  draw(); input.focus();
+}
+
+// ---------------- the top bar ----------------
+const press = (id) => () => $(id).click();
+menubar([
+  { label: 'Scene', items: [
+    { label: 'New scene', action: press('#newScene') },
+    { label: 'Save scene', key: '⌘S', action: press('#save') },
+    { label: 'Save as new', key: '⇧⌘S', action: press('#saveAs') },
+    { label: 'Open scene…', key: '⌘O', action: openFinder },
+    '-',
+    { label: 'Import scene file…', action: press('#importFile') },
+    { label: 'Export scene file', action: press('#exportFile') },
+    { label: 'Export GLB', action: press('#exportGlb') },
+  ] },
+  { label: 'View', items: [
+    { label: 'Full screen', action: press('#fullscreen') },
+    { label: 'Walk mode', checked: () => walking, action: press('#walkMode') },
+    { label: 'Reset view', key: 'Home', action: () => resetCamera(false) },
+  ] },
+  { label: 'Play', items: [
+    { label: () => (speaking.size ? 'Stop' : 'Play scene'), key: 'P', action: press('#playScene') },
+    { label: () => (recorder ? 'Stop recording and save' : 'Record vertical video'), checked: () => !!recorder, action: press('#record') },
+    '-',
+    { label: 'Snapshot for Slides', key: 'K', action: press('#snapshot') },
+  ] },
+]);
+addEventListener('keydown', (e) => { // ⌘S / Ctrl+S save, with Shift: save as new
+  if ((e.metaKey || e.ctrlKey) && e.code === 'KeyS') { e.preventDefault(); $(e.shiftKey ? '#saveAs' : '#save').click(); }
+  if ((e.metaKey || e.ctrlKey) && e.code === 'KeyO') { e.preventDefault(); openFinder(); }
+});
+
+window.__editor = { openFinder, startRec, stopRec, alignScript, loadCaptions, speaking, speak, playScene, renderActorBox, THREE, pickActor, pickProp, setRay, __ray: () => ray, handles, get selected() { return selected; }, get selectedProp() { return selectedProp; }, get rec() { return rec; }, actors, props, spawnProp, seatActor, selectProp, openMenu, get picking() { return picking; }, select, addActor, load, camera, cam, stage, poseFromImage, setPose, get world() { return world; }, set editPose(v) { editPose = v; } };
 await load(true);
 requestAnimationFrame(frame);

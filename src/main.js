@@ -10,6 +10,8 @@ import { exportGLB } from './export.js';
 import { perf } from './perf.js';
 import { zipSync, strToU8 } from 'fflate';
 import { sendCharacter } from './store.js';
+import { menubar } from './menubar.js';
+menubar();
 import { personName } from './names/gen.js';
 
 THREE.ColorManagement.enabled = false;
