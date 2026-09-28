@@ -107,7 +107,12 @@ export const SCHEMA = [
   ]},
 ];
 
+// real animal photos worn as the face (src/animals.js; photos + hand-placed points in public/animals/)
+export const ANIMALS = ['pig', 'goat', 'sheep', 'cow', 'rabbit', 'dog', 'deer', 'horse'];
+
 export const CHOICES = {
+  faceKind: { label: 'Face', options: ['human', 'animal'], def: 'human' },
+  animal: { label: 'Animal', options: ANIMALS, def: 'pig' },
   atlasRes: { label: 'Texture res', options: [64, 128, 256, 512], def: 128 },
   renderH: { label: 'Render height', options: [224, 240, 320, 448], def: 240 },
   geoSource: { label: 'Head shape', options: ['fitted', 'canonical', 'photo'], def: 'fitted' },

@@ -164,6 +164,11 @@ export class HeadRig {
     this.hatVisor = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.05, 16, 1, false, -Math.PI / 2, Math.PI), this.hatMat);
     this.group.add(this.hatCrown, this.hatBrim, this.hatVisor);
 
+    // an animal's ears, cut from its photo (buildEars)
+    this.earMat = ps2Material({ side: THREE.DoubleSide }); this.earMat.name = 'animalEar';
+    this.ears = new THREE.Mesh(new THREE.BufferGeometry(), this.earMat); this.ears.visible = false;
+    this.group.add(this.ears);
+
     this.hairMat = ps2Material({ map: canvasTex(32, 64, drawHair), alphaTest: 0.5, side: THREE.DoubleSide });
     this.hairMat.name = 'hairStrands';
     this.hair = new THREE.Group();
@@ -172,9 +177,9 @@ export class HeadRig {
 
   // extra: { hair: analyzeHair(face) result, skin: [r,g,b] face skin tone, uvW: the warped face UVs }
   // Returns null when the head is ready, or a promise that resolves once its sculpt is applied.
-  update(P, tex, p, { hair = null, hairUV = null, skin = [0.8, 0.6, 0.5], uvW = null, atlas = null } = {}) {
+  update(P, tex, p, { animal = null, uvBase = null, hair = null, hairUV = null, skin = [0.8, 0.6, 0.5], uvW = null, atlas = null } = {}) {
     this.headMat.uniforms.map.value = tex;
-    this.last = { P, p, hair, hairUV, skin, uvW, atlas };
+    this.last = { P, p, uvBase, hair, hairUV, skin, uvW, atlas };
     // the head mesh depends only on the face, its texture warp and the head shape: body, outfit, pose...
     // changes skip the rebuild (only the eye colors/traits are re-checked)
     let hk = 0;
@@ -183,6 +188,8 @@ export class HeadRig {
     if (hairUV) for (let i = 0; i < hairUV.data.length; i += 7) hk = (Math.imul(hk, 31) + hairUV.data[i]) | 0;
     const headKey = `${hk}|${p.headDepth}|${p.cranium}`;
     if (headKey !== this.headKey) { this.headKey = headKey; this.buildHead(P, p); }
+    const earKey = `${headKey}|${animal?.name}|${p.earSize}`;
+    if (earKey !== this.earKey) { this.earKey = earKey; this.buildEars(P, animal, p); }
     else if (this.eyeRegions) this.paintEyes(this.eyeRegions, p);
 
     // 'photo': the person's own hair cut from the photo (photohair.js) over a bald sculpted skull
@@ -204,6 +211,44 @@ export class HeadRig {
     } else this.wanted = key;
     if (this.key) this.finish();
     return pending;
+  }
+
+  // An animal's ears: each a leaf from its base (two points on the head's outline side) to its tip, cut from
+  // the photo (the UVs pulled 8% in, off the background), placed where the photo has it relative to the
+  // nearest outline point and tilted back toward the tip; Ear size scales it from its base.
+  buildEars(P, animal, p) {
+    const g = new THREE.BufferGeometry();
+    this.ears.geometry.dispose(); this.ears.geometry = g; this.ears.visible = false;
+    if (!animal?.ears?.length) return;
+    const pos = [], uv = [], idx = [], s = 0.7 + 0.3 * (p.earSize ?? 1), G = animal.geo;
+    for (const ear of animal.ears) {
+      const [a, b, t] = ear.geo, mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      let anchor = this.loop[0], best = Infinity;
+      for (const v of this.loop) { const d = (G[v][0] - mid[0]) ** 2 + (G[v][1] - mid[1]) ** 2; if (d < best) { best = d; anchor = v; } }
+      const A = P[anchor], base = G[anchor];
+      const place = (q) => { const sq = [mid[0] + (q[0] - mid[0]) * s, mid[1] + (q[1] - mid[1]) * s], d = Math.hypot(sq[0] - mid[0], sq[1] - mid[1]); return [A[0] + sq[0] - base[0], A[1] + sq[1] - base[1], A[2] - 0.05 - 0.35 * d]; };
+      // a leaf: base, a row at 45% (widest: 1.4x the base, at least 45% of the length), a row at 75%, tip
+      const leaf = (A0, B0, T0) => {
+        const m0 = [(A0[0] + B0[0]) / 2, (A0[1] + B0[1]) / 2], ax = [T0[0] - m0[0], T0[1] - m0[1]], L0 = Math.hypot(...ax) || 1e-6;
+        let pp = [-ax[1] / L0, ax[0] / L0]; if ((A0[0] - m0[0]) * pp[0] + (A0[1] - m0[1]) * pp[1] < 0) pp = [-pp[0], -pp[1]]; // (toward the inner base)
+        const W = Math.max(Math.hypot(A0[0] - B0[0], A0[1] - B0[1]) * 1.4, L0 * 0.45), row = (k, wk) => { const c = [m0[0] + ax[0] * k, m0[1] + ax[1] * k]; return [[c[0] + pp[0] * W * wk / 2, c[1] + pp[1] * W * wk / 2], [c[0] - pp[0] * W * wk / 2, c[1] - pp[1] * W * wk / 2]]; };
+        return [A0, B0, ...row(0.45, 1), ...row(0.75, 0.7), T0];
+      };
+      const asp = animal.img.naturalHeight / animal.img.naturalWidth, ph = ear.photo.map(([x, y]) => [x, y * asp]); // (square units for the leaf)
+      const shape = leaf(a, b, t), pshape = leaf(ph[0], ph[1], ph[2]).map(([x, y]) => [x, y / asp]);
+      const pc = pshape.reduce((q, r) => [q[0] + r[0] / pshape.length, q[1] + r[1] / pshape.length], [0, 0]);
+      const puv = pshape.map((q) => [pc[0] + (q[0] - pc[0]) * 0.92, 1 - (pc[1] + (q[1] - pc[1]) * 0.92)]); // (pulled in, off the background)
+      const o = pos.length / 3;
+      for (const q of shape) pos.push(...place(q));
+      for (const q of puv) uv.push(...q);
+      // rows: 0,1 base / 2,3 at 45% / 4,5 at 75% / 6 tip
+      idx.push(o, o + 1, o + 3, o, o + 3, o + 2, o + 2, o + 3, o + 5, o + 2, o + 5, o + 4, o + 4, o + 5, o + 6);
+    }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx); g.computeVertexNormals(); g.computeBoundingSphere();
+    this.earMat.uniforms.map.value = animal.tex;
+    this.ears.visible = true;
   }
 
   // everything that depends on the applied skull: texture, hats, strands
@@ -271,7 +316,8 @@ export class HeadRig {
     const L = this.loop.length, K = CLASSIC_K, n = 468 + L * (K - 1) + 1;
     const C = [0, (P[10][1] + P[152][1]) / 2 + 0.05, (P[234][2] + P[454][2]) / 2 - 0.08];
     const depth = 0.62 * (1 + p.headDepth * 0.6), cranium = 0.4 + p.cranium * 0.45;
-    const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), uv0 = this.canon.uv;
+    const dupN = this.last?.uvBase ? L : 0; // (animals: the hull's own copy of the outline, see the fur patch)
+    const pos = new Float32Array((n + dupN) * 3), uv = new Float32Array((n + dupN) * 2), uv0 = this.last?.uvBase || this.canon.uv; // (animals: their own layout)
     // mouth and eye rims moved to where the texture draws them (faceanim.js alignToTexture)
     const al = perf.time('head.align', () => alignToTexture(P, uv0, this.last?.uvW || uv0, this.canon.index, this.loop));
     for (let i = 0; i < 468; i++) { pos.set(al.P[i], i * 3); uv.set(al.uv[i], i * 2); }
@@ -288,7 +334,7 @@ export class HeadRig {
     // skipping past the hair still spanned it in the rim -> first ring strip, and switching to another
     // anchor made neighbouring points' lines diverge (a triangle between them spans the whole face). So each
     // line is only shortened along its own direction, and neighbours agree (the shortest of 5).
-    const HM = this.last?.hairUV, AT = this.last?.atlas;
+    const HM = this.last?.hairUV, AT = HM ? this.last?.atlas : null; // (no hair mask, e.g. an animal: dark fur is not hair)
     const atlasPx = AT ? AT.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, AT.width, AT.height).data : null;
     const sk = this.last?.skin || [0.8, 0.6, 0.5], darkLum = 0.5 * (0.299 * sk[0] + 0.587 * sk[1] + 0.114 * sk[2]) * 255;
     const hairAt = (u, v) => {
@@ -297,9 +343,16 @@ export class HeadRig {
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = Math.floor(u * n) + dx, y = Math.floor(v * n) + dy; if (x >= 0 && y >= 0 && x < n && y < n && HM.data[y * n + x]) return true; }
       return false;
     };
+    // animals (their own texture layout): eyes sit near the head's sides, where human-placed lines run; they
+    // block the lines too (an ellipse around each eye's contour, 1.6x its size)
+    const eyesUV = this.last?.uvBase ? [[33, 133, 159, 145, 160, 144, 158, 153], [263, 362, 386, 374, 387, 373, 385, 380]].map((ids) => {
+      const xs = ids.map((i) => A[i][0]), ys = ids.map((i) => A[i][1]), cx = xs.reduce((a, b) => a + b) / xs.length, cy = ys.reduce((a, b) => a + b) / ys.length;
+      return [cx, cy, Math.max(0.02, (Math.max(...xs) - Math.min(...xs)) * 0.8), Math.max(0.02, (Math.max(...ys) - Math.min(...ys)) * 0.8 + 0.02)];
+    }) : [];
+    const blocked = (u, v) => hairAt(u, v) || eyesUV.some(([cx, cy, rx, ry]) => ((u - cx) / rx) ** 2 + ((v - cy) / ry) ** 2 < 1);
     const firstHair = (r0, t) => { // fraction along r0 -> t of the first hair texel (1: none), past the rim's own texels
       const S = 48;
-      for (let j = 2; j <= S; j++) if (hairAt(r0[0] + (t[0] - r0[0]) * (j / S), r0[1] + (t[1] - r0[1]) * (j / S))) return (j - 1) / S;
+      for (let j = 2; j <= S; j++) if (blocked(r0[0] + (t[0] - r0[0]) * (j / S), r0[1] + (t[1] - r0[1]) * (j / S))) return (j - 1) / S;
       return 1;
     };
     const base = this.loop.map((v) => ({ r0: uv0[v], t: target(v) }));
@@ -310,7 +363,28 @@ export class HeadRig {
       f = Math.max(f, Math.min(1, 0.04 / len)); // never shorter than 0.04 (shorter mirrors into stripes)
       return { r0, t: [r0[0] + (t[0] - r0[0]) * f, r0[1] + (t[1] - r0[1]) * f] };
     });
-    const arc = new Float32Array(L);
+    // Animals: their face's rim -> anchor lines are short against the big sides of the head (the mirror bounced
+    // many times: bands), and pass near eyes set far apart. From the second ring back, the head wears a
+    // patch of the animal's own forehead fur instead (between the brows and the top, inside the outline's
+    // upper corners), mirror-tiled 1:1; the tiling's seam around the ring starts under the chin.
+    const pingpong = (x, span) => { const f = (x / span) % 2; return (f < 1 ? f : 2 - f) * span; };
+    let fur = null, ringArc = null;
+    if (this.last?.uvBase) {
+      const x0 = Math.min(A[109][0], A[338][0]), x1 = Math.max(A[109][0], A[338][0]), yTop = Math.max(A[10][1], A[109][1], A[338][1]), yLow = Math.max(A[9][1], A[168][1]) + 0.02;
+      const pad = (x1 - x0) * 0.12, top = yTop - 0.03;
+      const mid = (x0 + x1) / 2 - 0.015; // one side of the brow only (a blaze or stripe down the middle would tile everywhere)
+      if (top - yLow > 0.03 && mid - x0 > 0.04) fur = { x0: x0 + pad, w: mid - x0 - pad, y1: top, h: top - yLow };
+      const start = Math.max(0, this.loop.indexOf(152)), per = [];
+      ringArc = (k, i) => {
+        if (!per[k]) { // cumulative distance around ring k from under the chin (positions of rings < k are set)
+          const d = new Float32Array(L), at = (j) => (k === 0 ? P[this.loop[j]] : [pos[(468 + (k - 1) * L + j) * 3], pos[(468 + (k - 1) * L + j) * 3 + 1], pos[(468 + (k - 1) * L + j) * 3 + 2]]);
+          for (let q = 1; q < L; q++) { const a = at((start + q - 1) % L), b = at((start + q) % L); d[(start + q) % L] = d[(start + q - 1) % L] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]); }
+          per[k] = d;
+        }
+        return per[k][i];
+      };
+    }
+    const arc = new Float32Array(L), colArc = new Float32Array(n);
     for (let k = 1; k < K; k++) {
       const th = (k / K) * Math.PI / 2;
       for (let i = 0; i < L; i++) {
@@ -327,13 +401,23 @@ export class HeadRig {
         const span = Math.hypot(t[0] - r0[0], t[1] - r0[1]) || 1e-6, d = (arc[i] * uvPerUnit) / span;
         const f = d % 2, w = f < 1 ? f : 2 - f; // ping-pong 0..1..0
         uv[o * 2] = r0[0] + (t[0] - r0[0]) * w; uv[o * 2 + 1] = r0[1] + (t[1] - r0[1]) * w;
+        colArc[o] = arc[i];
       }
+    }
+    // (animals) the fur patch, mirror-tiled around the ring x down the column (after all rings are placed)
+    // (from the outline itself: the hull gets its own copy of the outline's vertices, so no hull triangle's
+    // texture spans from the face's rim across the face to the patch)
+    if (fur) for (let k = 0; k < K; k++) for (let i = 0; i < L; i++) {
+      const o = k === 0 ? n + i : 468 + (k - 1) * L + i;
+      if (k === 0) pos.set(pos.subarray(this.loop[i] * 3, this.loop[i] * 3 + 3), o * 3);
+      uv[o * 2] = fur.x0 + pingpong(ringArc(k, i) * uvPerUnit, fur.w);
+      uv[o * 2 + 1] = fur.y1 - pingpong((k === 0 ? 0 : colArc[o]) * uvPerUnit, fur.h);
     }
     const pole = n - 1;
     pos.set([C[0], C[1] + cranium * 0.2, C[2] - depth], pole * 3);
     this.hull = { pos: pos.slice(), L, K, C, loop: this.loop }; // photo hair grows on it
-    uv.set(A[[151, 108, 337, 50, 280, 187, 411, 199].find((a) => !hairAt(A[a][0], A[a][1])) ?? 151], pole * 2);
-    const ring = (k, i) => (k === 0 ? this.loop[i % L] : 468 + (k - 1) * L + (i % L));
+    uv.set(fur ? [fur.x0 + fur.w / 2, fur.y1 - fur.h / 2] : A[[151, 108, 337, 50, 280, 187, 411, 199].find((a) => !hairAt(A[a][0], A[a][1])) ?? 151], pole * 2);
+    const ring = (k, i) => (k === 0 ? (fur ? n + (i % L) : this.loop[i % L]) : 468 + (k - 1) * L + (i % L));
     const idx = [...this.canon.index], hullStart = idx.length;
     for (let k = 0; k < K; k++) for (let i = 0; i < L; i++) {
       const a = ring(k, i), b = ring(k, i + 1), cc = ring(k + 1, i), d = ring(k + 1, i + 1);

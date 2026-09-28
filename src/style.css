@@ -7,9 +7,12 @@ h1 { font-size: 14px; letter-spacing: 0.2em; color: var(--accent); margin: 0 0 8
 .tabs a { flex: 1; text-align: center; padding: 4px 0; border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
 .tabs a.on { color: var(--accent); border-color: var(--accent); }
 .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
-.rand { grid-column: span 2; display: flex; gap: 8px; align-items: center; }
-.rand button { flex: 1; min-width: 0; }
+.rand { grid-column: span 2; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.rand button { flex: 1 1 100%; } /* (the switches wrap onto a row under it) */
 .rand label { flex: none; white-space: nowrap; display: flex; align-items: center; gap: 4px; color: var(--muted); cursor: pointer; }
+.facemode { grid-column: span 2; display: flex; }
+.facemode button { flex: 1; }
+.facemode button.on { border-color: var(--accent); color: var(--accent); background: #342a40; }
 .rand input { margin: 0; accent-color: var(--accent); }
 button { background: #2a2433; color: var(--text); border: 1px solid var(--line); padding: 7px; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--accent); }

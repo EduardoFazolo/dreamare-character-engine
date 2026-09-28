@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { initLandmarker, loadCanonical, makeFace, loadImage, analyzeHair } from './face.js';
-import { SCHEMA, CHOICES, defaults, deform, randomize } from './mutate.js';
+import { loadAnimals, animalShape } from './animals.js';
+import { SCHEMA, CHOICES, ANIMALS, defaults, deform, randomize } from './mutate.js';
 import { AtlasBaker } from './atlas.js';
 import { HeadRig, PS2, buildEnvironment } from './head.js';
 import { BodyRig, POSES } from './body.js';
@@ -138,13 +139,17 @@ function fittedFace(face) {
   return face.fitted;
 }
 
+// the face this character wears: the selected photo, or (Face: animal) that animal's photo
+let animals = new Map();
+const faceOf = () => (params.faceKind === 'animal' && animals.get(params.animal)) || faces[current];
+
 function rebuild() {
-  const face = faces[current];
+  const face = faceOf();
   if (!face) return Promise.resolve();
   const my = ++gen;
   perf.reset();
   const t0 = performance.now();
-  const uvW = perf.time('face.deform', () => deform(canonUV, params, params.texWarp, canon.index));
+  const uvW = perf.time('face.deform', () => deform(face.uv || canonUV, params, params.texWarp, canon.index)); // (animals: a layout after their own photo)
   texture = perf.time('face.bake', () => baker.bake(face, uvW, params, params.atlasRes));
   perf.time('face.readback', () => baker.toCanvas($('#atlas')));
   const skin = perf.time('face.skin', () => baker.skinTone(uvW));
@@ -152,7 +157,8 @@ function rebuild() {
   // head shape: canonical (the generic face), photo (MediaPipe's per-photo 3D: right proportions, weak
   // depth) or fitted (the person's proportions from the photo on the canonical face's sculpted depth)
   const base = params.geoSource === 'photo' ? face.geo : params.geoSource === 'fitted' ? fittedFace(face) : canon.pos;
-  const headPending = perf.time('head.update', () => rig.update(deform(base, params, params.geoWarp, canon.index), texture, params, { hair: analyzeHair(face), hairUV: baker.hairMask(face, analyzeHair(face)), skin, uvW, atlas: $('#atlas') }));
+  const headPending = perf.time('head.update', () => rig.update(face.animal ? animalShape(deform(base, params, params.geoWarp, canon.index), face.animal, params) : deform(base, params, params.geoWarp, canon.index), texture, face.animal ? { ...params, headDepth: params.headDepth + 0.6 } : params, // (an animal's flat face plate: the depth goes to the skull)
+     { animal: face.animal ? face : null, uvBase: face.uv || null, hair: analyzeHair(face), hairUV: baker.hairMask(face, analyzeHair(face)), skin, uvW, atlas: $('#atlas') }));
   perf.time('driver.update', () => body.update(params, skin, rig.group));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);
@@ -323,7 +329,7 @@ document.body.addEventListener('dragover', (e) => e.preventDefault());
 document.body.addEventListener('drop', (e) => { e.preventDefault(); addFiles([...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'))); });
 
 $('#randomize').onclick = () => {
-  if ($('#randPhoto').checked && faces.length > 1) {
+  if ($('#randPhoto').checked && faces.length > 1 && mode === 'human') {
     let i;
     do i = Math.floor(Math.random() * faces.length); while (i === current);
     current = i;
@@ -331,11 +337,35 @@ $('#randomize').onclick = () => {
   }
   params = randomize(params);
   if (!$('#randPose').checked) params.pose = defaults().pose; // pose switch off: characters stand in the default pose
+  params = faceMode(params, $('#randPhoto').checked);
   syncControls();
   rebuild();
 };
 // turning the pose switch off puts the current character in the default pose right away
 $('#randPose').onchange = () => { if ($('#randPose').checked) return; params = { ...params, pose: defaults().pose }; syncControls(); rebuild(); };
+// Human / Animal: what Randomize makes. Animal faces are generated differently (photo + hand points), so
+// they're a mode, not a random roll; the masks switch belongs to people only. In animal mode the photo
+// switch picks a random animal.
+let mode = 'human';
+function faceMode(p, newAnimal) {
+  const q = { ...p, faceKind: mode };
+  if (mode === 'animal' && newAnimal) { // a new animal, with its own muzzle length and ear size
+    q.animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+    q.snout = -0.4 + Math.random() * 1.4;
+    q.earSize = Math.random() < 0.15 ? 1.8 + Math.random() * 1.2 : 0.8 + Math.random() * 0.5;
+  }
+  if (mode === 'human' && q.faceKind === 'mask' && !$('#randMask').checked) q.faceKind = 'human';
+  return q;
+}
+function setMode(m) {
+  mode = m;
+  $('#modeHuman').classList.toggle('on', m === 'human'); $('#modeAnimal').classList.toggle('on', m === 'animal');
+  $('#maskSwitch').hidden = m !== 'human';
+  $('#randomize').click(); // a whole new character of that kind (body too)
+}
+$('#modeHuman').onclick = () => setMode('human');
+$('#modeAnimal').onclick = () => setMode('animal');
+$('#randMask').onchange = () => { if (params.faceKind === 'mask' && !$('#randMask').checked) { params = { ...params, faceKind: 'human' }; syncControls(); rebuild(); } };
 $('#reset').onclick = () => { params = defaults(); syncControls(); rebuild(); };
 $('#export').onclick = () => {
   const a = document.createElement('a');
@@ -402,8 +432,8 @@ async function roll(n) {
   const gal = $('#gallery');
   gal.innerHTML = '';
   for (let i = 0; i < n; i++) {
-    current = Math.floor(Math.random() * faces.length);
-    params = randomize(defaults());
+    if (mode === 'human') current = Math.floor(Math.random() * faces.length);
+    params = faceMode(randomize(defaults()), true);
     await rebuild();
     body.root.rotation.y = (Math.random() - 0.5) * 1.1;
     sk.update(Math.random() * 3);
@@ -426,6 +456,7 @@ setRes(params.renderH);
 await Promise.all([initLandmarker(), body.preload(), simplifierReady]);
 status('detecting sample faces…');
 for (const name of await (await fetch('/faces/index.json')).json()) await addFace(`/faces/${name}`, name).catch(() => {});
+animals = await loadAnimals(canon, loadImage);
 renderFaces();
 status(`${faces.length} faces loaded. Drag to turn, scroll to zoom, double-click to reset. Drop your own photos anywhere.`);
 params = randomize(params);
