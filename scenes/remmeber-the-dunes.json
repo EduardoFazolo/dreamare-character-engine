@@ -442,10 +442,32 @@
       "scale": 1,
       "anim": "Idle",
       "rel": false
+    },
+    {
+      "id": "mult17bq-96w29b",
+      "charId": "mult17av-b9mhc6",
+      "name": "Violet Wishbonebottom",
+      "x": -2.2019659243128245,
+      "z": -6.644647926577086,
+      "rotY": 0,
+      "scale": 1,
+      "anim": null,
+      "rel": true
+    },
+    {
+      "id": "multa3he-6pv9is",
+      "charId": "multa3go-sl2xe8",
+      "name": "Little Cholmondeley",
+      "x": 0,
+      "z": -7,
+      "rotY": 0,
+      "scale": 1,
+      "anim": null,
+      "rel": true
     }
   ],
   "created": 1790527092819,
-  "updated": 1790620888332,
+  "updated": 1790634049826,
   "props": [
     {
       "id": "muk4k2gu-mdnvjr",

@@ -361,7 +361,7 @@ void main(){
   // (measured: the neck hole reaches collarY - .12 with radius neckHole; the V starts at that neckline, wider
   // than the hole so the lapels show beside the neck, and runs vDepth of the torso down)
   float torso = collarY - waistY, top = collarY - .12, vBot = top - vDepth * torso;
-  float hw = vDepth > 0. ? (neckHole + .22) * clamp((p.y - vBot) / (top - vBot), 0., 1.) : 0.; // V half-width at this height
+  float hw = vDepth > 0. ? min(neckHole + .22, shoulderX * .55) * clamp((p.y - vBot) / (top - vBot), 0., 1.) : 0.; // V half-width at this height (capped by the shoulders: thick necks made it a white bib)
   bool inV = front && vDepth > 0. && p.y > vBot && abs(p.x) < hw;
   if (front && lapels > .5 && vDepth > 0. && p.y > vBot - .05) { // lapels: a band along the V, its edge a fold
     float d = abs(p.x) - hw, lw = .12 + .14 * clamp((p.y - vBot) / (top - vBot), 0., 1.);
@@ -374,7 +374,7 @@ void main(){
   }
   // the shirt's collar: a point on each side, hanging from the neckline's edge toward the centre line
   if (front && collarPts > .5 && p.y < top + .02 && p.y > top - .42) {
-    float yy = (top + .02 - p.y) / .44, xx = abs(p.x), xin = neckHole * (.45 - .3 * yy), xout = neckHole * (1.15 - yy);
+    float cn = min(neckHole, shoulderX * .45), yy = (top + .02 - p.y) / .44, xx = abs(p.x), xin = cn * (.45 - .3 * yy), xout = cn * (1.15 - yy); // (sized by the neck, capped by the shoulders)
     if (xx > xin && xx < xout) c = shirtCol * (.95 + .1 * vnoise(p * 40.)) * (xx < xin + .03 || xx > xout - .03 ? .72 : 1.);
   }
   if (inV && tieKind > .5) {

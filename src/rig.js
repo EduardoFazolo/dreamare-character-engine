@@ -432,13 +432,16 @@ export class SkinnedCharacter {
     }
     perf.time('skinWeights', () => { for (const part of parts) skinWeights(part, segs, index); });
     const segByIndex = Object.fromEntries(Object.entries(segs).map(([n, s]) => [index[n], s]));
-    const { geo, groups, charts } = perf.time('unwrap', () => unwrap(parts, segByIndex, R, p.bodyRes));
+    const boxy = p.bodyShape === 'boxy';
+    const feet = new Set(['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase'].map((n) => index[n]));
+    const meshParts = boxy ? perf.time('boxify', () => parts.map((part) => boxify(part, segByIndex, feet))) : parts;
+    const { geo, groups, charts } = perf.time('unwrap', () => unwrap(meshParts, segByIndex, R, p.bodyRes));
     const bakeGeo = geo.clone(); // keeps the bake-only attributes for texture-only rebakes
     geo.deleteAttribute('ao');
     geo.deleteAttribute('layer'); // bake-only attributes
     geo.deleteAttribute('aux');
     geo.scale(METERS, METERS, METERS);
-    const subsets = groups.map((gr) => [gr.name, subset(geo, gr.start, gr.count)]);
+    const subsets = groups.map((gr) => [gr.name, boxy ? flatten(subset(geo, gr.start, gr.count)) : subset(geo, gr.start, gr.count)]);
     const names = Object.fromEntries(Object.entries(index).map(([n, i]) => [i, n]));
     const pos = geo.attributes.position, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
     const box = new THREE.Box3(), boneVerts = {};
@@ -737,6 +740,41 @@ function skinWeights(part, segs, index) {
   }
   part.skinIndex = si;
   part.skinWeight = sw;
+}
+
+// Boxy body: each vertex's offset from its main bone's axis goes from round toward a rounded square (in the
+// plane across the bone: x/z for the torso, so it becomes a box, y/z along a T-posed arm), corners 0.93x so
+// the area stays about the same. Skin and the garments over it move by the same factor along the same ray,
+// so clothes stay on top. Feet are left as sculpted (squaring pushed the soles under the ground: SOLES_AT_ZERO).
+// A copy (the cached sculpt is shared); skin weights come from the original shape.
+const SQUARE = 0.9;
+function boxify(part, segByIndex, skip) {
+  if (part.kind === 'handLeft' || part.kind === 'handRight') return part;
+  const pos = new Float32Array(part.positions), si = part.skinIndex, sw = part.skinWeight, n = pos.length / 3;
+  const a = new THREE.Vector3(), ax = new THREE.Vector3(), d = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+  const refs = [new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0)];
+  for (let i = 0; i < n; i++) {
+    let best = 0; for (let k = 1; k < 4; k++) if (sw[i * 4 + k] > sw[i * 4 + best]) best = k;
+    const seg = segByIndex[si[i * 4 + best]]; if (!seg || skip.has(si[i * 4 + best])) continue; // (feet keep their soles flat on y = 0)
+    a.copy(seg[0]); ax.copy(seg[1]).sub(seg[0]); const L = ax.length(); if (L < 1e-6) continue; ax.divideScalar(L);
+    d.fromArray(pos, i * 3).sub(a);
+    const along = d.dot(ax); d.addScaledVector(ax, -along); // across the bone
+    const ref = refs.reduce((r, q) => (Math.abs(q.dot(ax)) < Math.abs(r.dot(ax)) ? q : r));
+    e1.copy(ref).addScaledVector(ax, -ref.dot(ax)).normalize(); e2.crossVectors(ax, e1);
+    const u = d.dot(e1), v = d.dot(e2), r = Math.hypot(u, v); if (r < 1e-6) continue;
+    const k = 1 + SQUARE * (0.93 / Math.max(Math.abs(u) / r, Math.abs(v) / r) - 1);
+    const p = a.clone().addScaledVector(ax, along).addScaledVector(e1, u * k).addScaledVector(e2, v * k);
+    pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+  }
+  return { ...part, positions: pos };
+}
+// flat shading: every triangle its own three vertices (so its own normal); still indexed, since the whole
+// character's geometries are merged and must all be indexed alike
+function flatten(g) {
+  const out = g.toNonIndexed();
+  out.setIndex([...Array(out.attributes.position.count).keys()]);
+  out.deleteAttribute('normal'); out.computeVertexNormals();
+  return out;
 }
 
 // compact copy of an index range (one clothing region) with only the vertices it uses

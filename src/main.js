@@ -289,6 +289,7 @@ function buildControls() {
 }
 
 function syncControls() {
+  if ($('#boxy')) $('#boxy').checked = params.bodyShape === 'boxy';
   for (const [k, { input, out }] of Object.entries(inputs)) {
     input.value = params[k];
     if (out) out.textContent = (+params[k]).toFixed(2);
@@ -365,6 +366,8 @@ function setMode(m) {
 }
 $('#modeHuman').onclick = () => setMode('human');
 $('#modeAnimal').onclick = () => setMode('animal');
+// boxy bodies (Body shape): a switch that sticks, Randomize keeps whatever it's set to
+$('#boxy').onchange = () => { params = { ...params, bodyShape: $('#boxy').checked ? 'boxy' : 'smooth' }; syncControls(); rebuild(); };
 $('#randMask').onchange = () => { if (params.faceKind === 'mask' && !$('#randMask').checked) { params = { ...params, faceKind: 'human' }; syncControls(); rebuild(); } };
 $('#reset').onclick = () => { params = defaults(); syncControls(); rebuild(); };
 $('#export').onclick = () => {

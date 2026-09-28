@@ -87,7 +87,7 @@ export function sculptInput(body, p, model, R, outfit) {
     hands: { A: body.sculpt.hands.A.map(plain), B: body.sculpt.hands.B.map(plain) },
     dims: body.sculpt.dims, R,
     outfit: { top: outfit.top, bottom: outfit.bottom, shoes: outfit.shoes, fuzz: outfit.fuzz || 0 },
-    p: Object.fromEntries(['fat', 'seed', 'lumps', 'looseness', 'clay', 'sag', 'polyBudget', 'handSize'].map((k) => [k, p[k]])),
+    p: Object.fromEntries(['fat', 'seed', 'lumps', 'looseness', 'clay', 'sag', 'polyBudget', 'handSize'].map((k) => [k, p[k]])), // (boxy keeps the budget: capping it starved the garments to ~120 tris and ate sleeves and collars)
   };
 }
 

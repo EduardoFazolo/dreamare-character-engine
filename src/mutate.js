@@ -118,6 +118,8 @@ export const CHOICES = {
   geoSource: { label: 'Head shape', options: ['fitted', 'canonical', 'photo'], def: 'fitted' },
   view: { label: 'Camera', options: ['full', 'medium', 'portrait'], def: 'full' },
   bodyStyle: { label: 'Body style', options: ['sculpted', 'segmented'], def: 'sculpted' },
+  // boxy: the old console look (few, flat-shaded faces, squared cross-sections), see rig.js boxify
+  bodyShape: { label: 'Body shape', options: ['smooth', 'boxy'], def: 'smooth' },
   bodyRes: { label: 'Body texture res', options: [128, 256, 512, 1024], def: 512 },
   bottomType: { label: 'Bottom', options: ['pants', 'skirt'], def: 'pants' },
   pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
