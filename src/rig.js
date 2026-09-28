@@ -32,7 +32,7 @@ function transformMorphs(g, m4) {
 }
 
 export const METERS = 0.16; // one head unit (face width) in meters
-const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop', 'mouth', 'eye', 'animalEar']); // material slots that are not body volume
+const ACCESSORY = new Set(['hat', 'hair', 'hairStrands', 'prop', 'mouth', 'eye', 'animalEar', 'gadget', 'mask']); // material slots that are not body volume
 const PROXY = new Set(['top', 'bottom', 'shoes', 'skin']); // driver segment meshes (segmented style only)
 const FINGER = /Hand(Thumb|Index|Middle|Ring|Pinky)/;
 const DENSITY = 1000; // kg/m^3, bodies are roughly water

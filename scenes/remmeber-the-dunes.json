@@ -464,10 +464,32 @@
       "scale": 1,
       "anim": null,
       "rel": true
+    },
+    {
+      "id": "muluiv35-siy5dt",
+      "charId": "muluiv2o-5bgxep",
+      "name": "Fudge Wetherby",
+      "x": 2.2019659243128245,
+      "z": -6.644647926577086,
+      "rotY": 0,
+      "scale": 1,
+      "anim": null,
+      "rel": true
+    },
+    {
+      "id": "muluj1ps-0w9uba",
+      "charId": "muluj1pj-mvtgp0",
+      "name": "Wob Cumberton",
+      "x": 4.180368089536745,
+      "z": -5.614670305190049,
+      "rotY": 0,
+      "scale": 1,
+      "anim": null,
+      "rel": true
     }
   ],
   "created": 1790527092819,
-  "updated": 1790634049826,
+  "updated": 1790636147056,
   "props": [
     {
       "id": "muk4k2gu-mdnvjr",

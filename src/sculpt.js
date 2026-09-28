@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { perf } from './perf.js';
-import { BodySDF, GarmentField, sampleGrid, splitNets, splitRanges, deriveGrid, polygonize, simplify, shade, sdRoundCone, fuzzFreqFor, hemFor, smin, smax } from './sdf.js';
+import { BodySDF, GarmentField, sdEllipsoidAt, sampleGrid, splitNets, splitRanges, deriveGrid, polygonize, simplify, shade, sdRoundCone, fuzzFreqFor, hemFor, smin, smax } from './sdf.js';
 
 // Sculpted character in layers, all from one sampled grid:
 //   skin body (limbs blend into the torso, never into each other) + two finer-grid hands
@@ -50,11 +50,26 @@ export function regionSpec(body, p, model, outfit) {
     hipZ: pos('pelvis').z,
     neckZ: pos('neck').z,
     neckHole: body.sculpt.dims.neckR * 1.35 + 0.06,
-    sleeve: p.sleeveLen, pants: p.pantsLen,
-    skirt: p.bottomType === 'skirt' && outfit.bottom !== 'skin',
+    sleeve: outfit.cut?.sleeves === 'mutton' ? 1 : p.sleeveLen, pants: outfit.cut?.bottom === 'gown' ? 1 : p.pantsLen,
+    skirt: (p.bottomType === 'skirt' || outfit.cut?.bottom === 'gown') && outfit.bottom !== 'skin', // (a gown is always a skirt, to the floor)
     details: outfit.details || {},
+    hipX: Math.abs(pos('hipB').x), ankleX: Math.abs(pos('ankleB').x), kneeY: pos('kneeB').y,
   };
   R.hemY = R.crotchY - R.pants * (R.crotchY - R.ankleY) - 0.05;
+  // fitted clothes (Clothes: fitted): the outfit's cut (OUTFITS[..].cut) with this character's recipe; see cutShapes
+  // (Victorian cuts are always worn: they are the outfit)
+  const cut = outfit.cut && (p.clothes === 'fitted' || outfit.cut.always) ? outfit.cut : null;
+  const top = cut?.top && outfit.top !== 'skin' ? cut.top : null;
+  R.cut = cut ? {
+    jacket: ['jacket', 'frockcoat', 'tailcoat', 'bodice'].includes(top), kind: top, sleeves: cut.sleeves || null,
+    trousers: cut.bottom === 'trousers' && !R.skirt && outfit.bottom !== 'skin', gown: cut.bottom === 'gown' && outfit.bottom !== 'skin',
+    fit: cut.fit ?? p.clothesFit ?? 0.3, square: p.cutSquare ?? 0.5, flare: p.cutFlare ?? 0, length: p.cutLength ?? 0.3, legFlare: p.legFlare ?? 0,
+  } : null;
+  // hems: a jacket can run down over the hips; a frock coat to the knee; a tailcoat is cut at the waist in
+  // front with tails behind to the knee (tailHem, for z behind the body's middle)
+  R.topHem = top === 'frockcoat' ? R.kneeY + 0.1 : top === 'bodice' ? R.waistY - 0.1 : R.waistY - 0.15 - (top === 'jacket' || top === 'tailcoat' ? R.cut.length * (top === 'tailcoat' ? 0.1 : 0.7) : 0);
+  R.tailHem = top === 'tailcoat' ? R.kneeY + 0.05 : R.topHem;
+  R.tailZ = R.hipZ - body.sculpt.dims.hipR * 0.75; // below the front hem only what's behind this is coat: the tails (not the legs' shells)
   return R;
 }
 
@@ -66,7 +81,8 @@ export const masks = {
     if (ax > R.shoulderX * 0.95 && Math.abs(y - R.shoulderY) < R.armBand) return ((ax - R.shoulderX) / len - Math.min(R.sleeve, 1)) * len;
     // collar = a round hole around the neck (a flat cut would slice off the shoulder tops)
     const hole = R.neckHole - Math.hypot(x, z - R.neckZ);
-    return smax(R.waistY - 0.15 - y, smin(hole, y - (R.collarY - 0.12), k), k);
+    const hem = R.tailHem != null && z < R.tailZ ? R.tailHem : R.topHem ?? R.waistY - 0.15; // (tails behind)
+    return smax(hem - y, smin(hole, y - (R.collarY - 0.12), k), k);
   },
   bottom(R, x, y) {
     const k = R.round;
@@ -86,8 +102,8 @@ export function sculptInput(body, p, model, R, outfit) {
     prims: body.sculpt.body.map(plain),
     hands: { A: body.sculpt.hands.A.map(plain), B: body.sculpt.hands.B.map(plain) },
     dims: body.sculpt.dims, R,
-    outfit: { top: outfit.top, bottom: outfit.bottom, shoes: outfit.shoes, fuzz: outfit.fuzz || 0 },
-    p: Object.fromEntries(['fat', 'seed', 'lumps', 'looseness', 'clay', 'sag', 'polyBudget', 'handSize'].map((k) => [k, p[k]])), // (boxy keeps the budget: capping it starved the garments to ~120 tris and ate sleeves and collars)
+    outfit: { top: outfit.top, bottom: outfit.bottom, shoes: outfit.shoes, fuzz: outfit.fuzz || 0, cut: outfit.cut || null },
+    p: Object.fromEntries(['fat', 'seed', 'lumps', 'looseness', 'clay', 'sag', 'polyBudget', 'handSize', 'clothes', 'clothesFit', 'cutSquare', 'cutFlare', 'cutLength', 'legFlare'].map((k) => [k, p[k]])), // (boxy keeps the budget: capping it starved the garments to ~120 tris and ate sleeves and collars)
   };
 }
 
@@ -192,21 +208,29 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
   let skirtCone = null;
   if (R.skirt) {
     const top = [0, R.waistY - 0.05, R.hipZ], bot = [0, R.hemY, R.hipZ];
-    const r1 = dims.waistR + thick, r2 = dims.hipR * (1.25 + 0.6 * p.looseness) + thick;
-    skirtCone = (x, y, z) => smax(sdRoundCone(x, y, R.hipZ + (z - R.hipZ) * 1.3, top, bot, r1, r2), masks.bottom(R, x, y), R.round); // clipped at waist and hem
+    const gown = R.cut?.gown, r1 = dims.waistR + thick, r2 = dims.hipR * (gown ? 1.7 + 0.7 * Math.max(0, R.cut.flare) : 1.25 + 0.6 * p.looseness) + thick;
+    // a gown: a bell to the floor, and a bustle standing out behind the hips
+    const bustle = gown ? (x, y, z) => sdEllipsoidAt(x, y, z, [0, R.waistY - 0.35, R.hipZ - dims.hipR * 0.95], [dims.hipR * 0.95, 0.42, 0.42]) : null;
+    skirtCone = (x, y, z) => { let v = sdRoundCone(x, y, R.hipZ + (z - R.hipZ) * 1.3, top, bot, r1, r2); if (bustle) v = smin(v, bustle(x, y, z), 0.25); return smax(v, masks.bottom(R, x, y), R.round); }; // clipped at waist and hem
     // ghost prim: no body volume, only makes sure the grid covers the flared hem
     prims.push({ type: 'cone', ghost: true, matrix: new THREE.Matrix4(), a: top, b: bot, r1, r2, k: 0 });
   }
   const fat = Math.max(0, p.fat);
   const cell = cellFor(prims, 0.07);
-  const sdfOpts = { inflate: fat * 0.28, clay: p.clay, sag: p.sag * 1.5, seed: p.seed, pad: thick + 0.08, sagFloor: R.crotchY + 0.2, ground: 0 };
+  const C = R.cut, ease = C ? Math.max(0, C.fit) : 0;
+  const sdfOpts = { inflate: fat * 0.28, clay: p.clay, sag: p.sag * 1.5, seed: p.seed, pad: thick + 0.08 + ease * 0.6, sagFloor: R.crotchY + 0.2, ground: 0 };
   const sdf = new BodySDF(prims, sdfOpts);
+  // fitted clothes: tight (fit < 0) thins the shell down to a skin-hugging layer; loose adds the cut's shape
+  const fitThick = (t) => (C && C.fit < 0 ? Math.max(0.018, t * (1 + C.fit * 0.8)) : t);
+  const shapes = C ? cutShapes(sdf, R, C, fitThick(thick)) : {};
   const plainPrims = prims.map((q) => ({ ...q, matrix: q.matrix.toArray() }));
   const layers = [];
-  if (outfit.top !== 'skin') layers.push({ layer: REGION.top, mask: masks.top, thickness: thick, fuzz, share: 0.22 });
+  if (outfit.top !== 'skin') layers.push({ layer: REGION.top, mask: masks.top, thickness: C?.jacket ? fitThick(thick) + 0.03 : thick, fuzz, share: 0.22, // (a jacket clears the trousers it overlaps)
+    extra: shapes.jacket ? (x, y, z) => smax(shapes.jacket(x, y, z), masks.top(R, x, y, z), R.round) : null });
   // pants over shoes (see fitRegions): the cuff thickens over the shoe, the shoe thins inside the pants
   const over = !R.skirt && outfit.shoes !== 'skin' && outfit.bottom !== 'skin';
-  if (outfit.bottom !== 'skin') layers.push({ layer: REGION.bottom, mask: masks.bottom, thickness: thick, fuzz, extra: skirtCone, share: 0.18,
+  const trouserShape = shapes.trousers ? (x, y, z) => smax(shapes.trousers(x, y, z), masks.bottom(R, x, y), R.round) : null;
+  if (outfit.bottom !== 'skin') layers.push({ layer: REGION.bottom, mask: masks.bottom, thickness: C?.trousers ? fitThick(thick) : thick, fuzz, extra: skirtCone || trouserShape, share: 0.18,
     profile: over ? { y: R.shoeTop, w: 0.12, below: Math.max(thick, CUFF), above: thick } : null });
   if (outfit.shoes !== 'skin') layers.push({ layer: REGION.shoes, mask: masks.shoes, thickness: 0.06, share: 0.06,
     profile: over ? { y: R.pantsFloor - 0.04, w: 0.1, below: 0.06, above: 0.02 } : null });
@@ -224,6 +248,86 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
   });
   const covered = (x, y, z) => layers.some((l) => l.mask(R, x, y, z) < -0.06);
   return { prims, sdf, sdfOpts, plainPrims, layers, R, B, cell, handJobs, covered };
+}
+
+// ---- fitted clothes: the garment's own designed shape (clothes-first), unioned with the shell around the body ----
+// Measured from the sculpted body (the field), so the cut always contains it: torso half-width / depth below
+// the armpits, arm and leg radii along their bones. Then the cut's recipe:
+//   fit    -1 (absurdly tight) .. 0 (fitted: the shell alone) .. 1 (baggy: the cut stands off the body)
+//   square  0 (sloped) .. 1 (padded square shoulders)   flare  -0.5 (tapered to the hem) .. 1 (A-line)
+//   length  0 (at the waist) .. 1 (over the hips)         legFlare  -0.5 (pegged) .. 1 (wide bell-bottoms)
+// Tight or fitted (fit <= 0.05): no designed shape at all, the shell hugs the body.
+function extent(sdf, o, dir, max = 4) { // distance from o along dir to the body's surface (0 if o is outside)
+  if (sdf.eval(o[0], o[1], o[2]) > 0) return 0;
+  let t = 0; for (let s = 0.08; s > 0.004; s /= 2) while (t + s < max && sdf.eval(o[0] + dir[0] * (t + s), o[1] + dir[1] * (t + s), o[2] + dir[2] * (t + s)) < 0) t += s;
+  return t;
+}
+function cutShapes(sdf, R, C, t) {
+  const loose = C.fit > 0.05, e = Math.max(0, C.fit), out = {}, zc = R.neckZ;
+  const victorian = C.kind === 'frockcoat' || C.kind === 'tailcoat' || C.sleeves === 'mutton';
+  if (C.jacket && (loose || victorian)) {
+    // torso below the arm band: widest half-width, and front / back extents
+    let W = 0, F = 0, B = 0;
+    const yLo = R.topHem, yHi = R.shoulderY - R.armBand;
+    for (let k = 0; k <= 8; k++) { const y = yLo + ((yHi - yLo) * k) / 8; W = Math.max(W, extent(sdf, [0, y, zc], [1, 0, 0])); F = Math.max(F, extent(sdf, [0, y, zc], [0, 0, 1])); B = Math.max(B, extent(sdf, [0, y, zc], [0, 0, -1])); }
+    const pad = t + 0.04 + 0.28 * e, top = R.shoulderY + 0.02 + 0.1 * C.square, bot = Math.max(R.topHem, R.waistY - 0.15 - 0.7);
+    // (the hem widens with flare only; bagginess alone no longer balloons the bottom into a puffer)
+    const wTop = Math.max(W, R.shoulderX * (0.8 + 0.35 * C.square)) + pad, wBot = W + t + 0.04 + 0.12 * e + C.flare * 0.3;
+    const zMid = zc + (F - B) / 2, D = (F + B) / 2 + pad * 0.8;
+    // arm radius along the sleeve (horizontal in the bind pose)
+    let ar = 0; for (let k = 1; k <= 5; k++) { const x = R.shoulderX + ((R.wristX - R.shoulderX) * k) / 7; for (const d of [[0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) ar = Math.max(ar, extent(sdf, [x, R.shoulderY, zc], d)); }
+    const r1 = ar + pad * 0.9, r2 = ar + pad * 0.6 + 0.05 * e, rr = 0.06 + 0.06 * (1 - C.square);
+    const elbowX = (R.shoulderX + R.wristX) / 2;
+    // below the waist: a frock coat's skirt (a flared cone around both legs to the knee), a tailcoat's tails (a
+    // split slab behind the thighs to the knee)
+    let hipW = 0, back = 0;
+    for (let k = 0; k <= 3; k++) { const y = R.crotchY + ((R.waistY - R.crotchY) * k) / 3; hipW = Math.max(hipW, extent(sdf, [0, y, R.hipZ], [1, 0, 0])); back = Math.max(back, extent(sdf, [0, y, R.hipZ], [0, 0, -1])); }
+    // (the trousers' own cut stands tp off the body: the coat's skirt and tails clear it, or trousers poke through)
+    const tp = (C.trousers && loose ? 0.03 + 0.22 * e : 0) + 2 * t + 0.08;
+    const skirtTop = [0, R.waistY - 0.1, R.hipZ], skirtBot = [0, R.topHem, R.hipZ], sr1 = hipW + tp + 0.04, sr2 = hipW + tp + 0.22 + 0.3 * Math.max(0, C.flare);
+    out.jacket = (x, y, z) => {
+      const ax = Math.abs(x);
+      let v = 1e3;
+      if (loose) {
+        const s = Math.min(1, Math.max(0, (y - bot) / (top - bot))), hw = wBot + (wTop - wBot) * s;
+        v = smin(sdRoundBoxY(x, y, z - zMid, hw, bot, top, D, rr), sdRoundCone(ax, y, z, [R.shoulderX * 0.6, R.shoulderY, zc], [R.wristX, R.shoulderY, zc], r1, r2), 0.12);
+      }
+      // leg-of-mutton sleeves: a big puff from the shoulder to the elbow, tight below it
+      if (C.sleeves === 'mutton') v = smin(v, sdRoundCone(ax, y, z, [R.shoulderX + 0.15, R.shoulderY + 0.05, zc], [elbowX, R.shoulderY, zc], ar + 0.32, ar + t + 0.04), 0.1);
+      if (C.kind === 'frockcoat') v = smin(v, sdRoundCone(x, y, R.hipZ + (z - R.hipZ) * 1.15, skirtTop, skirtBot, sr1, sr2), 0.2);
+      if (C.kind === 'tailcoat') {
+        const tail = sdRoundBoxY(x, y, z - Math.min(R.hipZ - back - tp, R.tailZ - 0.12), hipW * 0.85 + tp, R.tailHem, R.waistY - 0.05, 0.09, 0.04);
+        v = smin(v, smax(tail, 0.03 - ax, 0.03), 0.1); // (split up the middle)
+      }
+      return v;
+    };
+  }
+  if (!loose) return out;
+  if (C.trousers) {
+    let thigh = 0, calf = 0;
+    for (const sx of [1, -1]) {
+      const at = (f) => { const y = R.crotchY + (R.ankleY - R.crotchY) * f, x = sx * (R.hipX + (R.ankleX - R.hipX) * f); return [x, y, R.hipZ]; };
+      for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) { thigh = Math.max(thigh, extent(sdf, at(0.12), d)); calf = Math.max(calf, extent(sdf, at(0.7), d)); }
+    }
+    const pad = t + 0.03 + 0.22 * e, rTop = thigh + pad, rBot = Math.max(calf + pad * 0.7, calf + 0.05 + C.legFlare * (0.25 + 0.2 * e));
+    let hw = 0, hd = 0; for (let k = 0; k <= 4; k++) { const y = R.crotchY + ((R.waistY - R.crotchY) * k) / 4; hw = Math.max(hw, extent(sdf, [0, y, R.hipZ], [1, 0, 0])); hd = Math.max(hd, extent(sdf, [0, y, R.hipZ], [0, 0, 1]), extent(sdf, [0, y, R.hipZ], [0, 0, -1])); }
+    out.trousers = (x, y, z) => {
+      const ax = Math.abs(x);
+      // each leg stays on its own side (a wide leg met the other and read as a skirt): a flat inseam at x = 0
+      const leg = smax(sdRoundCone(ax, y, z, [R.hipX, R.crotchY + 0.15, R.hipZ], [R.ankleX, R.ankleY, R.hipZ], rTop, rBot), (y < R.crotchY ? 0.035 : -1) - ax, 0.04);
+      // (under a long coat or tails the seat stays close: its box corners poked out through the coat's skirt)
+      if (C.kind === 'frockcoat' || C.kind === 'tailcoat') return leg;
+      const seat = sdRoundBoxY(x, y, z - R.hipZ, hw + pad, R.crotchY - 0.1, R.waistY + 0.02, hd + pad, 0.12);
+      return smin(leg, seat, 0.15);
+    };
+  }
+  return out;
+}
+// a box standing between y0 and y1, half-width hw (in x) and half-depth hd (in z, around 0), rounded by r
+function sdRoundBoxY(x, y, z, hw, y0, y1, hd, r) {
+  const qx = Math.abs(x) - hw + r, qy = Math.abs(y - (y0 + y1) / 2) - (y1 - y0) / 2 + r, qz = Math.abs(z) - hd + r;
+  const ox = Math.max(qx, 0), oy = Math.max(qy, 0), oz = Math.max(qz, 0);
+  return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, qy, qz), 0) - r;
 }
 
 // Region fitting that depends on the actual sculpt (both the worker sculpt and the bake call this on

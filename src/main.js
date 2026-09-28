@@ -290,6 +290,7 @@ function buildControls() {
 
 function syncControls() {
   if ($('#boxy')) $('#boxy').checked = params.bodyShape === 'boxy';
+  if ($('#fitted')) $('#fitted').checked = params.clothes === 'fitted';
   for (const [k, { input, out }] of Object.entries(inputs)) {
     input.value = params[k];
     if (out) out.textContent = (+params[k]).toFixed(2);
@@ -355,7 +356,8 @@ function faceMode(p, newAnimal) {
     q.snout = -0.4 + Math.random() * 1.4;
     q.earSize = Math.random() < 0.15 ? 1.8 + Math.random() * 1.2 : 0.8 + Math.random() * 0.5;
   }
-  if (mode === 'human' && q.faceKind === 'mask' && !$('#randMask').checked) q.faceKind = 'human';
+  if (mode === 'human' && $('#randMask').checked && Math.random() < 0.25) q.faceKind = 'mask'; // (people only)
+  if (!$('#randGadget').checked) q.gadget = 'none';
   return q;
 }
 function setMode(m) {
@@ -367,7 +369,9 @@ function setMode(m) {
 $('#modeHuman').onclick = () => setMode('human');
 $('#modeAnimal').onclick = () => setMode('animal');
 // boxy bodies (Body shape): a switch that sticks, Randomize keeps whatever it's set to
+$('#fitted').onchange = () => { params = { ...params, clothes: $('#fitted').checked ? 'fitted' : 'classic' }; syncControls(); rebuild(); };
 $('#boxy').onchange = () => { params = { ...params, bodyShape: $('#boxy').checked ? 'boxy' : 'smooth' }; syncControls(); rebuild(); };
+$('#randGadget').onchange = () => { if (!$('#randGadget').checked && params.gadget !== 'none') { params = { ...params, gadget: 'none' }; syncControls(); rebuild(); } };
 $('#randMask').onchange = () => { if (params.faceKind === 'mask' && !$('#randMask').checked) { params = { ...params, faceKind: 'human' }; syncControls(); rebuild(); } };
 $('#reset').onclick = () => { params = defaults(); syncControls(); rebuild(); };
 $('#export').onclick = () => {

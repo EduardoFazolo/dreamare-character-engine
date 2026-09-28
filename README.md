@@ -42,7 +42,28 @@ Hands have a full finger skeleton (optional, on by default): each pose sets a ha
 **Clothes with personality** (painted into the body texture, so no geometry or skeleton changes):
 - **Layers** (`bodybake.js`, per outfit in `OUTFITS[..].details`): a V opening with a shirt inside (`vneck`, `shirt`), a long tie or bow tie (`tie`), lapels along the V, the shirt's collar points (also over crew necks), a breast pocket. Suits, the undertaker, velvet, the cardigan, the sweater, denim, the farmer and the clown wear them.
 - **Body shape: boxy** (the *boxy* switch at the top): the old console look. Each body cross-section is pushed from round toward a rounded square around its own bone: a box torso, angular limbs. Skin and garments move by the same factor, so clothes stay on top; feet stay flat on the ground. Every triangle is flat-shaded. Skin weights come from the original shape, so the skeleton, clips and export are unchanged. Randomize keeps the setting.
+- **Clothes: fitted** (the *fitted clothes* switch): clothes first. Each outfit's `cut` (top `jacket`, bottom `trousers`) with the character's recipe (Clothes cut sliders) gives the garment its own designed shape. That shape is unioned with the shell around the body, and the full body stays underneath.
+  - **Fit:** -1 is absurdly tight (the shell thins to the skin, and Randomize fattens the body to bulge in it), 0 is fitted, 1 is baggy (the cut stands off the body).
+  - **Cut sliders:** Shoulders (sloped to padded square), Jacket flare and length (down over the hips), Trouser flare (pegged to bell-bottoms).
+  - **Measured from the sculpt** (`sculpt.js cutShapes`: torso extents, arm and leg radii), so the cut always contains the body. Each trouser leg stays on its own side of a flat inseam.
+  - Randomize rolls the recipe and nudges the body toward it (square shoulders widen the shoulders). Classic is the old behaviour.
+- **Victorian cuts** (always worn, fitted or not):
+  - **Frock coat:** to the knee, with a flared skirt round both legs.
+  - **Tailcoat:** cut at the waist in front, split tails behind to the knee.
+  - **Widow and governess:** a fitted bodice with leg-of-mutton sleeves and a floor-length gown with a bustle.
+
+  Victorians often get a top hat or bowler. Under a long coat or tails the trousers' seat stays close, so it can't poke through.
 - **Real garments** (`GARMENTS` in `body.js`, photos in `public/garments/` with credits): the photo sits on the front of the torso, fitted by four points (neckline centre, both shoulder seams, hem centre). The top edge follows the shoulder slope. The back and sleeves wear a mirror-tiled patch of the same garment's fabric, or a shirt color for a sleeveless waistcoat. Garments keep their real colors (no outfit hue). The outfits are mourner (suit and tie) and waistcoat. Only public-domain / CC0 photos are used, so nothing needs attribution. Randomize picks them like any other outfit. The photos only feed the body texture bake, so exports stay the same size.
+
+**Face wear** (`src/facewear.js`, procedural textures, nothing to license):
+- **Gadgets:** monocle (with a chain), round glasses, cigar, cigarette, pipe. They are small rigid meshes at the eyes or the mouth corner, on people and animals alike. Randomize gives about 1 in 4 characters a gadget; the *gadgets* switch turns them off.
+- **Masks** (Face: mask, people only; the *masks* switch lets Randomize put one on about 1 in 4 people):
+  - **Porcelain doll:** eye holes, lashes, rosy cheeks, small painted lips, a crack.
+  - **Plague doctor:** a leather plate, brass-rimmed glass eyes, a long curved beak.
+  - **Burlap sack:** over the whole head, with ragged eye holes and a stitched mouth.
+  - **Bandages:** wound round the head, eyes left open.
+
+  Plates and wraps are offset copies of the head's own surface and carry its morph targets, so they move with the jaw. The sack and bandages hide the hair. Export material slots: `gadget`, `mask`.
 
 ## Head and hair
 

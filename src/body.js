@@ -9,25 +9,31 @@ import { HEAD_PIVOT } from './headsculpt.js';
 const TILE = 0.9; // texture tile size in head units
 
 export const OUTFITS = {
+  // cut: the garments' shapes when Clothes: fitted (sculpt.js cutShapes): top 'jacket', bottom 'trousers'
   // details: buttons, belt, and the layers over the top's front (bodybake.js): vneck (depth of a V opening,
   // as a fraction of the torso) with a shirt color inside, tie { color, stripe?, kind: 'long' | 'bow' },
   // lapels along the V, the shirt's collar points, a breast pocket
-  suit: { top: 'Fabric039', bottom: 'Fabric039', shoes: 'Leather026', details: { buttons: true, belt: true, vneck: 0.6, shirt: [0.88, 0.86, 0.8], tie: { color: [0.42, 0.08, 0.1], stripe: [0.15, 0.1, 0.22] }, lapels: true, pocket: true, collar: true } },
-  undertaker: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026', details: { buttons: true, vneck: 0.55, shirt: [0.9, 0.9, 0.86], tie: { color: [0.06, 0.06, 0.07] }, lapels: true, collar: true } },
-  gunslinger: { top: 'Fabric042', bottom: 'Fabric022', shoes: 'Leather033C', details: { belt: true, vneck: 0.35, shirt: [0.8, 0.72, 0.58], collar: true, tie: { color: [0.12, 0.08, 0.05], kind: 'bow' } } },
+  suit: { top: 'Fabric039', bottom: 'Fabric039', shoes: 'Leather026', details: { buttons: true, belt: true, vneck: 0.6, shirt: [0.88, 0.86, 0.8], tie: { color: [0.42, 0.08, 0.1], stripe: [0.15, 0.1, 0.22] }, lapels: true, pocket: true, collar: true }, cut: { top: 'jacket', bottom: 'trousers' } },
+  undertaker: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026', details: { buttons: true, vneck: 0.55, shirt: [0.9, 0.9, 0.86], tie: { color: [0.06, 0.06, 0.07] }, lapels: true, collar: true }, cut: { top: 'jacket', bottom: 'trousers' } },
+  gunslinger: { top: 'Fabric042', bottom: 'Fabric022', shoes: 'Leather033C', details: { belt: true, vneck: 0.35, shirt: [0.8, 0.72, 0.58], collar: true, tie: { color: [0.12, 0.08, 0.05], kind: 'bow' } }, cut: { top: 'jacket', bottom: 'trousers' } },
   fur: { top: 'Carpet011', bottom: 'Carpet011', shoes: 'skin', hue: -35, sat: 1.5, girth: 1.25, fuzz: 0.12 },
   shag: { top: 'Carpet012', bottom: 'Carpet012', shoes: 'skin', girth: 1.2, fuzz: 0.12 },
-  denim: { top: 'Fabric022', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true, collar: true, shirt: [0.3, 0.38, 0.5], pocket: true } },
-  knit: { top: 'Fabric040', bottom: 'Fabric025', shoes: 'Leather037', details: { buttons: true, vneck: 0.55, shirt: [0.86, 0.82, 0.72], collar: true } },
-  sweater: { top: 'Fabric018', bottom: 'Fabric039', shoes: 'Leather026', details: { collar: true, shirt: [0.88, 0.87, 0.84] } },
-  farmer: { top: 'Fabric054', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true, collar: true, shirt: [0.7, 0.62, 0.5], pocket: true } },
-  clown: { top: 'Fabric055', bottom: 'Fabric076', shoes: 'Leather037', feet: 1.7, details: { buttons: true, vneck: 0.3, shirt: [0.9, 0.9, 0.9], tie: { color: [0.8, 0.12, 0.1], kind: 'bow' } } },
-  prisoner: { top: 'Fabric071', bottom: 'Fabric071', shoes: 'Leather026' },
-  velvet: { top: 'Fabric028', bottom: 'Fabric051', shoes: 'Leather026', details: { buttons: true, vneck: 0.45, shirt: [0.92, 0.9, 0.86], tie: { color: [0.08, 0.06, 0.08], kind: 'bow' }, lapels: true, collar: true } },
+  denim: { top: 'Fabric022', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true, collar: true, shirt: [0.3, 0.38, 0.5], pocket: true }, cut: { bottom: 'trousers' } },
+  knit: { top: 'Fabric040', bottom: 'Fabric025', shoes: 'Leather037', details: { buttons: true, vneck: 0.55, shirt: [0.86, 0.82, 0.72], collar: true }, cut: { bottom: 'trousers' } },
+  sweater: { top: 'Fabric018', bottom: 'Fabric039', shoes: 'Leather026', details: { collar: true, shirt: [0.88, 0.87, 0.84] }, cut: { bottom: 'trousers' } },
+  farmer: { top: 'Fabric054', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true, collar: true, shirt: [0.7, 0.62, 0.5], pocket: true }, cut: { bottom: 'trousers' } },
+  clown: { top: 'Fabric055', bottom: 'Fabric076', shoes: 'Leather037', feet: 1.7, details: { buttons: true, vneck: 0.3, shirt: [0.9, 0.9, 0.9], tie: { color: [0.8, 0.12, 0.1], kind: 'bow' } }, cut: { top: 'jacket', bottom: 'trousers' } },
+  prisoner: { top: 'Fabric071', bottom: 'Fabric071', shoes: 'Leather026', cut: { bottom: 'trousers' } },
+  velvet: { top: 'Fabric028', bottom: 'Fabric051', shoes: 'Leather026', details: { buttons: true, vneck: 0.45, shirt: [0.92, 0.9, 0.86], tie: { color: [0.08, 0.06, 0.08], kind: 'bow' }, lapels: true, collar: true }, cut: { top: 'jacket', bottom: 'trousers' } },
   naked: { top: 'skin', bottom: 'skin', shoes: 'skin' },
+  // Victorian: their cut is always worn (cut.always), fitted or not
+  frockcoat: { top: 'Fabric042', bottom: 'Fabric039', shoes: 'Leather026', victorian: true, details: { buttons: true, vneck: 0.4, shirt: [0.9, 0.88, 0.82], tie: { color: [0.1, 0.08, 0.1], kind: 'bow' }, lapels: true, collar: true }, cut: { top: 'frockcoat', bottom: 'trousers', always: true } },
+  tailcoat: { top: 'Fabric028', bottom: 'Fabric042', shoes: 'Leather026', victorian: true, details: { buttons: true, vneck: 0.55, shirt: [0.92, 0.9, 0.86], tie: { color: [0.9, 0.9, 0.88], kind: 'bow' }, lapels: true, collar: true }, cut: { top: 'tailcoat', bottom: 'trousers', always: true } },
+  widow: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026', victorian: true, details: { buttons: true, collar: true, shirt: [0.12, 0.1, 0.12] }, cut: { top: 'bodice', sleeves: 'mutton', bottom: 'gown', always: true, fit: -0.3 } },
+  governess: { top: 'Fabric051', bottom: 'Fabric051', shoes: 'Leather037', victorian: true, details: { buttons: true, collar: true, shirt: [0.9, 0.88, 0.82] }, cut: { top: 'bodice', sleeves: 'mutton', bottom: 'gown', always: true, fit: -0.2 } },
   // real garments: a photo on the front of the torso, its own fabric on the back and sleeves (GARMENTS)
-  mourner: { top: 'garment:suit-tie', bottom: 'Fabric042', shoes: 'Leather026' },
-  waistcoat: { top: 'garment:waistcoat', bottom: 'Fabric042', shoes: 'Leather026' },
+  mourner: { top: 'garment:suit-tie', bottom: 'Fabric042', shoes: 'Leather026', cut: { top: 'jacket', bottom: 'trousers' } },
+  waistcoat: { top: 'garment:waistcoat', bottom: 'Fabric042', shoes: 'Leather026', cut: { bottom: 'trousers' } },
 };
 
 // Garment photos (public/garments, public domain / CC0 only: credits there), worn on the front of the torso: where the neckline's

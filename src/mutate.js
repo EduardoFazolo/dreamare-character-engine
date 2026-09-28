@@ -1,5 +1,6 @@
 import { OUTFITS, POSES } from './body.js';
 import { HAIR_STYLES, HAT_TYPES } from './headsculpt.js';
+import { GADGETS, MASKS } from './facewear.js';
 
 // Parameter schema + landmark-driven warps. The same deform() runs in UV space (2D, bakes into
 // the texture) and on the 3D mesh, because both share MediaPipe's 468-landmark indexing.
@@ -47,6 +48,13 @@ export const SCHEMA = [
     ['fingerLen', 'Finger length', 0.4, 3.5, 1],
     ['legLen', 'Leg length', 0.35, 1.9, 1],
     ['footSize', 'Foot size', 0.5, 2.5, 1],
+  ]},
+  { group: 'Clothes cut', items: [
+    ['clothesFit', 'Fit (tight .. baggy)', -1, 1, 0.3],
+    ['cutSquare', 'Shoulders (sloped .. square)', 0, 1, 0.5],
+    ['cutFlare', 'Jacket flare', -0.5, 1, 0],
+    ['cutLength', 'Jacket length', 0, 1, 0.3],
+    ['legFlare', 'Trouser flare', -0.5, 1, 0],
   ]},
   { group: 'Body sculpt', items: [
     ['muscle', 'Muscle', -0.5, 2, 0.3],
@@ -111,7 +119,9 @@ export const SCHEMA = [
 export const ANIMALS = ['pig', 'goat', 'sheep', 'cow', 'rabbit', 'dog', 'deer', 'horse'];
 
 export const CHOICES = {
-  faceKind: { label: 'Face', options: ['human', 'animal'], def: 'human' },
+  faceKind: { label: 'Face', options: ['human', 'mask', 'animal'], def: 'human' },
+  mask: { label: 'Mask', options: MASKS, def: 'doll' },
+  gadget: { label: 'Face gadget', options: GADGETS, def: 'none' },
   animal: { label: 'Animal', options: ANIMALS, def: 'pig' },
   atlasRes: { label: 'Texture res', options: [64, 128, 256, 512], def: 128 },
   renderH: { label: 'Render height', options: [224, 240, 320, 448], def: 240 },
@@ -120,6 +130,8 @@ export const CHOICES = {
   bodyStyle: { label: 'Body style', options: ['sculpted', 'segmented'], def: 'sculpted' },
   // boxy: the old console look (few, flat-shaded faces, squared cross-sections), see rig.js boxify
   bodyShape: { label: 'Body shape', options: ['smooth', 'boxy'], def: 'smooth' },
+  // fitted: clothes-first, each outfit's cut shapes its garments and nudges the body (sculpt.js cutShapes)
+  clothes: { label: 'Clothes', options: ['classic', 'fitted'], def: 'classic' },
   bodyRes: { label: 'Body texture res', options: [128, 256, 512, 1024], def: 512 },
   bottomType: { label: 'Bottom', options: ['pants', 'skirt'], def: 'pants' },
   pose: { label: 'Pose', options: Object.keys(POSES), def: 'stand' },
@@ -324,6 +336,15 @@ export function randomize(base) {
   p.outfitBright = rnd(0.75, 1.15);
   p.pose = pick(['stand', 'stand', 'stand', 'hunch', 'hunch', 'crouch', 'gunslinger', 'zombie', 'broken', 'lurker', 'puppet', 'stare', 'crawler', 'mantis']);
   p.outfit = pick(Object.keys(OUTFITS));
+  // the clothes' cut (used when Clothes: fitted), and the body nudged toward it: clothes first. Sometimes
+  // tight, now and then absurdly so (the body bulging in it)
+  p.clothesFit = Math.random() < 0.15 ? rnd(-1, -0.4) : Math.random() < 0.25 ? rnd(0.6, 1) : rnd(0, 0.5);
+  p.cutSquare = rnd(0, 1); p.cutFlare = Math.random() < 0.3 ? rnd(0.4, 1) : rnd(-0.4, 0.3);
+  p.cutLength = rnd(0, 1); p.legFlare = Math.random() < 0.2 ? rnd(0.5, 1) : rnd(-0.5, 0.3);
+  if (p.clothes === 'fitted' && OUTFITS[p.outfit]?.cut) {
+    p.shoulderW = Math.max(1.2, Math.min(4.5, p.shoulderW + (p.cutSquare - 0.5) * 0.8));
+    if (p.clothesFit < -0.4) { p.belly = Math.min(2.2, p.belly + 0.5); p.fat = Math.min(1.5, p.fat + 0.4); } // squeezed in
+  }
   // sculpt: mostly subtle, sometimes one thing goes very wrong
   p.seed = Math.floor(Math.random() * 1e9);
   p.muscle = rnd(-0.3, 0.9);
@@ -340,6 +361,10 @@ export function randomize(base) {
   p.bodyGrime = rnd(0.1, 0.7);
   // about 1 in 5 wears a hat; caps and beanies come in random colors
   p.hat = Math.random() < 0.2 ? pick(HAT_TYPES.slice(1)) : 'none';
+  if (OUTFITS[p.outfit]?.victorian && p.hat === 'none' && Math.random() < 0.5) p.hat = pick(['tophat', 'tophat', 'bowler']); // (a Victorian likes a hat)
+  // a face gadget now and then (the gadgets switch can turn them off); masks are picked in main.js (people only)
+  p.gadget = Math.random() < 0.25 ? pick(GADGETS.slice(1)) : 'none';
+  p.mask = pick(MASKS);
   p.hatHue = ['cap', 'beanie'].includes(p.hat) ? rnd(-180, 180) : 0;
   // hair: the person's own, cut from the photo (the sculpted cuts read as toy wigs); sometimes receding
   p.hairStyle = 'photo';

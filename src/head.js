@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { sculptHead } from './headsculpt.js';
 import { photoHair } from './photohair.js';
+import { buildGadget, buildMask, MASK_HIDES_HAIR } from './facewear.js';
 
 import { perf } from './perf.js';
 import { unwrap, BodyBaker } from './bodybake.js';
@@ -169,6 +170,9 @@ export class HeadRig {
     this.ears = new THREE.Mesh(new THREE.BufferGeometry(), this.earMat); this.ears.visible = false;
     this.group.add(this.ears);
 
+    // face gadgets and masks (facewear.js)
+    this.wear = new THREE.Group(); this.group.add(this.wear);
+
     this.hairMat = ps2Material({ map: canvasTex(32, 64, drawHair), alphaTest: 0.5, side: THREE.DoubleSide });
     this.hairMat.name = 'hairStrands';
     this.hair = new THREE.Group();
@@ -263,7 +267,18 @@ export class HeadRig {
     this.photo = p.hairStyle === 'photo';
     if (this.photo) this.buildPhotoHair(hair, p, hairId);
 
-    this.buildHair(p.hair === 'stringy');
+    // masks (people only) and gadgets, rebuilt when the head or the choice changes; a sack or bandages hide the hair
+    const mask = p.faceKind === 'mask' ? p.mask || 'doll' : null, wearKey = `${this.headKey}|${mask}|${p.gadget}`;
+    if (wearKey !== this.wearKey && this.shell) {
+      this.wearKey = wearKey;
+      this.wear.traverse((o) => { o.geometry?.dispose(); o.material?.map?.dispose?.(); });
+      this.wear.clear();
+      if (mask) this.wear.add(buildMask(mask, this.shell, this.faceP));
+      if (p.gadget && p.gadget !== 'none') this.wear.add(buildGadget(p.gadget, this.faceP));
+    }
+    const hideHair = mask && MASK_HIDES_HAIR.has(mask);
+    if (hideHair) this.hairShell.visible = false;
+    this.buildHair(p.hair === 'stringy' && !hideHair);
     if (p.hat !== 'none') {
       this.hatMat.uniforms.map.value = this.hatTexture(p.hat);
       this.hatMat.uniforms.hueShift.value = p.hatHue || 0;
@@ -431,6 +446,10 @@ export class HeadRig {
     if (nn[0] * (a0[0] - C[0]) + nn[1] * (a0[1] - C[1]) + nn[2] * (a0[2] - C[2]) < 0) for (let q = hullStart; q < idx.length; q += 3) { const x = idx[q + 1]; idx[q + 1] = idx[q + 2]; idx[q + 2] = x; }
     // face rig: mouth and eyes cut open, eyeballs appended, mouth interior, morph targets (faceanim.js)
     const rig = perf.time('head.faceRig', () => buildFaceRig(al.P, al.uv, this.canon.index, pos));
+    // what masks are built on: the head's surface (uncut), and its morphs for those vertices
+    const nv = pos.length / 3;
+    this.shell = { pos: pos.slice(), idx: idx.slice(), faceTris: this.canon.index.length / 3, canonUV: this.canon.uv, morphs: Object.fromEntries(MORPHS.map((m) => [m, rig.headMorphs[m].slice(0, nv * 3)])) };
+    this.faceP = al.P.map((q) => [...q]);
     const faceTris = this.canon.index.length / 3, keep = [];
     for (let t = 0; t < idx.length / 3; t++) if (t >= faceTris || !rig.cut.has(t)) keep.push(idx[t * 3], idx[t * 3 + 1], idx[t * 3 + 2]);
     keep.push(...rig.extra.idx);
