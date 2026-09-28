@@ -169,6 +169,12 @@ export class BodyBaker {
         ankleY: { value: 0 }, crotchY: { value: 0 }, sleeve: { value: 1 }, pants: { value: 1 },
         skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, hemRound: { value: 0.1 }, pantsFloor: { value: 0 }, shoeTop: { value: 0 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
         belt: { value: 0 }, buttons: { value: 0 }, grime: { value: 0 }, tile: { value: 1 / 0.9 },
+        // layers painted over the top's front (outfit details): a V opening showing a shirt, a tie or bow tie,
+        // lapels along the V, the shirt's collar points, a breast pocket
+        vDepth: { value: 0 }, shirtCol: { value: new THREE.Vector3(0.86, 0.84, 0.78) }, tieCol: { value: new THREE.Vector3() }, tieCol2: { value: new THREE.Vector3() },
+        tieKind: { value: 0 }, lapels: { value: 0 }, pocket: { value: 0 }, collarPts: { value: 0 },
+        // a real garment photo on the torso's front (body.js GARMENTS): neck u, neck v, half shoulder width, hem v
+        garmentTex: { value: null }, garment: { value: new THREE.Vector4() }, shoulderV: { value: 0 }, useGarment: { value: 0 }, sleeveCol: { value: new THREE.Vector3() }, useSleeveCol: { value: 0 },
         bare: { value: new THREE.Vector4() }, // 1 where a region's fabric is just skin
         ...uniforms,
       },
@@ -218,6 +224,19 @@ export class BodyBaker {
     u.skirt.value = R.skirt ? 1 : 0;
     u.belt.value = R.details.belt ? 1 : 0;
     u.buttons.value = R.details.buttons ? 1 : 0;
+    const d = R.details;
+    u.vDepth.value = d.vneck || 0;
+    u.shirtCol.value.set(...(d.shirt || [0.86, 0.84, 0.78]));
+    u.tieKind.value = d.tie ? (d.tie.kind === 'bow' ? 2 : 1) : 0;
+    if (d.tie) { u.tieCol.value.set(...d.tie.color); u.tieCol2.value.set(...(d.tie.stripe || d.tie.color)); }
+    u.lapels.value = d.lapels ? 1 : 0; u.pocket.value = d.pocket ? 1 : 0; u.collarPts.value = d.collar ? 1 : 0;
+    const gar = inputs[0].garment;
+    u.useGarment.value = gar ? 1 : 0;
+    if (gar) {
+      const g = gar.def; u.garmentTex.value = gar.photo;
+      u.garment.value.set(g.neck[0], g.neck[1], (g.shR[0] - g.shL[0]) / 2, g.hem[1]); u.shoulderV.value = (g.shL[1] + g.shR[1]) / 2;
+      u.useSleeveCol.value = g.sleeves ? 1 : 0; if (g.sleeves) u.sleeveCol.value.set(...g.sleeves);
+    }
     u.grime.value = grime;
     return this.paint(geo, res);
   }
@@ -263,6 +282,8 @@ const BAKE_FRAG = /* glsl */`
 uniform sampler2D tex0, tex1, tex2, tex3;
 uniform vec3 tint0, tint1, tint2, tint3; // hue degrees, saturation, brightness
 uniform float waistY, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, hemRound, pantsFloor, shoeTop, shoulderY, armBand, toeZ;
+uniform float vDepth, tieKind, lapels, pocket, collarPts; uniform vec3 shirtCol, tieCol, tieCol2;
+uniform sampler2D garmentTex; uniform vec4 garment; uniform float useGarment, useSleeveCol, shoulderV; uniform vec3 sleeveCol;
 uniform vec4 bare;
 varying vec3 vPos; varying vec3 vNor; varying float vAo; varying float vLayer;
 
@@ -310,6 +331,20 @@ void main(){
   else c = tintc(tri(tex3, p, n), tint3);
 
   float isBare = r == 0 ? bare.x : r == 1 ? bare.y : r == 2 ? bare.z : 1.;
+  // a real garment: its photo on the torso's front (neckline -> hem, shoulder -> shoulder), fading out toward
+  // the sides; the back and sleeves wear its fabric tile (tex0 already), or a shirt color for sleeveless ones
+  if (r == 0 && useGarment > .5 && isBare < .5) {
+    bool sleeve = abs(p.x) > shoulderX * .95 && abs(p.y - shoulderY) < armBand;
+    if (sleeve) { if (useSleeveCol > .5) c = sleeveCol * (.88 + .16 * vnoise(p * 40.)); }
+    else {
+      // the top edge follows the shoulder's slope in both: neckline at the centre -> shoulder seam at the side
+      // (a straight mapping put the photo's background above the shoulders onto the body's shoulder tops)
+      float ax = min(abs(p.x) / shoulderX, 1.), yTop = mix(collarY - .12, shoulderY, ax), vTop = mix(garment.y, shoulderV, ax);
+      float by = (yTop - p.y) / (yTop - (waistY - .15));
+      vec2 guv = vec2(garment.x + clamp(p.x / shoulderX, -1., 1.) * garment.z * .96, 1. - (vTop + max(by, 0.) * (garment.w - vTop)));
+      if (by > -.02) c = mix(c, texture2D(garmentTex, guv).rgb, smoothstep(.05, .45, n.z));
+    }
+  }
   // hems: darker fold right at a clothing boundary, and a dashed stitch just inside it
   if (isBare < .5) {
     c *= mix(.55, 1., smoothstep(0., .07, edge));
@@ -321,8 +356,44 @@ void main(){
     c = vec3(.2, .12, .07) * (.8 + .4 * vnoise(p * 30.));
     if (p.z > 0. && abs(p.x) < .1) c = vec3(.72, .64, .42);
   }
+  // layers over the top's front: the V opening (shirt inside, lapels along it), collar points, tie, pocket
+  bool front = r == 0 && isBare < .5 && p.z > neckZ - .2 && n.z > .15 && abs(p.x) < shoulderX * .9 && p.y > waistY - .2;
+  // (measured: the neck hole reaches collarY - .12 with radius neckHole; the V starts at that neckline, wider
+  // than the hole so the lapels show beside the neck, and runs vDepth of the torso down)
+  float torso = collarY - waistY, top = collarY - .12, vBot = top - vDepth * torso;
+  float hw = vDepth > 0. ? (neckHole + .22) * clamp((p.y - vBot) / (top - vBot), 0., 1.) : 0.; // V half-width at this height
+  bool inV = front && vDepth > 0. && p.y > vBot && abs(p.x) < hw;
+  if (front && lapels > .5 && vDepth > 0. && p.y > vBot - .05) { // lapels: a band along the V, its edge a fold
+    float d = abs(p.x) - hw, lw = .12 + .14 * clamp((p.y - vBot) / (top - vBot), 0., 1.);
+    float notch = top - .3 * (top - vBot);
+    if (d > 0. && d < lw && !(abs(p.y - notch) < .035 && d > lw * .45)) c *= d < .03 ? .55 : 1.14;
+  }
+  if (inV) {
+    c = shirtCol * (.88 + .16 * vnoise(p * 40.));
+    if (abs(p.x) < .014) c *= .85; // placket
+  }
+  // the shirt's collar: a point on each side, hanging from the neckline's edge toward the centre line
+  if (front && collarPts > .5 && p.y < top + .02 && p.y > top - .42) {
+    float yy = (top + .02 - p.y) / .44, xx = abs(p.x), xin = neckHole * (.45 - .3 * yy), xout = neckHole * (1.15 - yy);
+    if (xx > xin && xx < xout) c = shirtCol * (.95 + .1 * vnoise(p * 40.)) * (xx < xin + .03 || xx > xout - .03 ? .72 : 1.);
+  }
+  if (inV && tieKind > .5) {
+    float t = (top - p.y) / max(.2, top - vBot);
+    if (tieKind < 1.5) { // long tie: a knot, then widening down to the V's bottom
+      float w = t < .08 ? .075 : .065 + .06 * clamp(t, 0., 1.);
+      if (abs(p.x) < w && t > 0.) { c = mix(tieCol, tieCol2, step(.5, fract((p.y + p.x) * 7.))) * (.85 + .2 * vnoise(p * 30.)); if (t < .08) c *= 1.15; }
+    } else if (t > 0. && t < .14) { // bow tie
+      float band = .06 * (1. + abs(p.x) * 3.);
+      if (abs(p.x) < .16 && abs(t - .07) * (collarY - vBot) < band * (abs(p.x) < .03 ? .6 : 1.)) c = tieCol * (abs(p.x) < .03 ? .7 : 1.) * (.9 + .15 * vnoise(p * 30.));
+    }
+  }
+  if (front && pocket > .5 && !inV) { // breast pocket on the left chest: its top seam and a square
+    float py = collarY - .38 * torso, px0 = shoulderX * .3, px1 = shoulderX * .62;
+    if (p.x > px0 && p.x < px1 && abs(p.y - py) < .018) c *= .55;
+    if (p.x > px0 + .05 && p.x < px0 + .22 && p.y > py && p.y < py + .07) c = shirtCol * .95;
+  }
   // buttons down the front of the top
-  if (buttons > .5 && r == 0 && isBare < .5 && p.z > 0. && abs(p.x) < .06) {
+  if (buttons > .5 && r == 0 && isBare < .5 && p.z > 0. && abs(p.x) < .06 && !inV) {
     vec2 q = vec2(p.x, mod(p.y - waistY, .45) - .225);
     if (length(q) < .04) c = vec3(.85, .8, .7) * .6;
   }

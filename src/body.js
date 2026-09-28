@@ -9,19 +9,34 @@ import { HEAD_PIVOT } from './headsculpt.js';
 const TILE = 0.9; // texture tile size in head units
 
 export const OUTFITS = {
-  suit: { top: 'Fabric039', bottom: 'Fabric039', shoes: 'Leather026', details: { buttons: true, belt: true } },
-  undertaker: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026', details: { buttons: true } },
-  gunslinger: { top: 'Fabric042', bottom: 'Fabric022', shoes: 'Leather033C', details: { belt: true } },
+  // details: buttons, belt, and the layers over the top's front (bodybake.js): vneck (depth of a V opening,
+  // as a fraction of the torso) with a shirt color inside, tie { color, stripe?, kind: 'long' | 'bow' },
+  // lapels along the V, the shirt's collar points, a breast pocket
+  suit: { top: 'Fabric039', bottom: 'Fabric039', shoes: 'Leather026', details: { buttons: true, belt: true, vneck: 0.6, shirt: [0.88, 0.86, 0.8], tie: { color: [0.42, 0.08, 0.1], stripe: [0.15, 0.1, 0.22] }, lapels: true, pocket: true, collar: true } },
+  undertaker: { top: 'Fabric042', bottom: 'Fabric042', shoes: 'Leather026', details: { buttons: true, vneck: 0.55, shirt: [0.9, 0.9, 0.86], tie: { color: [0.06, 0.06, 0.07] }, lapels: true, collar: true } },
+  gunslinger: { top: 'Fabric042', bottom: 'Fabric022', shoes: 'Leather033C', details: { belt: true, vneck: 0.35, shirt: [0.8, 0.72, 0.58], collar: true, tie: { color: [0.12, 0.08, 0.05], kind: 'bow' } } },
   fur: { top: 'Carpet011', bottom: 'Carpet011', shoes: 'skin', hue: -35, sat: 1.5, girth: 1.25, fuzz: 0.12 },
   shag: { top: 'Carpet012', bottom: 'Carpet012', shoes: 'skin', girth: 1.2, fuzz: 0.12 },
-  denim: { top: 'Fabric022', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true } },
-  knit: { top: 'Fabric040', bottom: 'Fabric025', shoes: 'Leather037' },
-  sweater: { top: 'Fabric018', bottom: 'Fabric039', shoes: 'Leather026' },
-  farmer: { top: 'Fabric054', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true } },
-  clown: { top: 'Fabric055', bottom: 'Fabric076', shoes: 'Leather037', feet: 1.7, details: { buttons: true } },
+  denim: { top: 'Fabric022', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true, collar: true, shirt: [0.3, 0.38, 0.5], pocket: true } },
+  knit: { top: 'Fabric040', bottom: 'Fabric025', shoes: 'Leather037', details: { buttons: true, vneck: 0.55, shirt: [0.86, 0.82, 0.72], collar: true } },
+  sweater: { top: 'Fabric018', bottom: 'Fabric039', shoes: 'Leather026', details: { collar: true, shirt: [0.88, 0.87, 0.84] } },
+  farmer: { top: 'Fabric054', bottom: 'Fabric023', shoes: 'Leather033C', details: { buttons: true, belt: true, collar: true, shirt: [0.7, 0.62, 0.5], pocket: true } },
+  clown: { top: 'Fabric055', bottom: 'Fabric076', shoes: 'Leather037', feet: 1.7, details: { buttons: true, vneck: 0.3, shirt: [0.9, 0.9, 0.9], tie: { color: [0.8, 0.12, 0.1], kind: 'bow' } } },
   prisoner: { top: 'Fabric071', bottom: 'Fabric071', shoes: 'Leather026' },
-  velvet: { top: 'Fabric028', bottom: 'Fabric051', shoes: 'Leather026', details: { buttons: true } },
+  velvet: { top: 'Fabric028', bottom: 'Fabric051', shoes: 'Leather026', details: { buttons: true, vneck: 0.45, shirt: [0.92, 0.9, 0.86], tie: { color: [0.08, 0.06, 0.08], kind: 'bow' }, lapels: true, collar: true } },
   naked: { top: 'skin', bottom: 'skin', shoes: 'skin' },
+  // real garments: a photo on the front of the torso, its own fabric on the back and sleeves (GARMENTS)
+  mourner: { top: 'garment:suit-tie', bottom: 'Fabric042', shoes: 'Leather026' },
+  waistcoat: { top: 'garment:waistcoat', bottom: 'Fabric042', shoes: 'Leather026' },
+};
+
+// Garment photos (public/garments, public domain / CC0 only: credits there), worn on the front of the torso: where the neckline's
+// centre, the two shoulder seams (as seen: image left, image right) and the hem's centre are in the photo
+// (0..1, y down), and a rectangle of plain fabric [u0, v0, u1, v1] that is mirror-tiled over the back and
+// sleeves. sleeves: a color when the garment has none (a waistcoat's shirt sleeves).
+export const GARMENTS = {
+  'suit-tie': { file: 'suit-tie.jpg', neck: [0.515, 0.08], shL: [0.17, 0.12], shR: [0.85, 0.12], hem: [0.51, 0.92], patch: [0.2, 0.35, 0.36, 0.56] },
+  waistcoat: { file: 'waistcoat.jpg', neck: [0.49, 0.08], shL: [0.24, 0.15], shR: [0.77, 0.15], hem: [0.5, 0.9], patch: [0.18, 0.5, 0.35, 0.65], sleeves: [0.86, 0.84, 0.78] },
 };
 
 const HEAD_ON_NECK = [0.45, 0.5, 0.35]; // max head rotation on the neck (x nod, y turn, z tilt), radians
@@ -77,12 +92,29 @@ export class BodyRig {
   }
 
   preload() {
-    const ids = new Set(Object.values(OUTFITS).flatMap((o) => [o.top, o.bottom, o.shoes]).filter((id) => id !== 'skin'));
-    return Promise.all([...ids].map((id) => this.loader.loadAsync(`/textures/${id}.jpg`).then((t) => {
+    const ids = new Set(Object.values(OUTFITS).flatMap((o) => [o.top, o.bottom, o.shoes]).filter((id) => id !== 'skin' && !id.startsWith('garment:')));
+    return Promise.all([...[...ids].map((id) => this.loader.loadAsync(`/textures/${id}.jpg`).then((t) => {
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.magFilter = t.minFilter = THREE.NearestFilter;
       this.tex[id] = t;
-    })));
+    })), ...Object.keys(GARMENTS).map((name) => this.loadGarment(name).catch((e) => console.warn('garment', name, e)))]);
+  }
+
+  // a garment: its photo (for the torso's front) and a tile of its own fabric (the patch, mirrored 2x2 so it
+  // repeats without seams) standing in as the top's texture everywhere else
+  async loadGarment(name) {
+    const def = GARMENTS[name], photo = await this.loader.loadAsync(`/garments/${def.file}`), img = photo.image;
+    photo.magFilter = photo.minFilter = THREE.NearestFilter;
+    const [u0, v0, u1, v1] = def.patch, sw = Math.max(2, Math.round((u1 - u0) * img.width)), sh = Math.max(2, Math.round((v1 - v0) * img.height));
+    const c = Object.assign(document.createElement('canvas'), { width: sw * 2, height: sh * 2 }), g = c.getContext('2d');
+    for (const [fx, fy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      g.save(); g.translate(fx < 0 ? sw * 2 : 0, fy < 0 ? sh * 2 : 0); g.scale(fx, fy);
+      g.drawImage(img, u0 * img.width, v0 * img.height, sw, sh, 0, 0, sw, sh); g.restore();
+    }
+    const patch = new THREE.CanvasTexture(c);
+    patch.wrapS = patch.wrapT = THREE.RepeatWrapping; patch.magFilter = patch.minFilter = THREE.NearestFilter;
+    this.tex[`garment:${name}`] = patch;
+    (this.garments ||= {})[name] = { name, def, photo, patch };
   }
 
   // tile in the face's skin tone, for hands, neck and bare skin
@@ -116,7 +148,9 @@ export class BodyRig {
     for (const slot of ['top', 'bottom', 'shoes']) {
       const id = outfit[slot];
       const m = this.mats[slot];
+      m.userData.garment = id.startsWith?.('garment:') ? this.garments?.[id.slice(8)] || null : null;
       if (id === 'skin') { m.uniforms.map.value = skinTex; m.uniforms.hueShift.value = 0; m.uniforms.satMul.value = 1; }
+      else if (m.userData.garment) { m.uniforms.map.value = m.userData.garment.patch; m.uniforms.hueShift.value = 0; m.uniforms.satMul.value = 1; } // (real clothes keep their real colors)
       else {
         m.uniforms.map.value = this.texture(id);
         m.uniforms.hueShift.value = (outfit.hue || 0) + (slot === 'shoes' ? 0 : p.outfitHue);
