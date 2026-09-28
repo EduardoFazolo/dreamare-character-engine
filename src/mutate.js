@@ -29,6 +29,7 @@ export const SCHEMA = [
   ]},
   { group: 'Hair', items: [
     ['hairVolume', 'Hair volume', 0.3, 2.5, 1],
+    ['hairRecede', 'Hairline recession', 0, 1, 0],
     ['hairHue', 'Hair hue', -180, 180, 0],
     ['hairBright', 'Hair brightness', 0.3, 1.8, 1],
     ['hatHue', 'Hat hue', -180, 180, 0],
@@ -120,7 +121,7 @@ export const CHOICES = {
   exportMat: { label: 'Export materials', options: ['lit', 'unlit'], def: 'lit' },
   outfit: { label: 'Outfit', options: Object.keys(OUTFITS), def: 'suit' },
   hat: { label: 'Hat', options: HAT_TYPES, def: 'none' },
-  hairStyle: { label: 'Hairstyle', options: HAIR_STYLES, def: 'auto' },
+  hairStyle: { label: 'Hairstyle', options: HAIR_STYLES, def: 'photo' },
   hair: { label: 'Extra strands', options: ['none', 'stringy'], def: 'none' },
 };
 
@@ -333,8 +334,9 @@ export function randomize(base) {
   // about 1 in 5 wears a hat; caps and beanies come in random colors
   p.hat = Math.random() < 0.2 ? pick(HAT_TYPES.slice(1)) : 'none';
   p.hatHue = ['cap', 'beanie'].includes(p.hat) ? rnd(-180, 180) : 0;
-  // hair: usually the person's own (from the photo), sometimes a different cut or a wild color
-  p.hairStyle = Math.random() < 0.6 ? 'auto' : pick(HAIR_STYLES.slice(1));
+  // hair: the person's own, cut from the photo (the sculpted cuts read as toy wigs); sometimes receding
+  p.hairStyle = 'photo';
+  p.hairRecede = Math.random() < 0.2 ? rnd(0.3, 1) : 0;
   p.hairVolume = Math.random() < 0.15 ? rnd(1.5, 2.3) : rnd(0.8, 1.2);
   p.hairHue = Math.random() < 0.12 ? rnd(-180, 180) : 0;
   p.hairBright = Math.random() < 0.12 ? rnd(0.4, 1.7) : 1;

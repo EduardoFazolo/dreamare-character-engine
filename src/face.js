@@ -145,7 +145,8 @@ export function analyzeHair(face) {
   }
   pg.putImageData(img, 0, 0);
 
-  face.hair = { style, color, canvas: patch, cover };
+  // mask + pixels + landmarks: photo hair (photohair.js) cuts the person's own hair out of the photo
+  face.hair = { style, color, canvas: patch, cover, mask: cat, w, h, px, lm };
   return face.hair;
 }
 

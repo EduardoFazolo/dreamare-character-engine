@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { sculptHead } from './headsculpt.js';
+import { photoHair } from './photohair.js';
 
 import { perf } from './perf.js';
 import { unwrap, BodyBaker } from './bodybake.js';
@@ -183,7 +184,8 @@ export class HeadRig {
     if (headKey !== this.headKey) { this.headKey = headKey; this.buildHead(P, p); }
     else if (this.eyeRegions) this.paintEyes(this.eyeRegions, p);
 
-    const style = p.hairStyle === 'auto' ? hair?.style || 'short' : p.hairStyle;
+    // 'photo': the person's own hair cut from the photo (photohair.js) over a bald sculpted skull
+    const style = p.hairStyle === 'auto' ? hair?.style || 'short' : p.hairStyle === 'photo' ? 'bald' : p.hairStyle;
     // the sculpted skull only shapes the hair shell and hats: it depends on the face's outline and overall
     // depth, not its interior (grin, eyes, nose sliders never re-sculpt), plus skull and hair params
     let front = -Infinity;
@@ -212,6 +214,8 @@ export class HeadRig {
       this.texKey = texKey;
       this.paint(hair, skin, p);
     }
+    this.photo = p.hairStyle === 'photo';
+    if (this.photo) this.buildPhotoHair(hair, p, hairId);
 
     this.buildHair(p.hair === 'stringy');
     if (p.hat !== 'none') {
@@ -297,6 +301,7 @@ export class HeadRig {
     }
     const pole = n - 1;
     pos.set([C[0], C[1] + cranium * 0.2, C[2] - depth], pole * 3);
+    this.hull = { pos: pos.slice(), L, K, C, loop: this.loop }; // photo hair grows on it
     uv.set(A[151], pole * 2);
     const ring = (k, i) => (k === 0 ? this.loop[i % L] : 468 + (k - 1) * L + (i % L));
     const idx = [...this.canon.index], hullStart = idx.length;
@@ -419,6 +424,7 @@ export class HeadRig {
     this.hatCrown.geometry.dispose();
     this.hatCrown.geometry = new THREE.BufferGeometry();
     const on = !!r.hat;
+    this.hatFitLine = on ? r.hatFit.line0 : null;
     this.hatCrown.visible = on;
     this.hatBrim.visible = on && r.hatFit.brim?.kind === 'round';
     this.hatVisor.visible = on && r.hatFit.brim?.kind === 'visor';
@@ -454,6 +460,31 @@ export class HeadRig {
     this.hairShellMat.uniforms.map.value = this.headTexture;
   }
 
+  // The person's own hair from the photo (photohair.js), on the hull buildHead made; under a hat only
+  // below its line. Rebuilt when the head, the face, the hat or a hair / grade slider changes.
+  buildPhotoHair(hair, p, hairId) {
+    const hatY = p.hat !== 'none' && this.hatCrown.visible && this.hatFitLine != null ? this.hatFitLine + 0.04 : Infinity; // (a little way up inside the hat, tucked flat)
+    const key = JSON.stringify([this.headKey, this.key, hairId, hatY, ...['hairVolume', 'hairRecede', 'hairHue', 'hairBright', 'pale', 'hue', 'sat', 'contrast', 'bright', 'levels'].map((k) => p[k])]);
+    if (key === this.photoKey) { this.hairShellMat.uniforms.map.value = this.photoTex || this.hairShellMat.uniforms.map.value; return; }
+    this.photoKey = key;
+    const r = this.hull && perf.time('head.photoHair', () => photoHair(this.hull, hair, p, { hatY }));
+    this.hairShell.geometry.dispose();
+    this.hairShell.geometry = new THREE.BufferGeometry();
+    this.photoTex?.dispose(); this.photoTex = null; this.photoCanvas = null;
+    this.hairShell.visible = !!r;
+    if (!r) return;
+    const g = this.hairShell.geometry;
+    g.setAttribute('position', new THREE.BufferAttribute(r.positions, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
+    g.setIndex(r.index);
+    g.computeVertexNormals(); g.computeBoundingBox(); g.computeBoundingSphere();
+    this.photoCanvas = r.canvas;
+    this.photoTex = new THREE.CanvasTexture(r.canvas);
+    this.photoTex.magFilter = this.photoTex.minFilter = THREE.NearestFilter;
+    this.photoTex.name = 'hair';
+    this.hairShellMat.uniforms.map.value = this.photoTex;
+  }
+
   // Stringy wisps hanging from the hair shell's lower edge (sides and back): rooted on the shell itself
   // (never on bald skull or poking through it), hanging straight down, tinted with the shell's own
   // painted color (the mean of the head texture over the shell), so dye and photo hair carry over.
@@ -472,11 +503,12 @@ export class HeadRig {
       if (root[b] < 0 || y < pos.getY(root[b])) root[b] = i;
     }
     // the shell's painted color
-    const g = this.headCanvas.getContext('2d', { willReadFrequently: true }), n = this.headCanvas.width, px = g.getImageData(0, 0, n, n).data;
+    const src = this.photo && this.photoCanvas ? this.photoCanvas : this.headCanvas; // (photo hair: its own texture)
+    const g = src.getContext('2d', { willReadFrequently: true }), n = src.width, nh = src.height, px = g.getImageData(0, 0, n, nh).data;
     const col = [0, 0, 0];
     let cnt = 0;
     for (let i = 0; i < uv.count; i += 3) {
-      const o = (Math.min(n - 1, Math.floor((1 - uv.getY(i)) * n)) * n + Math.min(n - 1, Math.floor(uv.getX(i) * n))) * 4;
+      const o = (Math.min(nh - 1, Math.max(0, Math.floor((1 - uv.getY(i)) * nh))) * n + Math.min(n - 1, Math.max(0, Math.floor(uv.getX(i) * n)))) * 4;
       col[0] += px[o]; col[1] += px[o + 1]; col[2] += px[o + 2]; cnt++;
     }
     this.hairMat.uniforms.color.value.setRGB(...col.map((v) => v / cnt / 255 / 0.85)); // strands average 0.85

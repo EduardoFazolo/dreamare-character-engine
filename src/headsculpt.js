@@ -7,7 +7,7 @@ import { fuzzFreqFor, hemFor, BodySDF, GarmentField, sampleGrid, surfaceNets, de
 // The skull is then pushed behind the mask wherever the face shows. Hair is a shell over the
 // skull (like clothing), cut by per-style masks.
 
-export const HAIR_STYLES = ['auto', 'bald', 'buzz', 'short', 'bowl', 'horseshoe', 'slicked', 'mullet', 'long', 'afro',
+export const HAIR_STYLES = ['photo', 'auto', 'bald', 'buzz', 'short', 'bowl', 'horseshoe', 'slicked', 'mullet', 'long', 'afro',
   'mohawk', 'pompadour', 'bun', 'ponytail', 'pigtails', 'spiky'];
 export const HAT_TYPES = ['none', 'bowler', 'cowboy', 'fedora', 'tophat', 'beanie', 'cap', 'flatcap', 'fez', 'wizard'];
 

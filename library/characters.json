@@ -1,0 +1,11 @@
+{
+  "note": "written by the scene editor: characters you can put in scenes (by name or id)",
+  "characters": [
+    {
+      "id": "muk3569y-t7lzfs",
+      "name": "Reginald Rushcombe",
+      "created": 1790529683974
+    }
+  ],
+  "id": "characters"
+}
