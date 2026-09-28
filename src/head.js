@@ -172,14 +172,15 @@ export class HeadRig {
 
   // extra: { hair: analyzeHair(face) result, skin: [r,g,b] face skin tone, uvW: the warped face UVs }
   // Returns null when the head is ready, or a promise that resolves once its sculpt is applied.
-  update(P, tex, p, { hair = null, skin = [0.8, 0.6, 0.5], uvW = null, atlas = null } = {}) {
+  update(P, tex, p, { hair = null, hairUV = null, skin = [0.8, 0.6, 0.5], uvW = null, atlas = null } = {}) {
     this.headMat.uniforms.map.value = tex;
-    this.last = { P, p, hair, skin, uvW, atlas };
+    this.last = { P, p, hair, hairUV, skin, uvW, atlas };
     // the head mesh depends only on the face, its texture warp and the head shape: body, outfit, pose...
     // changes skip the rebuild (only the eye colors/traits are re-checked)
     let hk = 0;
     for (const v of P) for (const c of v) hk = (Math.imul(hk, 31) + Math.round(c * 1e4)) | 0;
     if (uvW) for (const v of uvW) for (const c of v) hk = (Math.imul(hk, 31) + Math.round(c * 1e4)) | 0;
+    if (hairUV) for (let i = 0; i < hairUV.data.length; i += 7) hk = (Math.imul(hk, 31) + hairUV.data[i]) | 0;
     const headKey = `${hk}|${p.headDepth}|${p.cranium}`;
     if (headKey !== this.headKey) { this.headKey = headKey; this.buildHead(P, p); }
     else if (this.eyeRegions) this.paintEyes(this.eyeRegions, p);
@@ -280,6 +281,35 @@ export class HeadRig {
       return [wx / ws, wy / ws]; };
     // texture units per head unit on the face (face width in UV / in 3D), for the 1:1 mirror
     const uvPerUnit = Math.hypot(uv0[454][0] - uv0[234][0], uv0[454][1] - uv0[234][1]) / (Math.hypot(P[454][0] - P[234][0], P[454][1] - P[234][1]) || 1);
+    // Hair lying over the face (a lock across the cheek, bangs) is in the face texture too, and a mirror line
+    // crossing it copied it onto the side of the head (dark commas). Each outline point mirrors only within
+    // the stretch from the rim inward up to the first hair texel: the photo's hair mask (unwrapped like the
+    // texture: atlas.js hairMask) or anything far darker than the skin (under half: strands the mask misses). Measured:
+    // skipping past the hair still spanned it in the rim -> first ring strip, and switching to another
+    // anchor made neighbouring points' lines diverge (a triangle between them spans the whole face). So each
+    // line is only shortened along its own direction, and neighbours agree (the shortest of 5).
+    const HM = this.last?.hairUV, AT = this.last?.atlas;
+    const atlasPx = AT ? AT.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, AT.width, AT.height).data : null;
+    const sk = this.last?.skin || [0.8, 0.6, 0.5], darkLum = 0.5 * (0.299 * sk[0] + 0.587 * sk[1] + 0.114 * sk[2]) * 255;
+    const hairAt = (u, v) => {
+      if (atlasPx) { const n = AT.width, x = Math.min(n - 1, Math.max(0, Math.floor(u * n))), y = Math.min(n - 1, Math.max(0, Math.floor((1 - v) * n))), o = (y * n + x) * 4; if (0.299 * atlasPx[o] + 0.587 * atlasPx[o + 1] + 0.114 * atlasPx[o + 2] < darkLum) return true; }
+      if (!HM) return false; const n = HM.n;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = Math.floor(u * n) + dx, y = Math.floor(v * n) + dy; if (x >= 0 && y >= 0 && x < n && y < n && HM.data[y * n + x]) return true; }
+      return false;
+    };
+    const firstHair = (r0, t) => { // fraction along r0 -> t of the first hair texel (1: none), past the rim's own texels
+      const S = 48;
+      for (let j = 2; j <= S; j++) if (hairAt(r0[0] + (t[0] - r0[0]) * (j / S), r0[1] + (t[1] - r0[1]) * (j / S))) return (j - 1) / S;
+      return 1;
+    };
+    const base = this.loop.map((v) => ({ r0: uv0[v], t: target(v) }));
+    const fr = base.map(({ r0, t }) => firstHair(r0, t));
+    const lines = base.map(({ r0, t }, i) => {
+      let f = 1; for (let d = -2; d <= 2; d++) f = Math.min(f, fr[(i + d + L) % L]);
+      const len = Math.hypot(t[0] - r0[0], t[1] - r0[1]) || 1e-6;
+      f = Math.max(f, Math.min(1, 0.04 / len)); // never shorter than 0.04 (shorter mirrors into stripes)
+      return { r0, t: [r0[0] + (t[0] - r0[0]) * f, r0[1] + (t[1] - r0[1]) * f] };
+    });
     const arc = new Float32Array(L);
     for (let k = 1; k < K; k++) {
       const th = (k / K) * Math.PI / 2;
@@ -290,7 +320,7 @@ export class HeadRig {
         const lift = cranium * Math.sin(th) * Math.pow(Math.max(0, dy), 2) * m;
         const o = 468 + (k - 1) * L + i;
         pos.set([C[0] + dx * radial, C[1] + dy * radial + lift, C[2] + rz * Math.cos(th) - depth * Math.sin(th)], o * 3);
-        const t = target(this.loop[i]), r0 = uv0[this.loop[i]];
+        const { t, r0 } = lines[i];
         // mirror padding (see above): ping-pong along the rim -> anchor line
         const prev = k === 1 ? P[this.loop[i]] : [pos[(o - L) * 3], pos[(o - L) * 3 + 1], pos[(o - L) * 3 + 2]], q = [pos[o * 3], pos[o * 3 + 1], pos[o * 3 + 2]];
         arc[i] = (k === 1 ? 0 : arc[i]) + Math.hypot(q[0] - prev[0], q[1] - prev[1], q[2] - prev[2]);
@@ -302,7 +332,7 @@ export class HeadRig {
     const pole = n - 1;
     pos.set([C[0], C[1] + cranium * 0.2, C[2] - depth], pole * 3);
     this.hull = { pos: pos.slice(), L, K, C, loop: this.loop }; // photo hair grows on it
-    uv.set(A[151], pole * 2);
+    uv.set(A[[151, 108, 337, 50, 280, 187, 411, 199].find((a) => !hairAt(A[a][0], A[a][1])) ?? 151], pole * 2);
     const ring = (k, i) => (k === 0 ? this.loop[i % L] : 468 + (k - 1) * L + (i % L));
     const idx = [...this.canon.index], hullStart = idx.length;
     for (let k = 0; k < K; k++) for (let i = 0; i < L; i++) {
@@ -483,6 +513,7 @@ export class HeadRig {
     this.photoTex.magFilter = this.photoTex.minFilter = THREE.NearestFilter;
     this.photoTex.name = 'hair';
     this.hairShellMat.uniforms.map.value = this.photoTex;
+    this.hairShellMat.side = THREE.DoubleSide; // (the long-hair curtain is seen from inside, behind the neck)
   }
 
   // Stringy wisps hanging from the hair shell's lower edge (sides and back): rooted on the shell itself

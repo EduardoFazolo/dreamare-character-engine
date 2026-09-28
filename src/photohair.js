@@ -142,6 +142,58 @@ export function photoHair(hull, hair, p, { hatY = Infinity } = {}) {
     if (n[0] * (a[0] - C[0]) + n[1] * (a[1] - C[1]) + n[2] * (a[2] - C[2]) < 0) for (let q = 0; q < index.length; q += 3) [index[q + 1], index[q + 2]] = [index[q + 2], index[q + 1]];
   }
 
+  // ---- long hair: a curtain hanging from under the shell, around the back of the neck, as far below the
+  // chin as the photo shows hair on each side (none when it doesn't) ----
+  {
+    const chinY = Y(152), earYp = Y(234), gap = 3;
+    const sides = [-1, 1].map((sg) => {
+      const sideX = (X(234) - cx) * sg > 0 ? X(234) : X(454);
+      const bottoms = []; let outer = 0;
+      for (let o = Math.round(0.02 * fw); o < 0.5 * fw; o++) {
+        const x = Math.round(sideX + sg * o); if (x < 0 || x >= w) break;
+        let seen = false, bottom = -1, miss = 0;
+        for (let y = Math.max(0, Math.round(earYp)); y < Math.min(h, chinY + 1.5 * fw); y++) {
+          if (mask[y * w + x] === 1) { if (y <= chinY) seen = true; if (seen) { bottom = y; miss = 0; } } else if (seen && ++miss > gap) break;
+        }
+        if (seen && bottom > chinY) { bottoms.push(bottom); outer = o; }
+      }
+      if (bottoms.length < 0.05 * fw) return { len: 0, sideX, outer: 0 };
+      bottoms.sort((a, b) => a - b);
+      return { len: clamp((bottoms[Math.floor(bottoms.length * 0.7)] - chinY) / fw, 0, 1.3), sideX, outer };
+    });
+    if (sides.some((q) => q.len > 0.12)) {
+      const chin3 = at(152)[1], top3 = at(234)[1] + 0.15, poleZ = at(pole)[2]; // (starts above the ear, inside the shell)
+      let R = 0; for (let i = 0; i < L; i++) R = Math.max(R, Math.abs(at(loop[i])[0]));
+      const Tside = (thick[iL] + thick[iR]) / 2, Rx = R + Tside * 0.8, Rz = (C[2] - poleZ) + Tside * 0.8, d = 0.08;
+      const NA = 16, NY = 6, grid = [], q0 = index.length;
+      const lenAt = (u) => { const a = sides[0].len > 0.12 ? sides[0].len : 0, b = sides[1].len > 0.12 ? sides[1].len : 0; return a + (b - a) * u; };
+      for (let a = 0; a <= NA; a++) {
+        const u = a / NA, phi = -d + u * (Math.PI + 2 * d), len = lenAt(u) * (a === 0 || a === NA ? 0.88 : 1) /* front corners a little shorter */, sg = u < 0.5 ? -1 : 1, sd = sides[u < 0.5 ? 0 : 1];
+        const arcFromSide = Math.abs((u < 0.5 ? phi : Math.PI - phi)) * (Rx + Rz) / 2, strip = Math.max(sd.outer, 0.05 * fw) / fw;
+        const col = [];
+        for (let r = 0; r <= NY; r++) {
+          const t = r / NY, y = top3 + (chin3 - len - top3) * t, flare = 0.86 + 0.3 * Math.sqrt(t); // tucked under the shell at the top, falling outward
+          const x = -Math.cos(phi) * Rx * flare, z = C[2] - Math.sin(phi) * Rz * flare;
+          col.push(P.length / 3); P.push(x, y, z);
+          // the side's hair strip in the photo: its outer edge at the side, bouncing inward along the back
+          ph.push([sd.sideX + sg * (sd.outer - pingpong(arcFromSide, strip) * fw), cy - (y - Cy) * fw]);
+        }
+        grid.push(col);
+      }
+      for (let a = 0; a < NA; a++) for (let r = 0; r < NY; r++) {
+        const p0 = grid[a][r], p1 = grid[a + 1][r], p2 = grid[a][r + 1], p3 = grid[a + 1][r + 1];
+        for (const [x, y, z] of [[p0, p2, p3], [p0, p3, p1]]) if (area2(x, y, z) > 1e-7) index.push(x, y, z);
+      }
+      // (winding: the curtain faces outward like the shell; checked with the same test on its first triangle)
+      const g = (x) => [P[x * 3], P[x * 3 + 1], P[x * 3 + 2]];
+      if (index.length > q0 + 2) {
+        const [A0, B0, C0] = [g(index[q0]), g(index[q0 + 1]), g(index[q0 + 2])], uu = B0.map((x, k) => x - A0[k]), tt = C0.map((x, k) => x - A0[k]);
+        const n = [uu[1] * tt[2] - uu[2] * tt[1], uu[2] * tt[0] - uu[0] * tt[2], uu[0] * tt[1] - uu[1] * tt[0]];
+        if (n[0] * (A0[0] - C[0]) + n[2] * (A0[2] - C[2]) < 0) for (let q = q0; q < index.length; q += 3) [index[q + 1], index[q + 2]] = [index[q + 2], index[q + 1]];
+      }
+    }
+  }
+
   // only the vertices the triangles use
   {
     const remap = new Map(), P2 = [], ph2 = [];

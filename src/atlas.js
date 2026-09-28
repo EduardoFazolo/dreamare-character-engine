@@ -91,6 +91,27 @@ export class AtlasBaker {
     return this.rtB.texture;
   }
 
+  // Where the photo's hair lands in the face texture (after bake(): same unwrap), as an n x n mask read
+  // bottom-up (row = v * n): the head's hull mirrors the face's skin and must not mirror hair lying over it.
+  hairMask(face, hair, n = 128) {
+    if (!hair?.mask) return null;
+    if (!face.hairMaskTex) {
+      const { mask, w, h } = hair, d = new Uint8Array(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = mask[y * w + x] === 1 ? 255 : 0, o = ((h - 1 - y) * w + x) * 4; d[o] = d[o + 1] = d[o + 2] = v; d[o + 3] = 255; } // (flipped: v up, like the photo texture)
+      face.hairMaskTex = new THREE.DataTexture(d, w, h);
+      face.hairMaskTex.needsUpdate = true;
+    }
+    if (!this.rtM || this.rtM.width !== n) { this.rtM?.dispose(); this.rtM = new THREE.WebGLRenderTarget(n, n); }
+    const r = this.r, prevClear = r.getClearColor(new THREE.Color()), prevAlpha = r.getClearAlpha(), keep = this.unwrapMat.map;
+    this.unwrapMat.map = face.hairMaskTex; this.unwrapMat.needsUpdate = true;
+    r.setClearColor(0x000000, 1); r.setRenderTarget(this.rtM); r.clear(); r.render(this.unwrapScene, this.cam); r.setRenderTarget(null);
+    r.setClearColor(prevClear, prevAlpha); this.unwrapMat.map = keep; this.unwrapMat.needsUpdate = true;
+    const buf = new Uint8Array(n * n * 4), out = new Uint8Array(n * n);
+    r.readRenderTargetPixels(this.rtM, 0, 0, n, n, buf);
+    for (let i = 0; i < n * n; i++) out[i] = buf[i * 4] > 127 ? 1 : 0;
+    return { data: out, n };
+  }
+
   // The skin tone the body and hair shell wear (computed by bake()).
   skinTone() { return this.tone; }
 
