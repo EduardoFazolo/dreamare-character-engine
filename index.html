@@ -9,15 +9,15 @@
 <body>
   <aside id="panel">
     <h1>DREAMARE</h1>
-    <nav class="tabs"><a class="on" href="/">Characters</a><a href="/scenario.html">Scenarios</a><a href="/names.html">Names</a></nav>
+    <nav class="tabs"><a class="on" href="/">Characters</a><a href="/scenario.html">Scenarios</a><a href="/names.html">Names</a><a href="/editor.html">Editor</a></nav>
     <div class="buttons">
-      <div class="rand"><button id="randomize">Randomize</button><label title="also pick a random face photo"><input type="checkbox" id="randPhoto" checked /> photo</label></div>
-      <button id="randPose" title="pick a different pose (keeps the character)">Random pose</button>
+      <div class="rand"><button id="randomize">Randomize</button><label title="also pick a random face photo"><input type="checkbox" id="randPhoto" checked /> photo</label><label title="also pick a random pose (off: Randomize keeps the current pose)"><input type="checkbox" id="randPose" checked /> pose</label></div>
       <label title="show every polygon over the shaded character"><input type="checkbox" id="wire" /> wireframe</label>
       <button id="roll">Roll 12</button>
       <button id="reset">Reset</button>
       <button id="export">Export face texture</button>
       <button id="exportGlb">Export character</button>
+      <button id="sendScene" class="primary" style="grid-column: span 2" title="add this character to the scene editor's current scene (press again for another)">Send to scene ▸</button>
     </div>
     <div id="controls"></div>
   </aside>

@@ -2,48 +2,19 @@
 // Overcast grass dunes that dissolve into fog, a worn path to a lone house, telephone poles walking off
 // into the haze, a radio tower's red light, dark still water with a pier, and sometimes someone standing far off.
 // generate(params) -> { group, height(x, z), spawn, palette, homeYaw, update(t) }. Deterministic in params.seed.
+//
+// Biomes (./biomes.js): params.biome says what the region is made of; VILLAGE (the default) is the original
+// scene and is rebuilt exactly: every original feature keeps its place in the one random sequence, gated by a
+// switch, and everything added since draws from its own random stream. params.neighbors = [{ u: [x, z], biome }]
+// fades the terrain, ground and plants toward the regions beyond each edge.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PS2 } from '../head.js';
 import { oldMaterial, SCENE } from './material.js';
-
-// ---------- seeded helpers ----------
-export function rng(seed) {
-  let s = (seed * 2654435761) >>> 0;
-  return () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
-const hash2 = (x, y, s) => { const h = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453; return h - Math.floor(h); };
-function vnoise(x, y, s) {
-  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
-  const a = hash2(ix, iy, s), b = hash2(ix + 1, iy, s), c = hash2(ix, iy + 1, s), d = hash2(ix + 1, iy + 1, s);
-  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
-}
-const fbm = (x, y, s) => vnoise(x, y, s) * 0.55 + vnoise(x * 2.1, y * 2.1, s + 1) * 0.3 + vnoise(x * 4.3, y * 4.3, s + 2) * 0.15;
-const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-const lerp = (a, b, t) => a + (b - a) * t;
-const mixC = (a, b, t) => a.map((v, i) => lerp(v, b[i], t));
-const rgb = (c) => new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255);
-
-function canvasTex(w, h, draw) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  draw(c.getContext('2d'), w, h);
-  const t = new THREE.CanvasTexture(c);
-  t.magFilter = t.minFilter = THREE.NearestFilter;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
-}
-const css = (c, a = 1) => `rgba(${c.map((v) => Math.max(0, Math.min(255, v)) | 0).join(',')},${a})`;
-// photographic-ish tile: blotchy low-frequency value noise + per-pixel grain, wrapping seamlessly
-function blotch(g, w, h, base, spread, grain, r, cells = 6) {
-  const s = Math.floor(r() * 1000);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const u = (x / w) * cells, v = (y / h) * cells, wrap = (fx, fy) => hash2(((fx % cells) + cells) % cells, ((fy % cells) + cells) % cells, s);
-    const ix = Math.floor(u), iy = Math.floor(v), fx = u - ix, fy = v - iy;
-    const n = lerp(lerp(wrap(ix, iy), wrap(ix + 1, iy), fx), lerp(wrap(ix, iy + 1), wrap(ix + 1, iy + 1), fx), fy);
-    const k = (n - 0.5) * spread + (r() - 0.5) * grain;
-    g.fillStyle = css(base.map((b) => b + k)); g.fillRect(x, y, 1, 1);
-  }
-}
+import { VILLAGE } from './biomes.js';
+import { rng, hash2, vnoise, fbm, smooth, lerp, mixC, rgb, canvasTex, css, blotch, tileUV, _q, _e, _one, place, boxG, cylG, assemble } from './util.js';
+import { addFeatures, addNeighbourGrass } from './features.js';
+export { rng };
 
 // ---------- palette: muted time-of-day keys (grey dawn, overcast noon, bruised dusk, night) ----------
 const KEYS = [
@@ -68,41 +39,39 @@ export function palette(time, hue) {
 // ---------- terrain: grassy dunes, a low rise where you stand, a shore sinking into still water ----------
 export const seaAngle = (p) => (p.seed * 2.39996) % (Math.PI * 2);
 export const SEA_Y = -1.6;
-export function terrainFn(p) {
-  const s = p.seed, H = p.duneHeight, wind = hash2(1, 2, s) * Math.PI, sa = seaAngle(p), sx = Math.cos(sa), sz = Math.sin(sa);
+// terrainFn(seed, biome, seaAngle): one biome's ground. The original dunes-and-shore when biome.water and no hills.
+export function terrainFn(seed, B, sa) {
+  const s = seed, H = B.duneHeight, wind = hash2(1, 2, s) * Math.PI, sx = Math.cos(sa), sz = Math.sin(sa);
   const cw = Math.cos(wind), sw = Math.sin(wind), ridge = (n) => 1 - Math.abs(n * 2 - 1);
+  const hills = B.hills ? (x, z) => B.hills * smooth(0.25, 0.85, fbm(x * 0.007, z * 0.007, s + 50)) * lerp(0.2, 1, smooth(10, 60, Math.hypot(x, z))) : null;
   return (x, z) => {
     const u = x * cw + z * sw, v = -x * sw + z * cw; // dunes run across the wind
     const h = ridge(vnoise(u * 0.025, v * 0.011, s)) * 0.8 + fbm(x * 0.018, z * 0.018, s + 3) * 0.6;
     const d = Math.hypot(x, z), toSea = x * sx + z * sz;
-    const dunes = H * h * lerp(0.15, 1, smooth(6, 50, d)) * (1 - smooth(10, 45, toSea));
     const mound = 1.2 * (1 - smooth(3, 22, d));
-    return dunes + mound + vnoise(x * 0.3, z * 0.3, s + 9) * 0.12 - smooth(15, 45, toSea) * 3 - Math.max(0, toSea - 40) * 0.06;
+    let y;
+    if (B.water) {
+      const dunes = H * h * lerp(0.15, 1, smooth(6, 50, d)) * (1 - smooth(10, 45, toSea));
+      y = dunes + mound + vnoise(x * 0.3, z * 0.3, s + 9) * 0.12 - smooth(15, 45, toSea) * 3 - Math.max(0, toSea - 40) * 0.06;
+    } else y = H * h * lerp(0.15, 1, smooth(6, 50, d)) + mound + vnoise(x * 0.3, z * 0.3, s + 9) * 0.12;
+    return hills ? y + hills(x, z) * (B.water ? 1 - smooth(10, 45, toSea) : 1) : y;
   };
 }
-
-// ---------- geometry helpers ----------
-function tileUV(geo, sx, sy) { const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * sx, uv.getY(i) * sy); return geo; }
-const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _one = new THREE.Vector3(1, 1, 1);
-const place = (geo, x, y, z, ry = 0, rx = 0, rz = 0) => geo.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz, 'YXZ')), _one));
-const boxG = (w, h, d, x = 0, y = 0, z = 0, ry = 0, rx = 0, rz = 0) => place(new THREE.BoxGeometry(w, h, d), x, y, z, ry, rx, rz);
-const cylG = (r1, r2, h, seg = 5) => new THREE.CylinderGeometry(r1, r2, h, seg, 1);
-// a group of named parts -> one mesh per material, sitting on y = 0
-function assemble(parts) {
-  const g = new THREE.Group();
-  for (const [mat, geos] of parts) {
-    if (!geos.length) continue;
-    const m = mergeGeometries(geos.map((q) => (q.index ? q.toNonIndexed() : q)));
-    m.computeVertexNormals(); // non-indexed -> flat faces, the faceted PS1 look
-    g.add(new THREE.Mesh(m, mat));
-  }
-  return g;
-}
+// how much each neighbour owns a point: 0 inside the region, rising toward (and past) the shared edge
+export const edgeWeight = (x, z, u) => smooth(45, 135, x * u[0] + z * u[1]);
 
 // ---------- the scenario ----------
 export function generate(p) {
-  const r = rng(p.seed), pal = palette(p.time, p.skyHue), group = new THREE.Group(), height = terrainFn(p), W = p.wrongness;
-  const sa = seaAngle(p), sx = Math.cos(sa), sz = Math.sin(sa), toSea = (x, z) => x * sx + z * sz;
+  const B = p.biome || { ...VILLAGE, duneHeight: p.duneHeight }, NB = (p.neighbors || []).filter((n) => n?.biome);
+  const r = rng(p.seed), rOrig = r, pal = palette(p.time, p.skyHue), group = new THREE.Group(), W = p.wrongness;
+  const sa = p.seaAngle ?? seaAngle(p), sx = Math.cos(sa), sz = Math.sin(sa);
+  const anyWater = B.water || NB.some((n) => n.biome.water);
+  const toSea = B.water ? (x, z) => x * sx + z * sz : () => -1e9; // no sea: nothing is ever "toward the water"
+  // terrain: this region's ground, faded into each neighbour's (whose sea, if any, lies beyond that edge)
+  const localH = terrainFn(p.seed, B, sa);
+  const nbH = NB.map((n) => terrainFn(p.seed, n.biome, Math.atan2(n.u[1], n.u[0])));
+  const weights = (x, z) => { const w = NB.map((n) => edgeWeight(x, z, n.u)); const t = 1 + w.reduce((a, b) => a + b, 0); return [1 / t, ...w.map((v) => v / t)]; };
+  const height = NB.length ? (x, z) => { const w = weights(x, z); let y = w[0] * localH(x, z); for (let i = 0; i < NB.length; i++) y += w[i + 1] * nbH[i](x, z); return y; } : localH;
 
   // light: low sun from the sea side, a pale overhead moon at night
   const sunA = sa + 0.9;
@@ -179,7 +148,7 @@ export function generate(p) {
       path.push([home[0] * t + px * side, home[1] * t + pz * side]);
     }
   }
-  const pathDist = (x, z) => {
+  const pathDist = !B.path ? () => 1e9 : (x, z) => {
     let best = 1e9;
     for (let i = 0; i + 1 < path.length; i++) {
       const [ax, az] = path[i], [bx, bz] = path[i + 1], dx = bx - ax, dz = bz - az;
@@ -196,7 +165,7 @@ export function generate(p) {
     }
     return null;
   };
-  const put = (obj, x, z, radius, { face = [0, 0], shadow = radius, sink = 0.05, tilt = 1, solid = 0 } = {}) => {
+  const put = (obj, x, z, radius, { face = [0, 0], shadow = radius, sink = 0.05, tilt = 1, solid = 0 } = {}, r = rOrig) => {
     obj.position.set(x, height(x, z) - sink, z);
     obj.rotation.y = Math.atan2(face[0] - x, face[1] - z) + (r() - 0.5) * 0.3;
     obj.rotation.x += (r() - 0.5) * 0.4 * W * tilt; obj.rotation.z += (r() - 0.5) * 0.4 * W * tilt;
@@ -212,7 +181,7 @@ export function generate(p) {
   const winMat = oldMaterial({ map: T.window, glow: true, color: [glowK, glowK * 0.95, glowK * 0.85] });
 
   // the house at the end of the path: siding, pitched roof, one warm window, a dark door
-  {
+  const makeHouse = (r) => {
     const w = 6 + r() * 2, d = 5 + r() * 1.5, h = 3.2, roofH = 1.8 + r() * 0.8;
     const roof = new THREE.CylinderGeometry(1, 1, d + 0.6, 3, 1); roof.rotateX(-Math.PI / 2); // triangular prism, apex up
     roof.scale((w + 0.6) / Math.sqrt(3), roofH / 1.5, 1); roof.translate(0, h + roofH / 3 - 0.02, 0);
@@ -224,11 +193,12 @@ export function generate(p) {
       [M.wood, [boxG(1.6, 0.15, 1.2, -w * 0.2, 0.08, d / 2 + 0.6)]],
     ]);
     house.name = 'house';
-    put(house, home[0], home[1], 7, { shadow: 6, sink: 0.4, tilt: 0.3, solid: 3.6 });
-  }
+    return house;
+  };
+  if (B.house) put(makeHouse(r), home[0], home[1], 7, { shadow: 6, sink: 0.4, tilt: 0.3, solid: 3.6 });
 
   // telephone poles: a line crossing everything and walking off into the fog both ways
-  {
+  if (B.poles) {
     const a = homeA + Math.PI / 2 + (r() - 0.5) * 0.6, off = 10 + r() * 15, dir = [Math.cos(a), Math.sin(a)], nrm = [-dir[1], dir[0]];
     const tops = [], poles = [], wires = [];
     for (let i = -9; i <= 9; i++) {
@@ -254,7 +224,7 @@ export function generate(p) {
 
   // a radio tower far out in the fog; its red light blinks and cuts through the haze
   let beacon = null;
-  {
+  if (B.tower) {
     const a = r() * Math.PI * 2, d = 110 + r() * 40, x = Math.cos(a) * d, z = Math.sin(a) * d, H = 38 + r() * 14, parts = [];
     for (const [ox, oz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) parts.push(place(cylG(0.15, 0.15, H, 4), ox * 1.2, H / 2, oz * 1.2, 0, oz * 0.02, -ox * 0.02));
     for (let y = 3; y < H; y += 4) for (const [w, dd] of [[2.6, 0.1], [0.1, 2.6]]) parts.push(boxG(w, 0.1, dd, 0, y, 0), boxG(w, 0.1, dd, 0, y, 0, 0, 0.6, 0));
@@ -264,7 +234,7 @@ export function generate(p) {
   }
 
   // a bus stop beside the path, halfway; nobody is waiting
-  {
+  if (B.busStop) {
     const [bx, bz] = path[Math.floor(path.length * (0.35 + r() * 0.25))], [nx, nz] = path[Math.floor(path.length * 0.5) + 1];
     const px = -(nz - bz), pz = nx - bx, pl = Math.hypot(px, pz) || 1, x = bx + (px / pl) * 3.2, z = bz + (pz / pl) * 3.2;
     const stop = assemble([
@@ -280,7 +250,7 @@ export function generate(p) {
   // an old phone booth off the path: small panes, a dim sign, a failing bulb, and the receiver
   // off the hook, hanging by its coiled cord inside, barely swaying
   let booth = null;
-  {
+  if (B.booth) {
     const [bx, bz] = path[Math.floor(path.length * (0.15 + r() * 0.15))], side = r() < 0.5 ? -1 : 1;
     const [nx, nz] = path[Math.floor(path.length * 0.3) + 1], px = -(nz - bz), pz = nx - bx, pl = Math.hypot(px, pz) || 1;
     const x = bx + side * (px / pl) * (4 + r() * 3), z = bz + side * (pz / pl) * (4 + r() * 3);
@@ -338,17 +308,22 @@ export function generate(p) {
     booth.add(door);
     booth.userData = { hang, bulbMat, inside, inK, door, doorOpen };
     put(booth, x, z, 1.5, { face: [0, 0], shadow: 1.1, tilt: 0.6 });
+    // B.booth is a chance, rolled on its own stream. The booth was laid out either way (same random numbers
+    // used, its spot stays reserved), so a missing booth moves nothing else in the scene.
+    if (rng(p.seed * 53 + 11)() >= B.booth) {
+      group.remove(booth); shadows.pop(); booth = null;
+    }
   }
 
   // lamp posts along the path (on at dusk and night)
-  for (let i = 0, n = Math.round(1 + 2 * p.density); i < n; i++) {
+  for (let i = 0, n = B.lamps ? Math.round(1 + 2 * p.density) : 0; i < n; i++) {
     const [lx, lz] = path[Math.floor(path.length * (0.2 + 0.7 * (i + r() * 0.5) / n))], x = lx + 1.8, z = lz + 1.2;
     const lamp = assemble([[M.metal, [cylG(0.07, 0.1, 5, 5).translate(0, 2.5, 0), boxG(0.9, 0.08, 0.08, 0.4, 4.95)]], [winMat, [boxG(0.36, 0.14, 0.26, 0.8, 4.86)]]]);
     lamp.name = 'lamp'; put(lamp, x, z, 1, { face: [lx, lz], shadow: 0.8, solid: 0.25 });
   }
 
   // dead trees: bare, forked, never more than a few
-  for (let i = 0, n = Math.round(1 + 3 * p.density * r()); i < n; i++) {
+  for (let i = 0, n = B.deadTrees ? Math.round(1 + 3 * p.density * r()) : 0; i < n; i++) {
     const s = spot(12, 70, 6); if (!s) continue;
     const parts = [], tr2 = rng(p.seed * 31 + i);
     const branch = (base, dir, len, rad, depth) => {
@@ -367,7 +342,7 @@ export function generate(p) {
   }
 
   // an old fence along part of the path, posts missing
-  {
+  if (B.fence) {
     const parts = [], i0 = Math.floor(path.length * 0.1), i1 = Math.floor(path.length * (0.5 + r() * 0.3));
     let prevTop = null;
     for (let i = i0; i < i1; i++) {
@@ -385,7 +360,7 @@ export function generate(p) {
 
   // the pier: grey planks from the shore out into the water, ending in the fog
   let pier = null;
-  {
+  if (B.pier && B.water) {
     const off = (r() - 0.5) * 30, px = -sz, pz = sx, parts = [], ry = Math.atan2(sx, sz);
     let t0 = 10; while (t0 < 60 && height(sx * t0 + px * off, sz * t0 + pz * off) > SEA_Y + 0.9) t0 += 1;
     pier = { off, px, pz, a: t0 - 6, b: t0 + 40 };
@@ -403,7 +378,7 @@ export function generate(p) {
 
   // someone, far off at the edge of the fog, facing you. Wrongness makes it likelier (and closer).
   let figure = null;
-  if (r() < 0.15 + 0.85 * W) {
+  if (B.figure && r() < 0.15 + 0.85 * W) {
     const s = spot(lerp(40, 18, W), lerp(60, 30, W), 3, 1.5);
     if (s) {
       const body = cylG(0.22, 0.17, 1.35, 6).translate(0, 0.9, 0), head = new THREE.SphereGeometry(0.14, 6, 4).translate(0, 1.72, 0);
@@ -415,22 +390,37 @@ export function generate(p) {
     }
   }
 
+  // ---- added features: each has its own random stream, so the original sequence above never shifts ----
+  const shadows2 = []; // shadows of added things (applied after the original ones)
+  const extras = addFeatures({ p, B, NB, weights, height, pathDist, path, home, near, placed, solids, shadows2, group, put, makeHouse, M, T, lit, tr: rng(p.seed + 991), anyWater, toSea });
+
   // ---- terrain: vertex-coloured grass / dirt / wet sand, dark hollows, blob shadows, the worn path ----
   {
     const S = 280, N = 140, geo = new THREE.PlaneGeometry(S, S, N, N); geo.rotateX(-Math.PI / 2);
     const pa = geo.attributes.position, col = new Float32Array(pa.count * 3);
-    const grassA = rgb(mixC([118, 124, 84], pal.fog, 0.1)), grassB = rgb([138, 132, 96]), dirt = rgb([128, 114, 96]), sand = rgb([150, 142, 124]), wet = rgb([92, 90, 84]);
-    const c = new THREE.Color(), q = new THREE.Color();
-    for (let i = 0; i < pa.count; i++) {
-      const x = pa.getX(i), z = pa.getZ(i), y = height(x, z); pa.setY(i, y);
+    const pals = [B, ...NB.map((n) => n.biome)].map((b) => ({ grassA: rgb(mixC(b.grassA, pal.fog, 0.1)), grassB: rgb(b.grassB), dirt: rgb(b.dirt), sand: rgb(b.sand), wet: rgb(b.wet) }));
+    const c = new THREE.Color(), q = new THREE.Color(), cb = new THREE.Color();
+    const shade = (C, x, z, y, slope) => {
+      const { grassA, grassB, dirt, sand, wet } = C;
       c.copy(grassA).lerp(grassB, fbm(x * 0.03, z * 0.03, p.seed + 40));
-      const slope = Math.hypot(height(x + 1, z) - y, height(x, z + 1) - y);
       c.lerp(sand, smooth(0.35, 0.8, slope)); // bare sand where the dunes are steep
       c.lerp(q.copy(sand), smooth(SEA_Y + 2.5, SEA_Y + 1, y)).lerp(wet, smooth(SEA_Y + 0.8, SEA_Y, y)); // beach -> wet edge
+      if (extras.fieldAt) { const f = extras.fieldAt(x, z); if (f) c.lerp(q.copy(dirt).lerp(grassB, f.row), f.k * 0.8); } // ploughed rows
       c.lerp(dirt, (1 - smooth(0.6, 2.2, pathDist(x, z))) * 0.85); // the path
+    };
+    for (let i = 0; i < pa.count; i++) {
+      const x = pa.getX(i), z = pa.getZ(i), y = height(x, z); pa.setY(i, y);
+      const slope = Math.hypot(height(x + 1, z) - y, height(x, z + 1) - y);
+      if (!NB.length) shade(pals[0], x, z, y, slope);
+      else { // each biome's colour at this point, weighted by who owns it
+        const w = weights(x, z); cb.setRGB(0, 0, 0);
+        for (let j = 0; j < pals.length; j++) { if (w[j] < 1e-4) continue; shade(pals[j], x, z, y, slope); cb.r += c.r * w[j]; cb.g += c.g * w[j]; cb.b += c.b * w[j]; }
+        c.copy(cb);
+      }
       const avg = (height(x + 6, z) + height(x - 6, z) + height(x, z + 6) + height(x, z - 6)) / 4;
       let k = 1 + Math.max(-0.3, Math.min(0.12, (y - avg) * 0.12)); // hollows sit in shadow
       for (const [px, pz, pr] of shadows) { const d = Math.hypot(x - px, z - pz); if (d < pr * 1.6) k *= lerp(0.55, 1, smooth(pr * 0.5, pr * 1.6, d)); }
+      if (shadows2.length) k *= extras.shadeAt(x, z);
       k *= 0.94 + hash2(x, z, p.seed) * 0.12; // PS1 vertex colour noise
       col[i * 3] = Math.min(1, c.r * k * 1.6); col[i * 3 + 1] = Math.min(1, c.g * k * 1.6); col[i * 3 + 2] = Math.min(1, c.b * k * 1.6); // glTF COLOR_0 stays in 0..1
     }
@@ -442,7 +432,7 @@ export function generate(p) {
   }
 
   // ---- still, dark water ----
-  {
+  if (anyWater) {
     const base = mixC(pal.fog, [40, 52, 56], 0.55);
     const seaTex = canvasTex(64, 64, (g, w, h) => {
       blotch(g, w, h, base, 14, 6, tr, 4);
@@ -457,14 +447,15 @@ export function generate(p) {
     // a few separate 1-pixel blades (hard alpha, no antialiasing), so tufts read as grass, not slabs
     const grassTex = canvasTex(32, 32, (g, w, h) => {
       for (let i = 0; i < 9; i++) {
-        const x0 = 2 + tr() * 28, hh = 8 + tr() * 22, lean = (tr() - 0.5) * 10; g.fillStyle = css(mixC([112, 116, 82], [170, 162, 124], tr()));
+        const x0 = 2 + tr() * 28, hh = 8 + tr() * 22, lean = (tr() - 0.5) * 10; g.fillStyle = css(mixC(B.tuftA, B.tuftB, tr()));
         for (let y = 0; y < hh; y++) g.fillRect(Math.round(x0 + lean * (y / hh) ** 2), h - 1 - y, 1, 1);
       }
     });
-    const parts = [], m = new THREE.Matrix4(), n = Math.round(420 * p.density);
+    const parts = [], m = new THREE.Matrix4(), n = Math.round(420 * p.density * B.tufts);
     for (let i = 0; i < n; i++) {
       const a = r() * Math.PI * 2, d = 3 + Math.sqrt(r()) * 90, x = Math.cos(a) * d, z = Math.sin(a) * d, y = height(x, z);
       if (y < SEA_Y + 1.2 || pathDist(x, z) < 1.5 || near(x, z, 0.5)) continue;
+      if (NB.length && hash2(x, z, p.seed + 3) > weights(x, z)[0]) continue; // this biome's grass thins toward its edges
       const sc = 0.7 + r() * 0.8;
       for (const turn of [0, Math.PI / 2]) {
         const qd = new THREE.PlaneGeometry(1.1, 1.1).translate(0, 0.52, 0);
@@ -474,13 +465,14 @@ export function generate(p) {
     }
     if (parts.length) { const g = new THREE.Mesh(mergeGeometries(parts), oldMaterial({ map: grassTex, alphaTest: 0.5, side: THREE.DoubleSide })); g.name = 'grass'; group.add(g); }
   }
+  addNeighbourGrass({ p, NB, weights, height, pathDist, near, group, seed: p.seed });
 
   // camera starts facing up the path toward the house, a little off-axis
   const homeYaw = Math.atan2(-home[0], -home[1]) + 0.25;
   // walking: the ground you stand on (the pier deck over water), and where you may go
   const onPier = (x, z) => { if (!pier) return false; const t = toSea(x, z), l = x * pier.px + z * pier.pz - pier.off; return Math.abs(l) < 0.72 && t > pier.a && t < pier.b; };
   const floor = (x, z) => (onPier(x, z) ? Math.max(height(x, z), SEA_Y + 0.4) + 0.44 : height(x, z));
-  const walkable = (x, z) => Math.hypot(x, z) < 125 && (onPier(x, z) || height(x, z) > SEA_Y + 0.35);
+  const walkable = (x, z) => Math.hypot(x, z) < 125 && (onPier(x, z) || !anyWater || height(x, z) > SEA_Y + 0.35);
   let figureGone = false;
   const update = (t, eye) => {
     if (beacon) beacon.visible = (t % 2.4) < 0.5;
@@ -500,5 +492,5 @@ export function generate(p) {
       const k = stutter ? inK * 0.3 : inK; inside.uniforms.color.value.setRGB(k, k * 0.96, k * 0.85);
     }
   };
-  return { group, height, floor, walkable, solids, spawn: new THREE.Vector3(0, height(0, 0) + 1.7, 0), palette: pal, homeYaw, update };
+  return { group, height, floor, walkable, solids, spawn: new THREE.Vector3(0, height(0, 0) + 1.7, 0), palette: pal, homeYaw, update, biome: B };
 }

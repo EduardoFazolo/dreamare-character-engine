@@ -3,103 +3,36 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { PS2 } from '../head.js';
 import { generate } from './gen.js';
+import { createStage, bakeForExport } from './stage.js';
+import { setSceneTerrain } from '../store.js';
 import { createPhoneAudio } from './audio.js';
 import { placeName } from '../names/gen.js';
+import { VILLAGE, randomBiome } from './biomes.js';
+import { biomeControls } from './biomeui.js';
+import { createWorld, dropRegion, continueFrom, removeRegion, rerollBiome, regionById, cellOwner, neighborsOf, seaAngleOf, serialize, deserialize, DIRS } from './world.js';
+import { drawMap, cellAt } from './mapview.js';
+import { rng } from './util.js';
 
 const $ = (s) => document.querySelector(s);
 
 // [key, label, min, max]
 const SCHEMA = [
-  { group: 'Place', items: [['seed', 'seed', 1, 9999], ['duneHeight', 'dune height', 0, 14], ['density', 'prop density', 0, 2]] },
+  { group: 'Place', items: [['seed', 'seed', 1, 99999], ['density', 'prop density', 0, 2]] },
   { group: 'Mood', items: [['time', 'time of day', 0, 1], ['skyHue', 'sky hue', -60, 60], ['haze', 'fog', 0, 1], ['wrongness', 'wrongness', 0, 1]] },
   { group: 'Render', items: [['res', 'resolution', 120, 360], ['sat', 'colour', 0, 1.2], ['vhs', 'VHS', 0, 1], ['affine', 'texture warp', 0, 1]] },
 ];
 const INT = new Set(['seed', 'res']);
-const defaults = () => ({ seed: 1998, duneHeight: 7, density: 1, time: 0.3, skyHue: 0, haze: 0.62, wrongness: 0.2, res: 240, sat: 0.7, vhs: 0.6, affine: 0.5 });
+const defaults = () => ({ seed: 1998, biome: structuredClone(VILLAGE), neighbors: [], seaAngle: undefined, density: 1, time: 0.3, skyHue: 0, haze: 0.62, wrongness: 0.2, res: 240, sat: 0.7, vhs: 0.6, affine: 0.5 });
 function randomize() {
   const r = Math.random;
-  return { ...params, seed: 1 + Math.floor(r() * 9998), duneHeight: 2 + r() * 10, density: 0.5 + r() * 1.2, time: r() < 0.2 ? 0.8 + r() * 0.2 : r() * 0.75, skyHue: r() < 0.7 ? 0 : (r() - 0.5) * 50, haze: 0.4 + r() * 0.5, wrongness: r() < 0.5 ? r() * 0.3 : r() };
+  return { ...params, seed: 1 + Math.floor(r() * 9998), density: 0.5 + r() * 1.2, time: r() < 0.2 ? 0.8 + r() * 0.2 : r() * 0.75, skyHue: r() < 0.7 ? 0 : (r() - 0.5) * 50, haze: 0.4 + r() * 0.5, wrongness: r() < 0.5 ? r() * 0.3 : r() };
 }
 let params = defaults();
 
-// ---------------- renderer: low-res target -> VHS upscale (copied from the character page) ----------------
+// ---------------- renderer: the shared scenario look (low-res target -> VHS grade, title card) ----------------
 const canvas = $('#view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
-THREE.ColorManagement.enabled = false;
-renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, 4 / 3, 0.1, 800);
-
-let lowRT;
-const post = new THREE.ShaderMaterial({
-  uniforms: { tex: { value: null }, lowRes: { value: new THREE.Vector2() }, vhs: { value: 0.6 }, time: { value: 0 }, sat: { value: 0.7 } },
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`,
-  fragmentShader: /* glsl */`
-    uniform sampler2D tex; uniform vec2 lowRes; uniform float vhs, time, sat; varying vec2 vUv;
-    float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-    void main(){
-      vec2 uv = vUv; uv.x += vhs * .0015 * sin(uv.y * 30. + time * 2.);
-      vec2 px = 1. / lowRes;
-      vec3 c = texture2D(tex, uv).rgb;
-      vec3 blur = (texture2D(tex, uv - vec2(px.x, 0)).rgb + 2. * c + texture2D(tex, uv + vec2(px.x, 0)).rgb) * .25;
-      float r = texture2D(tex, uv + vec2(px.x * 1.5, 0)).r, b = texture2D(tex, uv - vec2(px.x * 1.5, 0)).b;
-      vec3 col = mix(c, mix(vec3(r, blur.g, b), blur, .4), vhs);
-      col *= 1. - vhs * .1 * (.5 + .5 * sin(vUv.y * lowRes.y * 6.2832));
-      col += (hash(vUv * 900. + time) - .5) * .05 * vhs;
-      vec2 q = vUv - .5; col *= 1. - dot(q, q) * .7 * vhs;
-      col = mix(col, col * vec3(1.03, .98, 1.06), vhs);
-      // dream bloom: bright areas bleed softly
-      vec3 halo = (texture2D(tex, uv + px * vec2(3., 2.)).rgb + texture2D(tex, uv - px * vec2(3., 2.)).rgb + texture2D(tex, uv + px * vec2(-2., 3.)).rgb + texture2D(tex, uv - px * vec2(-2., 3.)).rgb) * .25;
-      col += max(halo - .6, 0.) * .6 * vhs;
-      // old-console grade: drained colour, lifted blacks, a touch less contrast
-      col = mix(vec3(dot(col, vec3(.299, .587, .114))), col, sat);
-      col = col * .92 + .035;
-      gl_FragColor = vec4(col, 1.);
-    }`,
-  depthTest: false,
-});
-const postScene = new THREE.Scene();
-postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), post));
-// area-name card (old RPG style): drawn into the frame itself, so full screen and recordings show it too
-const cardCanvas = document.createElement('canvas'); cardCanvas.width = 1024; cardCanvas.height = 160;
-const cardTex = new THREE.CanvasTexture(cardCanvas); cardTex.colorSpace = THREE.NoColorSpace;
-const card = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: cardTex, transparent: true, opacity: 0, depthTest: false }));
-card.position.set(0, -0.45, 0); postScene.add(card);
-let cardT0 = -1e9;
-function drawCard(name) {
-  const g = cardCanvas.getContext('2d'), W = cardCanvas.width, H = cardCanvas.height;
-  g.clearRect(0, 0, W, H);
-  g.font = 'italic 64px Georgia, "Times New Roman", serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  const tw = Math.min(W - 40, g.measureText(name).width);
-  g.strokeStyle = 'rgba(230,224,210,.55)'; g.lineWidth = 2; // thin rules either side, like an area title
-  g.beginPath(); g.moveTo(W / 2 - tw / 2 - 20, H / 2 + 44); g.lineTo(W / 2 + tw / 2 + 20, H / 2 + 44); g.stroke();
-  g.shadowColor = 'rgba(0,0,0,.85)'; g.shadowBlur = 10; g.shadowOffsetY = 3;
-  g.fillStyle = '#ece6d6'; g.fillText(name, W / 2, H / 2, W - 40);
-  cardTex.needsUpdate = true; cardT0 = performance.now() / 1000;
-}
-function fitCard() { // keep the card's pixels square whatever the frame's aspect
-  const a = renderer.domElement.width / renderer.domElement.height, w = a > 1 ? 1.2 : 2.1;
-  card.position.y = a > 1 ? -0.45 : -0.6; // lower third; lower still in the tall frame
-  card.scale.set(w, (w * cardCanvas.height) / cardCanvas.width * a, 1);
-}
-const postCam = new THREE.OrthographicCamera(); postCam.position.z = 1; // the title card sits at z = 0, in front of the near plane
-// normal: 4:3 at `h` lines. vertical (recording): 9:16, as wide in game pixels as the 4:3 frame is tall x 0.75
-// (res 240 -> 180x320), output 1080-wide for TikTok.
-let vertical = false;
-function setRes(res) {
-  let w, h, scale;
-  if (vertical) { w = Math.round(res * 0.75); h = Math.round((w * 16) / 9); scale = 1080 / w; }
-  else { h = res; w = Math.round((h * 4) / 3); scale = 3; }
-  camera.aspect = w / h; camera.fov = vertical ? 70 : 55; camera.updateProjectionMatrix();
-  canvas.classList.toggle('vertical', vertical);
-  lowRT?.dispose();
-  lowRT = new THREE.WebGLRenderTarget(w, h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-  post.uniforms.tex.value = lowRT.texture;
-  post.uniforms.lowRes.value.set(w, h);
-  PS2.snapRes.value.set(w / 2, h / 2);
-  renderer.setSize(Math.round(w * scale), Math.round(h * scale), false);
-  fitCard();
-}
+const stage = createStage(canvas), { renderer, scene, camera } = stage;
+const setRes = stage.setRes, drawCard = stage.drawCard;
 
 // ---------------- scene build ----------------
 let world = null, wire = null, lastRes = 0;
@@ -107,14 +40,15 @@ function rebuild() {
   if (world) { scene.remove(world.group); dispose(world.group); }
   const seed = world?.seed;
   world = generate(params); world.seed = params.seed;
-  world.name = placeName(params.seed, { kind: 'coast' });
+  const reg = link != null ? regionById(atlas, link) : null;
+  world.name = reg ? reg.name : placeName(params.seed, { kind: params.biome.water ? 'coast' : 'any' });
   $('#placeName').textContent = world.name;
   if (seed !== params.seed) drawCard(world.name);
   if (seed !== params.seed) { yaw = world.homeYaw; pitch = 0.02; walk = 0; me.x = me.z = 0; me.y = world.floor(0, 0); } // new place: start at the rise, facing up the path
   scene.add(world.group);
   updateWire();
   if (params.res !== lastRes) { setRes(params.res); lastRes = params.res; }
-  post.uniforms.vhs.value = params.vhs; post.uniforms.sat.value = params.sat;
+  stage.vhs = params.vhs; stage.sat = params.sat;
   PS2.affine.value = params.affine;
   window.__app.world = world;
 }
@@ -151,8 +85,12 @@ canvas.addEventListener('pointermove', (e) => {
   drag = [e.clientX, e.clientY];
 });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); if (mode === 'view') walk = Math.max(-30, Math.min(30, walk - e.deltaY * 0.02)); }, { passive: false });
-const MOVE = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
-addEventListener('keydown', (e) => { if (mode !== 'walk' || !MOVE.has(e.code) || e.target.closest?.('input, select')) return; keys.add(e.code); e.preventDefault(); });
+const MOVE = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']);
+addEventListener('keydown', (e) => {
+  if (mode !== 'walk' || !MOVE.has(e.code) || e.target.closest?.('input, select')) return;
+  if (e.code === 'KeyC') { if (!e.repeat) me.crouched = !me.crouched; e.preventDefault(); return; } // crouch on / off
+  keys.add(e.code); e.preventDefault();
+});
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 
@@ -162,13 +100,15 @@ function setMode(m) {
   $('#walkMode').classList.toggle('on', m === 'walk');
   if (m === 'walk') { me.x = -Math.sin(yaw) * walk; me.z = -Math.cos(yaw) * walk; me.y = world.floor(me.x, me.z); $('#drift').checked = false; }
   else { walk = 0; if (locked()) document.exitPointerLock(); }
-  $('#status').textContent = m === 'walk' ? 'click the view to look with the mouse · WASD / arrows to walk · Shift to run · Esc releases the mouse' : 'drag to look around · wheel to zoom';
+  $('#status').textContent = m === 'walk' ? 'click the view to look with the mouse · WASD / arrows to walk · Shift to run · C to crouch / stand · Esc releases the mouse' : 'drag to look around · wheel to zoom';
 }
 
 function stepWalk(dt) {
   const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
   const s = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-  const moving = f || s, speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4.6 : 2.1;
+  const crouch = !!me.crouched; // C toggles: crouched to half your height, moving at half speed
+  const moving = f || s, speed = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4.6 : 2.1) * (crouch ? 0.5 : 1);
+  me.eyeH = (me.eyeH ?? 1.62) + ((crouch ? 0.81 : 1.62) - (me.eyeH ?? 1.62)) * Math.min(1, dt * 10);
   if (moving) {
     const l = Math.hypot(f, s), fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     const dx = ((fx * f - fz * s) / l) * speed * dt, dz = ((fz * f + fx * s) / l) * speed * dt;
@@ -189,7 +129,7 @@ function stepWalk(dt) {
 function placeCamera(t, dt) {
   const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   let x, y, z;
-  if (mode === 'walk') { const bob = stepWalk(dt); x = me.x; z = me.z; y = me.y + 1.62 + bob; }
+  if (mode === 'walk') { const bob = stepWalk(dt); x = me.x; z = me.z; y = me.y + (me.eyeH ?? 1.62) + bob; }
   else { x = fx * walk; z = fz * walk; y = world.height(x, z) + 1.7 + Math.sin(t * 0.7) * 0.05; } // breathing
   camera.position.set(x, y, z);
   camera.lookAt(x + fx * Math.cos(pitch), y + Math.sin(pitch), z + fz * Math.cos(pitch));
@@ -199,14 +139,12 @@ function placeCamera(t, dt) {
 
 let last = performance.now();
 function frame(now) {
+  if (view === 'map') { last = now; requestAnimationFrame(frame); return; } // the map is drawn on demand
   const t = now / 1000, dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (mode === 'view' && $('#drift').checked && !drag) yaw += dt * 0.03;
   placeCamera(t, dt);
   world.update?.(t, camera.position);
-  post.uniforms.time.value = t;
-  { const a = t - cardT0; card.material.opacity = Math.min(THREE.MathUtils.smoothstep(a, 0.4, 1.4), 1 - THREE.MathUtils.smoothstep(a, 4.2, 5.4)); card.visible = card.material.opacity > 0.001; } // fade in, hold, fade out
-  renderer.setRenderTarget(lowRT); renderer.render(scene, camera);
-  renderer.setRenderTarget(null); renderer.render(postScene, postCam);
+  stage.render(t);
   phone?.update(camera, world.group.getObjectByName('receiver'), world.group.getObjectByName('phonebooth'));
   requestAnimationFrame(frame);
 }
@@ -229,40 +167,13 @@ $('#sound').onclick = () => { if (phone?.started && !justKicked) { soundOn = !so
 const slug = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 $('#placeName').onclick = () => drawCard(world.name); // show the card again
 
-// ---------------- record: a vertical clip (video + the phone's audio) for TikTok ----------------
-let rec = null;
-function pickType() {
-  for (const t of ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'])
-    if (window.MediaRecorder?.isTypeSupported(t)) return t;
-  return '';
-}
-async function startRec() {
-  if (!window.MediaRecorder) { $('#status').textContent = 'recording is not supported in this browser'; return; }
-  if (phone && !phone.started && soundOn) { await phone.start(); syncSound(); }
-  vertical = true; setRes(params.res);
-  const stream = canvas.captureStream(30), audio = phone?.stream(); // no phone audio -> a silent clip
-  audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
-  const type = pickType(), chunks = [], t0 = performance.now();
-  const mr = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 10e6, audioBitsPerSecond: 192e3 });
-  mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  mr.onstop = () => {
-    const ext = type.includes('mp4') ? 'mp4' : 'webm', blob = new Blob(chunks, { type: type.split(';')[0] || 'video/webm' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = `${slug(world.name)}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${ext}`; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    $('#status').textContent = `saved ${a.download} (${((performance.now() - t0) / 1000).toFixed(1)} s, ${(blob.size / 1e6).toFixed(1)} MB, 1080x1920${ext === 'webm' ? ', WebM: convert to MP4 if TikTok refuses it' : ''})`;
-  };
-  mr.start(250);
-  rec = { mr, t0, timer: setInterval(() => { $('#record').textContent = `■ Stop ${((performance.now() - t0) / 1000).toFixed(0)}s`; }, 250) };
-  $('#record').classList.add('on'); $('#record').textContent = '■ Stop 0s';
-}
-function stopRec() {
-  if (!rec) return;
-  clearInterval(rec.timer); rec.mr.stop(); rec = null;
-  vertical = false; setRes(params.res);
-  $('#record').classList.remove('on'); $('#record').textContent = '● Rec (vertical)';
-}
-$('#record').onclick = () => (rec ? stopRec() : startRec());
+// ---------------- set scene: this place becomes the terrain of the editor's current scene ----------------
+$('#setScene').onclick = async () => {
+  const reg = link != null ? regionById(atlas, link) : null;
+  const { seed, biome, neighbors, seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine } = params;
+  await setSceneTerrain({ seed, biome: structuredClone(biome), neighbors: structuredClone(neighbors), seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine, name: world.name, region: reg ? { id: reg.id, world: atlas.seed } : null });
+  $('#status').innerHTML = `“${world.name}” is now the current scene’s terrain · <a href="/editor.html">open the editor ▸</a>`;
+};
 
 // ---------------- UI ----------------
 const inputs = {};
@@ -276,7 +187,12 @@ function buildControls() {
       const row = document.createElement('div'); row.className = 'row';
       row.innerHTML = `<span>${label}</span><input type="range" min="${mn}" max="${mx}" step="${INT.has(k) ? 1 : (mx - mn) / 200}"><output></output>`;
       const input = row.querySelector('input'), out = row.querySelector('output');
-      input.addEventListener('input', () => { params[k] = Number(input.value); out.textContent = fmt(k); requestRebuild(); });
+      input.addEventListener('input', () => {
+        params[k] = Number(input.value); out.textContent = fmt(k);
+        const reg = link != null ? regionById(atlas, link) : null; // a region's scene: its mood and seed live in the world
+        if (reg) { if (k in reg.mood) reg.mood[k] = params[k]; if (k === 'seed') reg.seed = params[k]; saveAtlas(); }
+        requestRebuild();
+      });
       inputs[k] = { input, out }; d.appendChild(row);
     }
     root.appendChild(d);
@@ -285,27 +201,17 @@ function buildControls() {
 const fmt = (k) => (INT.has(k) ? String(params[k]) : (+params[k]).toFixed(2));
 function syncControls() { for (const [k, { input, out }] of Object.entries(inputs)) { input.value = params[k]; out.textContent = fmt(k); } }
 
-$('#randomize').onclick = () => { params = randomize(); syncControls(); rebuild(); };
-$('#reset').onclick = () => { params = defaults(); walk = 0; syncControls(); rebuild(); };
+$('#randomize').onclick = () => { params = randomize(); writeBack(); syncControls(); rebuild(); };
+$('#randBiome').onclick = () => { Object.assign(params.biome, randomBiome(rng(Math.random() * 1e9))); writeBack(); sceneBiome.sync(); rebuild(); };
+$('#reset').onclick = () => { unlink(); params = defaults(); walk = 0; syncControls(); sceneBiome.sync(); rebuild(); };
+function writeBack() { const reg = link != null ? regionById(atlas, link) : null; if (!reg) return; reg.seed = params.seed; for (const k in reg.mood) reg.mood[k] = params[k]; saveAtlas(); }
 $('#wire').onchange = updateWire;
 $('#walkMode').onclick = () => setMode(mode === 'walk' ? 'view' : 'walk');
 $('#fullscreen').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : canvas.requestFullscreen?.());
 document.addEventListener('fullscreenchange', () => { $('#fullscreen').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen'; });
 $('#exportGlb').onclick = async () => {
   // PS2 shader materials don't survive glTF: bake them to plain unlit textured materials (fog/snap are the host engine's job)
-  const out = world.group.clone(true), mats = new Map();
-  out.traverse((m) => {
-    if (!m.material) return;
-    const src = m.material;
-    if (!mats.has(src)) {
-      if (src.isShaderMaterial) {
-        const c = src.uniforms.color.value, k = Math.max(1, c.r, c.g, c.b); // glTF colour factors stop at 1
-        const b = new THREE.MeshBasicMaterial({ map: src.uniforms.map.value, color: c.clone().multiplyScalar(1 / k), alphaTest: src.uniforms.alphaTest.value, side: src.side, vertexColors: src.vertexColors });
-        b.name = src.name; mats.set(src, b);
-      } else mats.set(src, src);
-    }
-    m.material = mats.get(src);
-  });
+  const out = bakeForExport(world.group);
   out.userData = { scenario: { generator: 'dreamare-dunes', version: 2, name: world.name, params: { ...params }, spawn: world.spawn.toArray(), fog: { color: PS2.fogColor.value.toArray(), near: PS2.fogNear.value, far: PS2.fogFar.value } } };
   const glb = await new GLTFExporter().parseAsync(out, { binary: true });
   const a = document.createElement('a');
@@ -314,6 +220,93 @@ $('#exportGlb').onclick = async () => {
   $('#status').textContent = `exported ${a.download} (${(glb.byteLength / 1024).toFixed(0)} KB)`;
 };
 
-window.__app = { me, phone, get mode() { return mode; }, get yaw() { return yaw; }, set yaw(v) { yaw = v; }, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, randomize, defaults, rebuild };
-buildControls(); syncControls(); rebuild();
+// ================= world map =================
+// Regions live on a 2D map; the scene shows one region, faded toward its neighbours. The world autosaves in this
+// browser (convenience) and saves / loads as a JSON file (the real save: every seed and biome is in it).
+const KEY = 'dreamare.world';
+let atlas = null, selected = null, hover = null, link = null, view = 'scene';
+try { const j = localStorage.getItem(KEY); if (j) atlas = deserialize(JSON.parse(j)); } catch { atlas = null; }
+atlas ||= createWorld();
+function saveAtlas() { try { localStorage.setItem(KEY, JSON.stringify(serialize(atlas))); } catch { /* private mode: the file save still works */ } }
+const mapCanvas = $('#map');
+const redraw = () => drawMap(mapCanvas, atlas, { selected, hover });
+function unlink() { link = null; $('#backToMap').hidden = true; }
+
+function showView(v) {
+  view = v;
+  $('#mapPanel').hidden = v !== 'map'; $('#scenePanel').hidden = v !== 'scene';
+  mapCanvas.hidden = v !== 'map'; canvas.hidden = v !== 'scene';
+  $('#modeMap').classList.toggle('on', v === 'map'); $('#modeScene').classList.toggle('on', v === 'scene');
+  if (v === 'map') { if (mode === 'walk') setMode('view'); redraw(); regionPanel(); $('#status').textContent = 'click empty land to drop a region · click a region to select · double-click to enter it'; }
+  else $('#status').textContent = mode === 'walk' ? 'WASD to walk · click the view to look' : 'drag to look around · wheel to zoom';
+}
+$('#modeMap').onclick = () => showView('map');
+$('#modeScene').onclick = () => showView('scene');
+$('#backToMap').onclick = () => showView('map');
+
+function enterRegion(reg) {
+  link = reg.id; $('#backToMap').hidden = false;
+  params = { ...params, ...reg.mood, seed: reg.seed, biome: reg.biome, neighbors: neighborsOf(atlas, reg), seaAngle: reg.biome.water ? seaAngleOf(atlas, reg) : undefined };
+  world && (world.seed = -1); // force the arrival (title card, camera reset) even if the seed matches
+  syncControls(); sceneBiome.sync(); rebuild(); showView('scene');
+}
+
+const mapBiomeRoot = document.createElement('div');
+let mapBiome = null;
+function regionPanel() {
+  const box = $('#regionBox'), reg = selected != null ? regionById(atlas, selected) : null;
+  if (!reg) { box.innerHTML = `<p class="hint">${atlas.regions.length ? 'Click a region to select it, or empty land to drop a new one.' : 'Click anywhere on the map to drop your first region (it starts as the village).'}</p>`; return; }
+  const nb = neighborsOf(atlas, reg).length;
+  box.innerHTML = `
+    <p class="placename">${reg.name}</p>
+    <p class="meta">${reg.biome.archetype} · ${reg.biome.trees !== 'none' ? reg.biome.trees : 'open'} · depth ${reg.depth} · ${nb} neighbour${nb === 1 ? '' : 's'} · seed ${reg.seed}${reg.locked ? ' · locked' : ''}</p>
+    <div class="buttons">
+      <button id="rEnter" style="grid-column: span 2">Generate scene ▸</button>
+      <button id="rReroll" ${reg.locked ? 'disabled' : ''}>Randomize biome</button>
+      <button id="rLock">${reg.locked ? 'Unlock' : 'Lock'}</button>
+      <button id="rRemove" ${reg.locked ? 'disabled' : ''}>Remove</button>
+      <button id="rDeselect">Deselect</button>
+    </div>
+    <p class="meta">continue from here:</p>
+    <div class="compass">${['NW', 'N', 'NE', 'W', '', 'E', 'SW', 'S', 'SE'].map((d) => (d ? `<button data-dir="${d}">${d}</button>` : '<span></span>')).join('')}</div>`;
+  box.querySelector('#rEnter').onclick = () => enterRegion(reg);
+  box.querySelector('#rReroll').onclick = () => { if (rerollBiome(atlas, reg)) { changedAtlas(); } };
+  box.querySelector('#rLock').onclick = () => { reg.locked = !reg.locked; changedAtlas(); };
+  box.querySelector('#rRemove').onclick = () => { if (removeRegion(atlas, reg)) { if (link === reg.id) unlink(); selected = null; changedAtlas(); } };
+  box.querySelector('#rDeselect').onclick = () => { selected = null; changedAtlas(); };
+  box.querySelectorAll('[data-dir]').forEach((b) => { b.onclick = () => { const n = continueFrom(atlas, reg, b.dataset.dir); if (n) selected = n.id; else $('#status').textContent = `no free land to the ${b.dataset.dir}`; changedAtlas(); }; });
+  box.appendChild(mapBiomeRoot);
+  mapBiome = biomeControls(mapBiomeRoot, () => regionById(atlas, selected)?.biome, () => { changedAtlas(false); });
+}
+function changedAtlas(panel = true) { saveAtlas(); redraw(); if (panel) regionPanel(); }
+
+mapCanvas.addEventListener('mousemove', (e) => { const [x, y] = cellAt(mapCanvas, atlas, e), o = cellOwner(atlas, x, y), h = o >= 0 ? o : null; if (h !== hover) { hover = h; redraw(); } });
+mapCanvas.addEventListener('mouseleave', () => { hover = null; redraw(); });
+mapCanvas.addEventListener('click', (e) => {
+  const [x, y] = cellAt(mapCanvas, atlas, e), o = cellOwner(atlas, x, y);
+  if (o >= 0) selected = o;
+  else if (o === -1) { const reg = dropRegion(atlas, x, y); if (reg) selected = reg.id; else $('#status').textContent = 'not enough free land there'; }
+  changedAtlas();
+});
+mapCanvas.addEventListener('dblclick', (e) => { const [x, y] = cellAt(mapCanvas, atlas, e), o = cellOwner(atlas, x, y); if (o >= 0) enterRegion(regionById(atlas, o)); });
+$('#worldNew').onclick = () => { if (atlas.regions.length && !confirm('Start a new, empty world? (Save this one first if you want to keep it.)')) return; atlas = createWorld(); selected = null; unlink(); changedAtlas(); };
+$('#worldSave').onclick = () => {
+  const a = document.createElement('a'), first = atlas.regions[0]?.name || 'world';
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(serialize(atlas))], { type: 'application/json' }));
+  a.download = `${slug(first)}-world-${atlas.seed}.json`; a.click();
+  $('#status').textContent = `saved ${a.download} (${atlas.regions.length} regions)`;
+};
+$('#worldLoad').onclick = () => $('#worldFile').click();
+$('#worldFile').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try { atlas = deserialize(JSON.parse(await f.text())); selected = null; unlink(); changedAtlas(); $('#status').textContent = `loaded ${f.name} (${atlas.regions.length} regions)`; }
+  catch (err) { $('#status').textContent = `could not load ${f.name}: ${err.message}`; }
+  e.target.value = '';
+};
+
+// scene-side biome controls edit params.biome (which is the linked region's biome object when in a region)
+const sceneBiome = biomeControls($('#biomeScene'), () => params.biome, () => { if (link != null) saveAtlas(); requestRebuild(); });
+
+window.__app = { get atlas() { return atlas; }, enterRegion, showView, me, phone, get mode() { return mode; }, get yaw() { return yaw; }, set yaw(v) { yaw = v; }, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, randomize, defaults, rebuild };
+buildControls(); syncControls(); sceneBiome.sync(); rebuild();
 requestAnimationFrame(frame);

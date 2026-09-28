@@ -1,0 +1,293 @@
+// Posing characters in the scene editor.
+//  - detect(image): MediaPipe pose (heavy model, still images) + hands on a photo or a webcam frame
+//  - retarget(rig, det, { mirror }): landmarks -> a pose for our GLB skeleton (Mixamo-style names, every bone
+//    points along its local +Y, characters face +Z), feet put back on the ground
+//  - IK for the editor's drag handles: hands / feet (two-bone, elbows and knees keep their bend plane),
+//    head (look), chest (bend spread over the spine), hips (crouch with the feet planted)
+//  - breathe(rig, t): a small additive breath on top of a still pose
+// A pose is { bones: { name: [x, y, z, w] (local) }, hips: [x, y, z] }: the same shape a keyframe will have.
+import * as THREE from 'three';
+import { FilesetResolver, PoseLandmarker, HandLandmarker } from '@mediapipe/tasks-vision';
+
+const UP = new THREE.Vector3(0, 1, 0);
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _m = new THREE.Matrix4();
+
+// ---------------- detection ----------------
+let detectors = null;
+async function load() {
+  detectors ||= (async () => {
+    const fileset = await FilesetResolver.forVisionTasks('/wasm');
+    const opts = (path) => ({ baseOptions: { modelAssetPath: path, delegate: 'GPU' }, runningMode: 'IMAGE' });
+    const [pose, hands] = await Promise.all([
+      PoseLandmarker.createFromOptions(fileset, { ...opts('/models/pose_landmarker_heavy.task'), numPoses: 1 }).catch(() => PoseLandmarker.createFromOptions(fileset, { ...opts('/models/pose_landmarker_lite.task'), numPoses: 1 })),
+      HandLandmarker.createFromOptions(fileset, { ...opts('/models/hand_landmarker.task'), numHands: 2 }),
+    ]);
+    return { pose, hands };
+  })();
+  return detectors;
+}
+export async function detect(image) {
+  const { pose, hands } = await load();
+  const p = pose.detect(image), h = hands.detect(image);
+  if (!p.worldLandmarks?.[0]) return null;
+  return { world: p.worldLandmarks[0], norm: p.landmarks[0], hands: (h.landmarks || []).map((lm, k) => ({ norm: lm, world: h.worldLandmarks[k] })) };
+}
+
+// ---------------- the rig: bones of one character, its rest pose ----------------
+export function makeRig(root) {
+  const bones = {};
+  root.traverse((o) => { if (o.isBone) bones[o.name] = o; });
+  const skelRoot = bones.Hips?.parent; // the Root node: poses live in its space
+  const rest = Object.fromEntries(Object.entries(bones).map(([n, b]) => [n, b.quaternion.clone()]));
+  const restHips = bones.Hips.position.clone();
+  const rig = { root, bones, skelRoot, rest, restHips };
+  rig.restFootY = footMinY(rig);
+  return rig;
+}
+// rotation of a bone in Root space (walk the parents; nothing above Root counts)
+function rootQ(rig, bone, out = new THREE.Quaternion()) {
+  out.identity();
+  for (let b = bone; b && b !== rig.skelRoot; b = b.parent) out.premultiply(b.quaternion);
+  return out.normalize();
+}
+function rootPos(rig, bone, out = new THREE.Vector3()) {
+  rig.skelRoot.updateMatrixWorld(true);
+  _m.copy(rig.skelRoot.matrixWorld).invert();
+  return out.setFromMatrixPosition(bone.matrixWorld).applyMatrix4(_m);
+}
+// set a bone's Root-space rotation (its parents already final)
+function setRootQ(rig, name, q) {
+  const b = rig.bones[name]; if (!b) return;
+  const parentQ = b.parent === rig.skelRoot ? new THREE.Quaternion() : rootQ(rig, b.parent);
+  // always unit length: three's inverse (a conjugate) and setFromUnitVectors assume it, and any drift
+  // compounds drag after drag into scaled bone matrices (a stretched, giant limb)
+  b.quaternion.copy(parentQ.invert().multiply(q)).normalize();
+}
+// turn a bone (minimal rotation) so its +Y points along d (Root space)
+function aim(rig, name, d) {
+  const b = rig.bones[name]; if (!b || d.lengthSq() < 1e-10) return;
+  const q = rootQ(rig, b), cur = UP.clone().applyQuaternion(q).normalize();
+  setRootQ(rig, name, _q2.setFromUnitVectors(cur, d.clone().normalize()).multiply(q).normalize().clone());
+}
+// frame from a bone direction y and a reference axis z (made orthogonal); x = y × z
+const basis = (y, z) => {
+  const Y = y.clone().normalize(), Z = z.clone().addScaledVector(Y, -z.dot(Y)).normalize(), X = new THREE.Vector3().crossVectors(Y, Z);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+};
+
+export const snapshot = (rig) => ({
+  bones: Object.fromEntries(Object.entries(rig.bones).map(([n, b]) => [n, b.quaternion.clone().normalize().toArray().map((v) => +v.toFixed(5))])),
+  hips: rig.bones.Hips.position.toArray().map((v) => +v.toFixed(5)),
+});
+export function applyPose(rig, pose) {
+  for (const [n, b] of Object.entries(rig.bones)) { const q = pose.bones[n]; b.quaternion.copy(q ? _q.fromArray(q) : rig.rest[n]).normalize(); } // stored values are rounded
+  rig.bones.Hips.position.fromArray(pose.hips || rig.restHips.toArray());
+  rig.root.updateMatrixWorld(true);
+}
+export function resetRest(rig) { for (const [n, b] of Object.entries(rig.bones)) b.quaternion.copy(rig.rest[n]); rig.bones.Hips.position.copy(rig.restHips); rig.root.updateMatrixWorld(true); }
+// blend two poses (for the smooth arrival of a new pose)
+export function lerpPose(a, b, t) {
+  const bones = {};
+  for (const n of new Set([...Object.keys(a.bones), ...Object.keys(b.bones)])) {
+    const qa = _q.fromArray(a.bones[n] || b.bones[n]).normalize(), qb = _q2.fromArray(b.bones[n] || a.bones[n]).normalize();
+    bones[n] = qa.clone().slerp(qb, t).normalize().toArray();
+  }
+  return { bones, hips: a.hips.map((v, i) => v + (b.hips[i] - v) * t) };
+}
+
+// lowest point of the feet (toe and ankle joints), Root space
+function footMinY(rig) {
+  rig.root.updateMatrixWorld(true);
+  let y = Infinity;
+  for (const n of ['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase']) if (rig.bones[n]) y = Math.min(y, rootPos(rig, rig.bones[n], _v).y);
+  return y;
+}
+// keep the feet on the ground: the hips go down (crouch, kneel) or up by however much the lowest foot moved
+export function ground(rig) {
+  const dy = footMinY(rig) - rig.restFootY;
+  rig.bones.Hips.position.y -= dy / (rig.skelRoot.scale.y || 1);
+  rig.root.updateMatrixWorld(true);
+}
+
+// ---------------- photo -> pose ----------------
+// MediaPipe world landmarks: meters, hip-centred, x right in the image, y down, z away from the camera.
+// Character space: +x its left, +y up, +z its front. A person facing the camera: their left is image right.
+const L = { shoulder: 11, elbow: 13, wrist: 15, pinky: 17, index: 19, hip: 23, knee: 25, ankle: 27, heel: 29, toe: 31, ear: 7 };
+export function retarget(rig, det, { mirror = false } = {}) {
+  resetRest(rig);
+  const vis = (i) => (det.norm[i]?.visibility ?? 1) > 0.5;
+  const side = (i, s) => (s === 'Right' ? i + 1 : i); // MediaPipe: left = odd, right = even (+1)
+  // mirror: the character does what a mirror would (your left arm moves its right): swap sides, flip x
+  const idx = (i, s) => side(i, mirror ? (s === 'Left' ? 'Right' : 'Left') : s);
+  const toChar = (l) => new THREE.Vector3(mirror ? -l.x : l.x, -l.y, -l.z);
+  let P = det.world.map(toChar);
+  // take out the photo's facing: the pose is relative to the hips (the character keeps its turn in the scene)
+  const hipLine = P[idx(L.hip, 'Left')].clone().sub(P[idx(L.hip, 'Right')]); hipLine.y = 0;
+  const unturn = new THREE.Quaternion().setFromUnitVectors(hipLine.normalize(), new THREE.Vector3(1, 0, 0));
+  P = P.map((p) => p.applyQuaternion(unturn));
+  const pt = (i, s) => P[idx(i, s)], mid = (a, b) => a.clone().add(b).multiplyScalar(0.5);
+
+  // torso: hips from the hip line, chest from the shoulder line; the spine shares the difference
+  const up = mid(pt(L.shoulder, 'Left'), pt(L.shoulder, 'Right')).sub(mid(pt(L.hip, 'Left'), pt(L.hip, 'Right')));
+  const across = (i) => pt(i, 'Left').clone().sub(pt(i, 'Right'));
+  const hipsQ = basis(up, new THREE.Vector3().crossVectors(across(L.hip), up)).multiply(new THREE.Quaternion()); // y = up, z = front
+  const chestQ = basis(up, new THREE.Vector3().crossVectors(across(L.shoulder), up));
+  setRootQ(rig, 'Hips', hipsQ);
+  const delta = hipsQ.clone().invert().multiply(chestQ);
+  for (const n of ['Spine', 'Spine1', 'Spine2']) rig.bones[n]?.quaternion.copy(rig.rest[n]).multiply(new THREE.Quaternion().slerp(delta, 1 / 3));
+  // head: ear line and the nose; the neck takes a third
+  if (vis(0) && vis(7) && vis(8)) {
+    const ears = pt(L.ear, 'Left').clone().sub(pt(L.ear, 'Right')), front = P[0].clone().sub(mid(pt(L.ear, 'Left'), pt(L.ear, 'Right')));
+    const Z = front.addScaledVector(ears.clone().normalize(), -front.dot(ears.clone().normalize())).normalize(), X = ears.normalize(), Y = new THREE.Vector3().crossVectors(Z, X);
+    const headQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+    const chest = rootQ(rig, rig.bones.Spine2), rel = chest.clone().invert().multiply(headQ);
+    if (2 * Math.acos(Math.min(1, Math.abs(rel.w))) < 1.4) { // ignore wild head guesses (>80°)
+      const n = new THREE.Quaternion().slerp(rel, 0.35);
+      rig.bones.Neck.quaternion.copy(rig.rest.Neck).multiply(n);
+      rig.bones.Head.quaternion.copy(rig.rest.Head).multiply(n.clone().invert().multiply(rel));
+    }
+  }
+  // arms and legs: aim each bone at the next joint (limbs the photo can't see keep standing)
+  for (const s of ['Left', 'Right']) {
+    const sh = pt(L.shoulder, s), el = pt(L.elbow, s), wr = pt(L.wrist, s);
+    if (vis(idx(L.elbow, s)) && vis(idx(L.wrist, s))) {
+      aim(rig, `${s}Arm`, el.clone().sub(sh)); aim(rig, `${s}ForeArm`, wr.clone().sub(el));
+      // hand frame from the pose's pinky / index points (fingers along +Y, pinky -> index along +Z)
+      const pi = pt(L.pinky, s), ix = pt(L.index, s);
+      setRootQ(rig, `${s}Hand`, basis(mid(pi, ix).sub(wr), ix.clone().sub(pi)).multiply(restHandTwist(rig, s)));
+    }
+    const hp = pt(L.hip, s), kn = pt(L.knee, s), an = pt(L.ankle, s);
+    if (vis(idx(L.knee, s)) && vis(idx(L.ankle, s))) {
+      aim(rig, `${s}UpLeg`, kn.clone().sub(hp)); aim(rig, `${s}Leg`, an.clone().sub(kn));
+      if (vis(idx(L.toe, s))) aim(rig, `${s}Foot`, pt(L.toe, s).clone().sub(an));
+    }
+  }
+  // fingers from the hand model, each hand matched to the nearer pose wrist
+  for (const hand of det.hands) {
+    const w = hand.norm[0], dl = Math.hypot(w.x - det.norm[15].x, w.y - det.norm[15].y), dr = Math.hypot(w.x - det.norm[16].x, w.y - det.norm[16].y);
+    let s = dl < dr ? 'Left' : 'Right'; if (mirror) s = s === 'Left' ? 'Right' : 'Left';
+    curls(rig, s, hand.world.map(toChar));
+  }
+  rig.root.updateMatrixWorld(true);
+  ground(rig);
+  return snapshot(rig);
+}
+// the hand bone's small rest tilt relative to a clean basis (so an unchanged hand stays as it was built)
+function restHandTwist(rig, s) {
+  const b = rig.bones[`${s}Hand`], saved = b.quaternion.clone();
+  b.quaternion.copy(rig.rest[`${s}Hand`]);
+  const q = rootQ(rig, b), y = UP.clone().applyQuaternion(q), z = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+  const clean = basis(y, z), twist = clean.invert().multiply(q);
+  b.quaternion.copy(saved);
+  return twist;
+}
+// finger curls (angle between consecutive finger segments), bent toward the palm
+function curls(rig, s, H) {
+  const ang = (a, b, c, d) => H[b].clone().sub(H[a]).angleTo(H[d].clone().sub(H[c]));
+  const sign = s === 'Left' ? -1 : 1; // palms face down in the T-pose: curling turns +Y toward the palm side
+  const bend = (name, a) => { const b = rig.bones[name]; if (b) b.quaternion.copy(rig.rest[name]).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), sign * Math.min(1.7, a))); };
+  [['Index', 5, 6, 7, 8], ['Middle', 9, 10, 11, 12], ['Ring', 13, 14, 15, 16], ['Pinky', 17, 18, 19, 20]].forEach(([f, m, p, d, t]) => {
+    bend(`${s}Hand${f}1`, ang(0, m, m, p)); bend(`${s}Hand${f}2`, ang(m, p, p, d)); bend(`${s}Hand${f}3`, ang(p, d, d, t));
+  });
+  bend(`${s}HandThumb2`, ang(1, 2, 2, 3) * 0.8); bend(`${s}HandThumb3`, ang(2, 3, 3, 4) * 0.8);
+}
+
+// ---------------- IK for the drag handles ----------------
+export const HANDLES = { LeftHand: ['LeftArm', 'LeftForeArm'], RightHand: ['RightArm', 'RightForeArm'], LeftFoot: ['LeftUpLeg', 'LeftLeg'], RightFoot: ['RightUpLeg', 'RightLeg'], Head: null, Spine2: null, Hips: null };
+export const handlePos = (rig, name) => rootPos(rig, rig.bones[name], new THREE.Vector3());
+
+// two-bone IK: upper -> lower -> end reaches target T (Root space); the elbow/knee stays in its current bend plane
+function twoBone(rig, upper, lower, end, T) {
+  const A = rootPos(rig, rig.bones[upper]), B = rootPos(rig, rig.bones[lower]), C = rootPos(rig, rig.bones[end]);
+  const l1 = A.distanceTo(B), l2 = B.distanceTo(C), toT = T.clone().sub(A);
+  const d = Math.min(Math.max(toT.length(), Math.abs(l1 - l2) + 1e-4), (l1 + l2) * 0.999);
+  const dir = toT.normalize();
+  let pole = B.clone().sub(A).addScaledVector(dir, -B.clone().sub(A).dot(dir)); // current bend direction
+  if (pole.lengthSq() < 1e-8) pole = new THREE.Vector3(0, 0, upper.includes('Leg') ? 1 : -1).addScaledVector(dir, -dir.z); // straight limb: knees forward, elbows back
+  pole.normalize();
+  const a = Math.acos(Math.min(1, Math.max(-1, (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d))));
+  const elbow = A.clone().addScaledVector(dir, Math.cos(a) * l1).addScaledVector(pole, Math.sin(a) * l1);
+  aim(rig, upper, elbow.clone().sub(A)); rig.root.updateMatrixWorld(true);
+  aim(rig, lower, A.clone().addScaledVector(dir, d).sub(elbow)); rig.root.updateMatrixWorld(true);
+}
+// drag a handle to a Root-space target; ctx carries what was captured when the drag started
+export function dragHandle(rig, name, T, ctx) {
+  rig.root.updateMatrixWorld(true);
+  const endQ = rig.bones[name] && rootQ(rig, rig.bones[name]);
+  if (HANDLES[name]) {
+    twoBone(rig, ...HANDLES[name], name, T);
+    if (name.endsWith('Foot')) setRootQ(rig, name, ctx.footQ?.[name] || endQ); // feet keep their angle to the ground
+  } else if (name === 'Head') { // look toward the target: the neck takes a third
+    const head = rig.bones.Head, P = rootPos(rig, head), chest = rootQ(rig, rig.bones.Spine2);
+    const want = basis(new THREE.Vector3(0, 1, 0).applyQuaternion(chest), T.clone().sub(P)); // upright-ish, facing the target
+    const rel = chest.clone().invert().multiply(want), n = new THREE.Quaternion().slerp(rel, 0.35);
+    rig.bones.Neck.quaternion.copy(n); head.quaternion.copy(n.clone().invert().multiply(rel));
+  } else if (name === 'Spine2') { // bend: the chest leans toward the target, spread over three spine bones
+    const base = rootPos(rig, rig.bones.Spine), cur = rootPos(rig, rig.bones.Spine2).sub(base), want = T.clone().sub(base);
+    const step = new THREE.Quaternion().setFromUnitVectors(cur.normalize(), want.normalize());
+    const part = new THREE.Quaternion().slerp(step, 1 / 3);
+    for (const n of ['Spine', 'Spine1', 'Spine2']) { setRootQ(rig, n, part.clone().multiply(rootQ(rig, rig.bones[n]))); rig.root.updateMatrixWorld(true); }
+  } else if (name === 'Hips') { // move the hips (crouch, lean), the feet stay where they were
+    const H = ctx.hips0.clone().add(T.clone().sub(ctx.handle0).divideScalar(rig.skelRoot.scale.y || 1));
+    // the body can't leave its feet: each leg's root stays within that leg's reach of its planted foot,
+    // and the hips stay above the feet (no sinking into the ground)
+    for (let k = 0; k < 3; k++) for (const s of ['Left', 'Right']) {
+      const root = H.clone().add(ctx.legOff[s]), f = ctx.feet[s], d = root.distanceTo(f), max = ctx.reach[s] * 0.985;
+      if (d > max) H.add(f.clone().add(root.sub(f).multiplyScalar(max / d)).sub(H.clone().add(ctx.legOff[s])));
+    }
+    H.y = Math.max(H.y, Math.min(ctx.feet.Left.y, ctx.feet.Right.y) + ctx.reach.Left * 0.25); // above the lower foot (a raised leg may go higher)
+    rig.bones.Hips.position.copy(H);
+    rig.root.updateMatrixWorld(true);
+    for (const s of ['Left', 'Right']) { twoBone(rig, `${s}UpLeg`, `${s}Leg`, `${s}Foot`, ctx.feet[s]); setRootQ(rig, `${s}Foot`, ctx.footQ[`${s}Foot`]); rig.root.updateMatrixWorld(true); }
+  }
+  rig.root.updateMatrixWorld(true);
+}
+export function dragStart(rig) {
+  rig.root.updateMatrixWorld(true);
+  const hipsAt = rootPos(rig, rig.bones.Hips), leg = (s) => rootPos(rig, rig.bones[`${s}UpLeg`]);
+  const reach = (s) => leg(s).distanceTo(rootPos(rig, rig.bones[`${s}Leg`])) + rootPos(rig, rig.bones[`${s}Leg`]).distanceTo(rootPos(rig, rig.bones[`${s}Foot`]));
+  return {
+    legOff: { Left: leg('Left').sub(hipsAt), Right: leg('Right').sub(hipsAt) },
+    reach: { Left: reach('Left'), Right: reach('Right') },
+    hips0: rig.bones.Hips.position.clone(),
+    feet: { Left: rootPos(rig, rig.bones.LeftFoot), Right: rootPos(rig, rig.bones.RightFoot) },
+    footQ: { LeftFoot: rootQ(rig, rig.bones.LeftFoot), RightFoot: rootQ(rig, rig.bones.RightFoot) },
+  };
+}
+// Root space <-> world
+export const toRoot = (rig, p) => { rig.skelRoot.updateMatrixWorld(true); return p.clone().applyMatrix4(_m.copy(rig.skelRoot.matrixWorld).invert()); };
+export const toWorld = (rig, p) => p.clone().applyMatrix4(rig.skelRoot.matrixWorld);
+
+// ---------------- breathing on top of a still pose ----------------
+const BREATH = [['Spine1', 0.018, 0], ['Spine2', 0.022, 0.3], ['Neck', -0.015, 0.5], ['Head', -0.01, 0.7], ['LeftShoulder', 0.012, 0.2], ['RightShoulder', -0.012, 0.2]];
+export function breathe(rig, t, phase = 0) {
+  const s = Math.sin((t + phase) * 1.35); // ~ a breath every 4.6 s
+  for (const [n, amp, lag] of BREATH) {
+    const b = rig.bones[n]; if (!b) continue;
+    const axis = n.includes('Shoulder') ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(1, 0, 0);
+    b.quaternion.multiply(_q.setFromAxisAngle(axis, amp * Math.sin((t + phase) * 1.35 - lag) * (n.includes('Shoulder') ? 1 : -1))).normalize();
+  }
+  return s;
+}
+
+// ---------------- sitting ----------------
+// a plain sitting pose: thighs forward, shins down, feet flat, forearms resting on the lap, a slight slump.
+// Returns the pose; hipsAt(rig) then gives where the hips ended up (the seat anchor goes there).
+export function sitPose(rig) {
+  resetRest(rig);
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  rig.bones.Spine?.quaternion.multiply(_q.setFromAxisAngle(V(1, 0, 0), 0.12)).normalize(); // slump
+  rig.bones.Neck?.quaternion.multiply(_q.setFromAxisAngle(V(1, 0, 0), 0.1)).normalize();
+  for (const s of ['Left', 'Right']) {
+    const x = s === 'Left' ? 1 : -1; // Left bones sit on the character's +x side
+    aim(rig, `${s}UpLeg`, V(0.07 * x, -0.1, 1));
+    aim(rig, `${s}Leg`, V(0.02 * x, -1, 0.1));
+    aim(rig, `${s}Foot`, V(0, -0.4, 1));
+    aim(rig, `${s}Arm`, V(0.22 * x, -0.9, 0.38));
+    aim(rig, `${s}ForeArm`, V(-0.08 * x, -0.3, 1));
+  }
+  rig.root.updateMatrixWorld(true);
+  return snapshot(rig);
+}
+// the hips joint in the character root's own space (unscaled), for the current bones
+export function hipsAt(rig) { rig.root.updateMatrixWorld(true); return rig.root.worldToLocal(rig.bones.Hips.getWorldPosition(new THREE.Vector3())); }

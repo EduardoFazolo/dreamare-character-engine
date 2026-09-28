@@ -9,23 +9,38 @@
 <body>
   <aside id="panel">
     <h1>DREAMARE</h1>
-    <nav class="tabs"><a href="/">Characters</a><a class="on" href="/scenario.html">Scenarios</a><a href="/names.html">Names</a></nav>
-    <p id="placeName" class="placename" title="click to show the title card again"></p>
-    <div class="buttons">
-      <button id="randomize">Randomize</button>
-      <button id="reset">Reset</button>
-      <label title="slowly drift the camera around"><input type="checkbox" id="drift" checked /> drift</label>
-      <label title="show every polygon"><input type="checkbox" id="wire" /> wireframe</label>
-      <button id="walkMode" title="walk around with WASD, look with the mouse">Walk (WASD)</button>
-      <button id="fullscreen" title="full screen (Esc to leave)">Full screen</button>
-      <button id="record" style="grid-column: span 2" title="record a vertical 1080x1920 clip with sound (click again to stop and save)">● Rec (vertical)</button>
-      <button id="sound" style="grid-column: span 2" title="the song plays from the phone booth">Sound: click to start</button>
-      <button id="exportGlb" style="grid-column: span 2">Export scenario (GLB)</button>
+    <nav class="tabs"><a href="/">Characters</a><a class="on" href="/scenario.html">Scenarios</a><a href="/names.html">Names</a><a href="/editor.html">Editor</a></nav>
+    <div class="modes"><button id="modeMap">World map</button><button id="modeScene" class="on">Scene</button></div>
+    <div id="mapPanel" hidden>
+      <div class="buttons">
+        <button id="worldNew">New world</button>
+        <button id="worldSave" title="download the whole world as a JSON file">Save world</button>
+        <button id="worldLoad" style="grid-column: span 2">Load world…</button>
+        <input type="file" id="worldFile" accept=".json,application/json" hidden />
+      </div>
+      <div id="regionBox"></div>
     </div>
-    <div id="controls"></div>
+    <div id="scenePanel">
+      <button id="backToMap" class="back" hidden>◂ Back to the map</button>
+      <p id="placeName" class="placename" title="click to show the title card again"></p>
+      <div class="buttons">
+        <button id="randomize" title="new seed and mood (keeps the biome)">Randomize</button>
+        <button id="randBiome" title="a random biome">Random biome</button>
+        <button id="reset" title="back to the village">Reset</button>
+        <button id="fullscreen" title="full screen (Esc to leave)">Full screen</button>
+        <label title="slowly drift the camera around"><input type="checkbox" id="drift" checked /> drift</label>
+        <label title="show every polygon"><input type="checkbox" id="wire" /> wireframe</label>
+        <button id="walkMode" style="grid-column: span 2" title="walk around with WASD, look with the mouse">Walk (WASD)</button>
+        <button id="setScene" class="primary" style="grid-column: span 2" title="make this place the terrain of the scene editor's current scene">Set scene ▸</button>
+        <button id="sound" style="grid-column: span 2" title="the song plays from the phone booth">Sound: click to start</button>
+        <button id="exportGlb" style="grid-column: span 2">Export scenario (GLB)</button>
+      </div>
+      <div id="controls"></div>
+      <div id="biomeScene"></div>
+    </div>
   </aside>
   <main>
-    <section id="stage"><canvas id="view"></canvas></section>
+    <section id="stage"><canvas id="view"></canvas><canvas id="map" hidden></canvas></section>
     <p id="status">drag to look around · wheel to zoom</p>
   </main>
   <script type="module" src="/src/scenario/main.js"></script>

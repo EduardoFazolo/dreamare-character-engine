@@ -37,7 +37,7 @@ Sculpt sliders: muscle, fat (negative thins proportionally), hump, lumps/tumors 
 
 **Skinning**: the sculpted body uses smooth weights (inverse distance to each bone's axis, up to 4 bones, no left/right leakage), so elbows, knees and shoulders bend instead of splitting. Head, hat, hair and props stay rigid.
 
-Hands have a full finger skeleton (optional, on by default): each pose sets a hand shape (relaxed, claw, limp, fist, reach, spider) and Idle/Talk add a slow finger twitch. Poses: stand, hunch, crouch, gunslinger (one arm raised, pointing), zombie, plus creepy ones: broken (neck snapped to one side), lurker (bent over, craning up to stare), puppet (strung up by the wrists), stare (head turned hard to you), crawler, mantis. **Random pose** switches the current character's pose instantly (poses never re-sculpt); about 4 in 10 randomized characters get a creepy one. Camera: medium, full, portrait.
+Hands have a full finger skeleton (optional, on by default): each pose sets a hand shape (relaxed, claw, limp, fist, reach, spider) and Idle/Talk add a slow finger twitch. Poses: stand, hunch, crouch, gunslinger (one arm raised, pointing), zombie, plus creepy ones: broken (neck snapped to one side), lurker (bent over, craning up to stare), puppet (strung up by the wrists), stare (head turned hard to you), crawler, mantis. The **pose** switch next to Randomize decides whether Randomize also picks a pose; off, the current character and every new one stand in the default pose. About 4 in 10 randomized poses are creepy ones. Camera: medium, full, portrait.
 
 ## Head and hair
 
@@ -70,7 +70,7 @@ A second tab builds seeded outdoor places in the style of an old, empty PS1/PS2 
 - **Layout**:
   - You stand on a low rise. A worn path meanders to a lone house with one warm window.
   - Along the path: an empty bus stop, lamp posts that light at dusk, and an old fence with missing posts.
-  - Just off the path stands an old paned phone booth, its door hanging open and creaking, with a dim TELEPHONE sign and a failing bulb. Its stained lining glows at night and dims when the bulb stutters. The receiver is off the hook, hanging inside on its coiled cord and still swaying slightly, as if someone just let go.
+  - Sometimes (30% of seeds by default; the biome's *phone booth %* slider sets it), just off the path stands an old paned phone booth, its door hanging open and creaking, with a dim TELEPHONE sign and a failing bulb. Its stained lining glows at night and dims when the bulb stutters. The receiver is off the hook, hanging inside on its coiled cord and still swaying slightly, as if someone just let go.
   - Around you: a few bare trees, sparse pale grass, and telephone poles walking off into the fog both ways.
   - Far away, a radio tower's red light blinks through the haze.
   - Dark still water lies to one side, with a pier running out into the fog.
@@ -81,10 +81,10 @@ A second tab builds seeded outdoor places in the style of an old, empty PS1/PS2 
   - Render: resolution, colour, VHS, texture warp.
 - **Controls**:
   - View mode: drag to look, wheel to step along your view, "drift" slowly turns the camera.
-  - **Walk (WASD)**: click the view to look with the mouse (pointer lock), WASD or arrows to walk, Shift to run, Esc to release the mouse. You follow the ground and can walk out along the pier; you stop at the water and bump into poles, trees and the house. The figure is only ever at a distance: get within 9 m and it's gone.
+  - **Walk (WASD)**: click the view to look with the mouse (pointer lock), WASD or arrows to walk, Shift to run, C to crouch / stand, a toggle (eye height halves, 1.62 → 0.81 m, at half speed), Esc to release the mouse. You follow the ground and can walk out along the pier; you stop at the water and bump into poles, trees and the house. The figure is only ever at a distance: get within 9 m and it's gone.
   - **Full screen** shows the 4:3 frame letterboxed.
-  - **● Rec (vertical)** records a TikTok clip: while recording, the game renders natively in 9:16 (180×320 game pixels at the default resolution, output 1080×1920, 30 fps) and captures what you hear (the phone's 3D audio, when wired; otherwise the clip is silent). Click again to stop and it saves an MP4 (H.264 + AAC), or a WebM where the browser can't encode MP4. Walk mode works while recording.
-- **Sound** (`src/scenario/audio.js`, WebAudio): not wired by default. Set `PHONE_AUDIO` in `src/scenario/main.js` to an imported audio file's url, and it plays on repeat from the booth's dangling receiver. It starts on your first click or key press, because browsers need a gesture, and the Sound button appears to mute it. Recordings include it.
+  - **Set scene ▸** makes this place (seed, biome, neighbours, mood) the terrain of the scene editor's current scene.
+- **Sound** (`src/scenario/audio.js`, WebAudio): not wired by default. Set `PHONE_AUDIO` in `src/scenario/main.js` to an imported audio file's url, and it plays on repeat from the booth's dangling receiver. It starts on your first click or key press, because browsers need a gesture, and the Sound button appears to mute it.
   - The song is normalised to a −1 dBFS peak.
   - Phone speaker chain:
     - a steep 300 Hz–3.3 kHz phone-line band with a 1.7 kHz presence bump;
@@ -97,6 +97,117 @@ A second tab builds seeded outdoor places in the style of an old, empty PS1/PS2 
   - Measured relative to the phone's own output: inside the booth −6 dB, 2 m in front −15, 8 m −33, 15 m −42, 25 m silent (−86), 2 m to the side −21, 2 m behind −26 and muffled.
 - Everything is deterministic in the seed; a rebuild takes ~120 ms.
 - **Export scenario (GLB)** bakes the materials to unlit textured materials with vertex colours (validator: 0 errors). `extras.scenario` carries the params, the spawn point and the fog colour and range.
+
+### World map and biomes
+
+The Scenarios tab has two views: **World map** and **Scene**.
+
+- **Map** (`src/scenario/world.js`, `mapview.js`):
+  - Click empty land to drop a region, an organic blob grown over free cells. The first region is the village.
+  - Click a region to select it; double-click to enter it.
+  - A selected region can be:
+    - **continued** in any of 8 directions: a new region grows from its edge with a biome drifted from its parent, drifting further the deeper the chain goes, sometimes turning into another archetype;
+    - **re-rolled** (random biome), **locked** (can't be re-rolled or removed), **removed**, or edited with the biome controls.
+  - **Generate scene ▸** builds that region: its seed, biome and mood, with terrain, ground colour, grass and plants fading toward each neighbour past the shared edge. Water faces open map.
+  - The map shows soft biome colours that fade into each other, glyphs for what grows there, and names from the place generator.
+  - The world autosaves in this browser. **Save world** / **Load world** use a JSON file containing every seed, biome and cell.
+- **Biomes** (`src/scenario/biomes.js`, `features.js`) are flat bags of numbers and switches, randomizable and mutable like characters:
+  - dunes, hills, water;
+  - five ground colours and two grass-tuft colours;
+  - plants: none, dead, pine, broadleaf, birch, mushroom (mostly small, a few giants) or willow, with density (woods and clearings), size and tint;
+  - rocks, grass tufts, extra houses, ploughed fields with crops;
+  - the original set pieces as switches: house, path, bus stop, lamps, fence, poles, radio tower, pier, figure. The phone booth is a chance (0–1), rolled on its own stream: the booth is laid out either way and simply left out, so its absence moves nothing else.
+  - Archetypes: village, farmland, pine moor, dead wood, fungal, birch mere, heath, salt flats, willow fen.
+- **The village is exact**: `VILLAGE` rebuilds the original scene bit for bit. Every original feature keeps its place in the one random sequence, gated by a switch, and every added feature has its own random stream. This was verified by fingerprinting every mesh's vertices, colours, UVs, normals, transforms, material colours and texture pixels across 8 configurations, before and after.
+
+## Scene editor (`/editor.html`)
+
+A fourth tab composes scenes: a terrain from Scenarios plus characters from the Characters tab (`src/editor/main.js`, storage in `src/store.js`).
+
+- **Getting things in:**
+  - **Characters → Send to scene ▸** runs the normal validated export (unlit materials), names the character with the name generator, takes a thumbnail, and adds it to the current scene. Press again for another; the character goes into the library.
+  - **Scenarios → Set scene ▸** sets the current scene's terrain. It's stored as the generator's inputs (seed, biome, neighbours, mood) and rebuilt in the editor, so it's identical and tiny.
+  - An open editor updates live when another tab sends something.
+- **Editing:**
+  - Characters get the PS2 shader back and play a clip (Idle by default; Pose, Talk, Walk…).
+  - **Camera** (speed and a controls list in the panel's Camera section; H folds the list). The viewport fills the window at 4:3.
+    - **WASD** / arrows move level with a little inertia, gliding over the terrain at the travel height: eye level (0.85 m, low like a child's view) by default, shown in the Camera section. Looking down doesn't dive you into the ground, and after orbiting or zooming elsewhere the first steps ease you back to that height. **Space** raises it, **C** toggles a crouch to half of it (0.425 m by default, easing down and back up), **Home** returns to eye level, **Shift** is 3× faster, **Alt** slower, and **1–5** are speed presets (1.5 / 4 / 8 / 16 / 40 m/s).
+    - **Dragging always turns the camera** (either button), wherever it starts, even over a character; the view turns 0.09° per pixel, adjustable with the *mouse sensitivity* slider in the Camera section (remembered in this browser). A click without dragging selects the character under it, or deselects on empty ground.
+    - Only an **already selected** character can be dragged along the ground, and pose handles exist only while editing a pose, so nothing gets grabbed by accident.
+    - The **wheel** steps straight forward / back along the view by a fixed amount that follows the fly speed (2.4 m per notch at 8 m/s).
+    - **Alt + drag** orbits around the selected character (or what you're looking at). **Middle-drag** or **Shift + drag** pans.
+    - **Double-click** a character to fly to it and select it, or the ground to fly over and look at that spot. **F** frames the selection, **Home** flies back to the start view.
+  - Click a character to select it (a ring on the ground); once selected, drag it to move it over the terrain. Q / E turn it (when not flying), Delete removes it, and clicking its name in the list frames it.
+  - The panel has name, animation, turn, scale, *Duplicate* and *Face the camera*. The library adds more of any character sent before.
+  - **Mood** sliders (time, fog, wrongness, sky hue) restyle the terrain. **Walk (WASD)** and **Full screen** work as on Scenarios.
+- **Context menu and props** (`src/scenario/props.js`):
+  - A right **click** (not a drag) on the scene opens a menu with:
+    - **Spawn prop ▸**, in categories:
+      - Furniture: rocking chair, wooden chair, park bench, table;
+      - Street: phone booth with its hanging receiver and failing bulb, lamp post, bus stop, mailbox;
+      - Nature: dead tree, rock, giant mushroom;
+      - Strange: old TV showing live static, lone doorway, swing.
+    - **Add character here ▸** (from the library), **Move … here** for the selection, and **Fly here**.
+    - Submenus open on hover or click and wait a moment before switching, so cutting diagonally across the menu doesn't close them.
+  - Props face the camera when placed and behave like characters: click to select, drag once selected to move, Q / E turn, Delete removes, plus turn and scale sliders. They're built independently of the scenario generator, so the village stays exact.
+  - **Seating:**
+    - A seatable prop's **Seat a character ▸** enters pick mode: click a character in the scene or in the list (Esc cancels).
+    - Seatable props: rocking chair, chair, bench (3 seats), bus stop (3) and swing.
+    - The character takes a generated sitting pose (thighs forward, shins down, forearms on the lap, a slight slump, still breathing). It hangs from the seat, so it rocks or swings with it.
+    - **Stand up**, dragging the character away, or removing the prop puts it back on its feet in front of the seat.
+    - A sitter can still be selected by clicking it, pose-edited with the handles (head, hands, chest…), and turned on its seat (Q / E, *turn on seat*, *Face the camera*); its hips stay on the seat.
+  - **Motion:** the rocking chair rocks slowly and softly (about 4.6 s per rock, ±4°); the swing barely moves, as if someone just got off; the booth door creaks.
+  - **Saving:** props are saved with the scene (`rec.props`) and exported in the GLB, without their sitters, who export on their own (validator: 0 errors).
+- **Voice lines** (`src/editor/voice.js`):
+  - A selected character's **voice** menu lists the audio files in `assets/` plus anything added with **Import audio…** (kept in this browser). **▶ Speak** plays the line.
+  - **▶ Play scene** starts everyone whose line is marked *in Play scene*; *loop* repeats a line.
+  - **3D audio:** the voice comes from the head through an HRTF panner that faces where the head faces. It gets quieter with distance (amplitude ∝ d^−1.15, silent past about 42 m) and loses its highs far away.
+  - **Lip sync** is precomputed once per file, locked to the audio clock: loudness and zero-crossing rate every 10 ms, loudness normalised to the file's own speech. Loud sound opens the jaw; hissy sound (s, f, sh) widens the mouth with the jaw half-closed; soft voiced sound rounds it a little. The mouth opens fast and closes slower. It drives the `jawOpen`, `mouthWide` and `mouthPucker` morphs over the clip or pose.
+  - Measured: `remember2.wav` opens with 1.2 s of near-silence (−61 dB) and the first phrase starts at 1.3 s; the jaw starts opening at 1.3 s, peaks at 0.73 and closes as the phrase drops off.
+  - **Export file** embeds the audio (assets included), so a scene file speaks anywhere. The GLB carries the voice choice as metadata only, because glTF has no standard audio.
+- **Captions** (`src/editor/captions.js`), from a pasted script (no speech recognition):
+  - The line is split at its pauses: ≥ 0.35 s below 8% of the file's speech loudness, and stretches over 8 s are cut again at their quietest moment. `remember2.wav` becomes 12 stretches, `stranger_on_phone.wav` 6.
+  - **The pauses are the frame:** the caption rows are the detected stretches, always all of them. The script's **lines** fill them; sentences are only used when the script is one paragraph. Nothing ever cuts a stretch in the middle.
+  - **As many lines as stretches:** line k is stretch k, exactly.
+  - **Otherwise:** lines are matched in order, scored by each stretch's syllable peaks (loudness peaks ≥ 110 ms apart; on the phone line 1/1, 5/3, 15/13, 3/4, 8/7 against the real syllables) against the line's syllables, plus its length at this speaker's rate. Only the moves the counts call for are allowed:
+    - more stretches than lines: a stretch is left empty (a laugh, an unscripted whisper) or a line runs over several;
+    - more lines than stretches: lines share a stretch and show together.
+    - Bracketed directions like "(laughs)" take a whole stretch.
+  - Measured: a full 12-line script for `remember2.wav` matches line for line. With one line left out, the unscripted stretch (8.3 s) is correctly left empty and the other 11 land exactly. The phone line is exact however it's pasted.
+  - **Fixing:** each row has **▶** (hear it), editable text, and **⤓ / ⤒** (shift that line and everything after it down / up one stretch). The status says when the script's line count differs from the stretches found.
+  - While lines play, the **nearest** speaker's phrase is the main subtitle at the bottom centre; other speakers' phrases float above their heads, smaller and fading with distance. Same serif italic as the title card. Scripts and timings travel inside scene files.
+- **Play / record:** **P** plays / stops the scene. **● Rec (vertical)** records a 1080×1920 clip. The scene renders natively in 9:16 (180×320 game pixels at the default resolution), the subtitles are drawn into the frames (on screen they're page elements), and the voices plus ambience are the audio. It saves an MP4 (H.264 + AAC), or a WebM where MP4 isn't supported.
+- **Ambience** (the panel right of the view, `src/editor/ambience.js`):
+  - Five calm, ominous CC0 field recordings from Freesound (`public/ambience/CREDITS.md`): night field with dogs far off, soft tonal wind, power lines humming, foghorn at sea, garbled radio static.
+  - Each has a checkbox and volume. Beds loop with a 2 s crossfade between overlapping copies, so the loop point is never heard.
+  - Saved with the scene; a scene that opens with ambience starts it on the first click (browsers need a gesture). Mixed under the voices, so recordings include it.
+- **Look at me:** only the face turns to the camera and the eyes look straight into it. The neck takes a third of the turn (up to ~26°) and the head the rest (up to ~57° more). Whatever angle is left goes to the eye-look morphs (0.40 rad sideways, 0.32 rad up / down), so the eyes meet the lens even past the head's reach. It eases in and out over 0.35 s, works on top of any clip or pose (sitting too), leaves blinks alone, and is saved with the character. Measured: head exactly on the camera (0.0°) when in range; with the camera 90° to the side, the head stops at its limit and the eyes turn fully toward the lens.
+- **Posing** (`src/editor/pose.js`): a selected character can hold a still pose instead of an animation.
+  - **From photo… / From webcam…** runs MediaPipe (the heavy pose model, `public/models/pose_landmarker_heavy.task`, plus hands) on the picture. It retargets onto the character's skeleton: torso lean and twist, head, arms, hand angles, legs, feet and finger curls.
+    - Limbs the photo can't see keep standing, and the hips drop or rise so the feet stay on the ground.
+    - The photo's overall turn is left out, so the character keeps its facing in the scene.
+    - *mirror photo* swaps sides. The webcam window has **Snap** and **Snap in 3 s** (time to strike the pose yourself) and is mirrored by default.
+    - The character eases into the new pose over 0.35 s. Every captured pose lands in the **Poses** library with its photo; click one to pose the selected character like it.
+  - **Edit pose (handles)** shows draggable handles, with IK doing the rest:
+    - blue hands and green feet use two-bone IK, and elbows and knees keep their bend;
+    - the yellow head aims where it looks, with the neck taking a third;
+    - the orange chest bends, spread over three spine bones;
+    - the pink hips crouch or lean while the feet stay planted; they're clamped to the legs' reach and kept above the lower foot, so the body can't be pulled off its feet or into the ground.
+    - Editing an animated character starts from its current frame. **Save to poses** adds the edited pose to the library; **Back to animation** drops it.
+  - **Breathing** (on by default) adds a slow, per-character breath on top of a still pose. It isn't stored in the pose.
+  - A pose is per-bone local rotations plus the hips position: the same shape a keyframe will need, so poses can later become animation keys. Poses travel with the scene (saved scenes, scene files, the GLB export in pose).
+  - Measured:
+    - the retargeting math is exact on synthetic landmarks (0° on every limb; head within 5°);
+    - a dragged hand follows the mouse up to arm's reach;
+    - a 0.45 m hips crouch leaves the planted feet where they were;
+    - every rotation is kept unit-length, so after any sequence of drags the bones carry no scale (measured: 0.0000). Before this fix, drift compounded into stretched, giant limbs.
+    - Accuracy on real photos is MediaPipe's: good for clear full-body shots, poor for tiny or occluded figures, which report "no person found".
+- **Scenes:**
+  - The current scene autosaves as a working copy. It can be named (the name is the title card), saved (**Save scene** updates the saved one, **Save as new** forks it), and **loaded** from the list of saved scenes.
+  - **New scene** starts empty. Storage is this browser's IndexedDB.
+- **Export:**
+  - **Export GLB** writes the whole scene as one file: baked terrain plus characters in their current pose with their original materials, and `extras.scene` with the terrain inputs and actors. Validator: 0 errors; skinned-mesh-under-parent warnings only.
+  - **Export file** writes a `.scene.json` with the characters' GLBs inside. **Import** restores it anywhere, library included.
 
 ## Names (`/names.html`)
 
@@ -117,7 +228,7 @@ A third tab generates names in a genteel, mouthful, old-English style with a lit
   - *Nether Plumbage*, *Cobblebridge-upon-Gravy*;
   - *Nanny Radhurst's Sands*, *St Enid's Sands*.
 - **Sliders**: whimsy (plausible British → full nonsense), French, titles, how many, seed. Click a name to copy it; ☆ keeps it in this browser's list; *Copy all* and *Copy kept* copy the lists.
-- **Scenarios use it**: every seed has a coastal place name. It's shown in the panel and fades in over the picture as an old-RPG area card, drawn into the frame so full screen and recordings show it; click the name to show it again. It's saved in the export (`extras.scenario.name`) and the file names (`spindleham-flats-42.glb`).
+- **Scenarios use it**: every seed has a coastal place name. It's shown in the panel and fades in over the picture as an old-RPG area card, drawn into the frame so full screen shows it; click the name to show it again. It's saved in the export (`extras.scenario.name`) and the file names (`spindleham-flats-42.glb`).
 
 ## Performance
 

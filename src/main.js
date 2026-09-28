@@ -9,6 +9,8 @@ import { simplifierReady } from './sdf.js';
 import { exportGLB } from './export.js';
 import { perf } from './perf.js';
 import { zipSync, strToU8 } from 'fflate';
+import { sendCharacter } from './store.js';
+import { personName } from './names/gen.js';
 
 THREE.ColorManagement.enabled = false;
 
@@ -326,16 +328,12 @@ $('#randomize').onclick = () => {
     renderFaces();
   }
   params = randomize(params);
+  if (!$('#randPose').checked) params.pose = defaults().pose; // pose switch off: characters stand in the default pose
   syncControls();
   rebuild();
 };
-// a different pose for the same character (poses never re-sculpt, so this is instant)
-$('#randPose').onclick = () => {
-  const others = Object.keys(POSES).filter((k) => k !== params.pose);
-  params = { ...params, pose: others[Math.floor(Math.random() * others.length)] };
-  syncControls();
-  rebuild();
-};
+// turning the pose switch off puts the current character in the default pose right away
+$('#randPose').onchange = () => { if ($('#randPose').checked) return; params = { ...params, pose: defaults().pose }; syncControls(); rebuild(); };
 $('#reset').onclick = () => { params = defaults(); syncControls(); rebuild(); };
 $('#export').onclick = () => {
   const a = document.createElement('a');
@@ -366,6 +364,20 @@ $('#exportGlb').onclick = async () => {
   if (rig.headCanvas) files['textures/head.png'] = await pngBytes(rig.headCanvas);
   download(new Blob([zipSync(files, { level: 6 })], { type: 'application/zip' }), `${name}.zip`);
   status(`exported ${name}.zip (${report.warnings.length} warnings)`);
+};
+
+// Send to scene: the same validated export (unlit materials: the editor re-applies the PS2 shader), named by the
+// name generator, with a thumbnail; each press adds one more of this character to the editor's current scene
+$('#sendScene').onclick = async () => {
+  await lastRebuild;
+  const name = personName(((params.seed >>> 0) + current * 7919) % 1e6 + 1);
+  const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas], [rig.headTexture, rig.headCanvas]]);
+  const { glb, report } = await exportGLB(sk, canvases, { name, materials: 'unlit' });
+  if (!report.ok) { status(`can't send: ${report.errors.map((e) => e.code).join(', ')}`); return; }
+  const th = document.createElement('canvas'); th.width = 160; th.height = 120;
+  th.getContext('2d').drawImage(canvas, 0, 0, th.width, th.height);
+  const { count } = await sendCharacter({ name, glb, thumb: th.toDataURL('image/jpeg', 0.8), params: structuredClone(params) });
+  $('#status').innerHTML = `sent “${name}” to the scene (${count} there now) · <a href="/editor.html">open the editor ▸</a>`;
 };
 
 function download(blob, file) {
