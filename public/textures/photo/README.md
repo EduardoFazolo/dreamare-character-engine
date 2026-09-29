@@ -1,0 +1,20 @@
+# Photo textures (CC0)
+
+From [ambientCG](https://ambientcg.com) (CC0 1.0, public domain): colour maps, downscaled to PS2 size (128 / 256 px). Used by the Photo look switch.
+
+- `facade.jpg`: [Bricks097](https://ambientcg.com/view?id=Bricks097)
+- `pale.jpg`: [Plaster007](https://ambientcg.com/view?id=Plaster007)
+- `cobble.jpg`: [PavingStones119](https://ambientcg.com/view?id=PavingStones119)
+- `slab.jpg`: [PavingStones046](https://ambientcg.com/view?id=PavingStones046)
+- `wood.jpg`: [Planks037A](https://ambientcg.com/view?id=Planks037A)
+- `paint.jpg`: [PaintedWood005](https://ambientcg.com/view?id=PaintedWood005)
+- `wall.jpg`: [WoodSiding008](https://ambientcg.com/view?id=WoodSiding008)
+- `roof.jpg`: [RoofingTiles013A](https://ambientcg.com/view?id=RoofingTiles013A)
+- `bark.jpg`: [Bark001](https://ambientcg.com/view?id=Bark001)
+- `rock.jpg`: [Rock051](https://ambientcg.com/view?id=Rock051)
+- `stone.jpg`: [Bricks075A](https://ambientcg.com/view?id=Bricks075A)
+- `grass.jpg`: [Ground037](https://ambientcg.com/view?id=Ground037)
+- `metal.jpg`: [Metal041B](https://ambientcg.com/view?id=Metal041B)
+- `leather.jpg`: [Leather026](https://ambientcg.com/view?id=Leather026)
+- `mud.jpg`: [Ground054](https://ambientcg.com/view?id=Ground054)
+- `kerb.jpg`: [Concrete034](https://ambientcg.com/view?id=Concrete034)

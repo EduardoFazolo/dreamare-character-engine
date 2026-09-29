@@ -1,0 +1,20 @@
+# Source-look textures (CC0)
+
+From [ambientCG](https://ambientcg.com) (CC0 1.0, public domain): colour + OpenGL normal maps at 512 px, for the Source look (lit, filtered, bump-mapped).
+
+- `facade.jpg` + `facade_n.jpg` (normal): [Bricks097](https://ambientcg.com/view?id=Bricks097)
+- `pale.jpg` + `pale_n.jpg` (normal): [Plaster007](https://ambientcg.com/view?id=Plaster007)
+- `cobble.jpg` + `cobble_n.jpg` (normal): [PavingStones119](https://ambientcg.com/view?id=PavingStones119)
+- `slab.jpg` + `slab_n.jpg` (normal): [PavingStones046](https://ambientcg.com/view?id=PavingStones046)
+- `wood.jpg` + `wood_n.jpg` (normal): [Planks037A](https://ambientcg.com/view?id=Planks037A)
+- `paint.jpg` + `paint_n.jpg` (normal): [PaintedWood005](https://ambientcg.com/view?id=PaintedWood005)
+- `wall.jpg` + `wall_n.jpg` (normal): [WoodSiding008](https://ambientcg.com/view?id=WoodSiding008)
+- `roof.jpg` + `roof_n.jpg` (normal): [RoofingTiles013A](https://ambientcg.com/view?id=RoofingTiles013A)
+- `bark.jpg` + `bark_n.jpg` (normal): [Bark001](https://ambientcg.com/view?id=Bark001)
+- `rock.jpg` + `rock_n.jpg` (normal): [Rock051](https://ambientcg.com/view?id=Rock051)
+- `stone.jpg` + `stone_n.jpg` (normal): [Bricks075A](https://ambientcg.com/view?id=Bricks075A)
+- `grass.jpg` + `grass_n.jpg` (normal): [Ground037](https://ambientcg.com/view?id=Ground037)
+- `metal.jpg` + `metal_n.jpg` (normal): [Metal041B](https://ambientcg.com/view?id=Metal041B)
+- `leather.jpg` + `leather_n.jpg` (normal): [Leather026](https://ambientcg.com/view?id=Leather026)
+- `mud.jpg` + `mud_n.jpg` (normal): [Ground054](https://ambientcg.com/view?id=Ground054)
+- `kerb.jpg` + `kerb_n.jpg` (normal): [Concrete034](https://ambientcg.com/view?id=Concrete034)

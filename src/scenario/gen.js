@@ -152,6 +152,7 @@ export function generate(p) {
     }),
     sign: canvasTex(32, 32, (g, w, h) => { g.fillStyle = '#c8c4b8'; g.beginPath(); g.arc(16, 16, 15, 0, 7); g.fill(); g.fillStyle = '#6a3a34'; g.beginPath(); g.arc(16, 16, 12, 0, 7); g.fill(); g.fillStyle = '#d8d4c8'; g.font = 'bold 9px monospace'; g.textAlign = 'center'; g.fillText('BUS', 16, 19); }),
   };
+  for (const [k, t] of Object.entries(T)) t.name = k; // (its kind: the photo look swaps by it; no random draws)
 
   // ---- sky: overcast dome that meets the fog exactly at the horizon (nothing has an edge) ----
   {
@@ -448,7 +449,7 @@ export function generate(p) {
       g.fillStyle = 'rgba(60,58,54,.55)';
       for (let y = 0; y < h; y += 16) { g.fillRect(0, y, w, 1); for (let x = ((y / 16) % 2) * 16; x < w; x += 32) g.fillRect(x, y, 1, 16); } // blocks
       for (let i = 0; i < 18; i++) { g.fillStyle = `rgba(${70 + cr() * 30 | 0},${90 + cr() * 30 | 0},60,.3)`; g.fillRect(cr() * w | 0, cr() * h | 0, 3 + cr() * 8 | 0, 1 + cr() * 3 | 0); } // moss, stains
-    });
+    }); stoneTex.name = 'stone';
     const stone = oldMaterial({ map: stoneTex }), parts = [];
     const box = (len, hgt, wid, cx, cy, cz, yaw) => { const g = tileUV(boxG(wid, hgt, len, 0, 0, 0), Math.max(1, wid / 2), Math.max(1, len / 2)); g.rotateY(yaw); g.translate(cx, cy, cz); parts.push(g); };
     for (const d of causeways) {
@@ -515,8 +516,8 @@ export function generate(p) {
         g.fillStyle = 'rgba(255,240,220,.22)'; g.fillRect(x + 2, y + 2, 3, 1); // worn, catching the light
         if (sr() < 0.12) { g.fillStyle = 'rgba(70,90,50,.45)'; g.fillRect(x + 1, y + 6, 6, 2); } // moss in the joints
       }
-    });
-    const kerbTex = canvasTex(16, 16, (g, w, h) => blotch(g, w, h, [150, 146, 138], 50, 30, sr, 3));
+    }); cobble.name = 'cobble';
+    const kerbTex = canvasTex(16, 16, (g, w, h) => blotch(g, w, h, [150, 146, 138], 50, 30, sr, 3)); kerbTex.name = 'kerb';
     const roadMat = oldMaterial({ map: cobble }), kerbMat = oldMaterial({ map: kerbTex });
     const RW = 2.4, COLS = 4, pos = [], uv = [], idx = [], kerbs = [];
     for (const pts of extra.paths) {

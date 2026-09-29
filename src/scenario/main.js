@@ -14,6 +14,7 @@ import { biomeControls } from './biomeui.js';
 import { createWorld, dropRegion, continueFrom, removeRegion, rerollBiome, regionById, cellOwner, neighborsOf, seaAngleOf, serialize, deserialize, DIRS } from './world.js';
 import { drawMap, cellAt } from './mapview.js';
 import { rng } from './util.js';
+import { loadPhotos, applyLook, syncLook, sourceRig } from './photolook.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -49,8 +50,11 @@ function rebuild() {
   if (seed !== params.seed) { yaw = world.homeYaw; pitch = 0.02; walk = 0; me.x = me.z = 0; me.y = world.floor(0, 0); } // new place: start at the rise, facing up the path
   scene.add(world.group);
   updateWire();
-  if (params.res !== lastRes) { setRes(params.res); lastRes = params.res; }
-  stage.vhs = params.vhs; stage.sat = params.sat;
+  // the look (photolook.js): drawn (none), 'photo' or 'source' (sharper, lit, the tape wear nearly off)
+  const src = params.look === 'source', res = src ? Math.max(params.res, 640) : params.res;
+  if (params.look) applyLook(world.group, params.look);
+  if (res !== lastRes) { setRes(res); lastRes = res; }
+  stage.vhs = src ? Math.min(params.vhs, 0.15) : params.vhs; stage.sat = src ? Math.max(params.sat, 0.85) : params.sat;
   PS2.affine.value = params.affine;
   window.__app.world = world;
 }
@@ -139,6 +143,9 @@ function placeCamera(t, dt) {
   if (o) { camera.position.set(...o.pos); camera.lookAt(...o.at); }
 }
 
+const rig = sourceRig(scene, renderer);
+loadPhotos().then(() => { if (params.look) rebuild(); }); // (the photos: ~6 MB of CC0 textures, only used by the photo / source looks)
+$('#look').onchange = (e) => { params.look = e.target.value || undefined; rebuild(); };
 let last = performance.now();
 function frame(now) {
   if (view === 'map') { last = now; requestAnimationFrame(frame); return; } // the map is drawn on demand
@@ -146,6 +153,7 @@ function frame(now) {
   if (mode === 'view' && $('#drift').checked && !drag) yaw += dt * 0.03;
   placeCamera(t, dt);
   world.update?.(t, camera.position);
+  rig.update(camera, params.look === 'source'); if (params.look === 'source') syncLook(world.group);
   stage.render(t);
   phone?.update(camera, world.group.getObjectByName('receiver'), world.group.getObjectByName('phonebooth'));
   requestAnimationFrame(frame);
@@ -172,8 +180,8 @@ $('#placeName').onclick = () => drawCard(world.name); // show the card again
 // ---------------- set scene: this place becomes the terrain of the editor's current scene ----------------
 $('#setScene').onclick = async () => {
   const reg = link != null ? regionById(atlas, link) : null;
-  const { seed, biome, neighbors, seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine } = params;
-  await setSceneTerrain({ kind: params.kind || 'emptymemories', seed, biome: structuredClone(biome), neighbors: structuredClone(neighbors), seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine, name: world.name, region: reg ? { id: reg.id, world: atlas.seed } : null });
+  const { seed, biome, neighbors, seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine, look } = params;
+  await setSceneTerrain({ kind: params.kind || 'emptymemories', seed, biome: structuredClone(biome), neighbors: structuredClone(neighbors), seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine, ...(look ? { look } : {}), name: world.name, region: reg ? { id: reg.id, world: atlas.seed } : null });
   $('#status').innerHTML = `“${world.name}” is now the current scene’s terrain · <a href="/editor.html">open the editor ▸</a>`;
 };
 
@@ -205,7 +213,7 @@ function syncControls() { for (const [k, { input, out }] of Object.entries(input
 
 $('#randomize').onclick = () => { params = randomize(); writeBack(); syncControls(); rebuild(); };
 $('#randBiome').onclick = () => { Object.assign(params.biome, randomBiome(rng(Math.random() * 1e9))); writeBack(); sceneBiome.sync(); rebuild(); };
-$('#reset').onclick = () => { unlink(); params = defaults(); walk = 0; syncControls(); sceneBiome.sync(); rebuild(); };
+$('#reset').onclick = () => { unlink(); params = defaults(); $('#look').value = ''; walk = 0; syncControls(); sceneBiome.sync(); rebuild(); };
 function writeBack() { const reg = link != null ? regionById(atlas, link) : null; if (!reg) return; reg.seed = params.seed; for (const k in reg.mood) reg.mood[k] = params[k]; saveAtlas(); }
 $('#wire').onchange = updateWire;
 $('#walkMode').onclick = () => setMode(mode === 'walk' ? 'view' : 'walk');

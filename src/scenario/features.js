@@ -92,7 +92,8 @@ export function addFeatures({ p, B, NB, weights, height, pathDist, path, near, p
     gill: canvasTex(32, 32, (g, w, h) => { blotch(g, w, h, [196, 180, 160], 20, 20, tr, 2); g.strokeStyle = 'rgba(90,70,60,.4)'; for (let a = 0; a < 40; a++) { g.beginPath(); g.moveTo(16, 16); g.lineTo(16 + Math.cos(a) * 16, 16 + Math.sin(a) * 16); g.stroke(); } }),
     rock: canvasTex(32, 32, (g, w, h) => blotch(g, w, h, [150, 148, 140], 60, 40, tr, 4)),
     crop: canvasTex(16, 16, (g, w, h) => { for (let i = 0; i < 7; i++) { const x = 1 + (tr() * 14 | 0), hh = 6 + (tr() * 9 | 0); g.fillStyle = css(mixC([96, 116, 64], [196, 176, 104], B.fields > 0.5 ? tr() * 0.6 + 0.4 : tr() * 0.5)); g.fillRect(x, h - hh, 1, hh); } }),
-  };
+  };  for (const [k, t] of Object.entries(T)) t.name = k; // (its kind, for the photo look)
+
 
   // blob shadows of added things: a coarse grid, so the terrain pass stays fast with hundreds of trees
   const CELL = 8, grid = new Map(), key = (i, j) => i * 4096 + j;

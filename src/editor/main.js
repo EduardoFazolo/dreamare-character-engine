@@ -12,6 +12,7 @@ import { VILLAGE } from '../scenario/biomes.js';
 import { menubar } from '../menubar.js';
 import { makeRig, detect, retarget, applyPose, snapshot, lerpPose, breathe, HANDLES, handlePos, dragHandle, dragStart, toRoot, toWorld, sitPose, hipsAt, compilePose, PRESETS } from './pose.js';
 import { PROPS, CATEGORIES, buildProp } from '../scenario/props.js';
+import { loadPhotos, applyLook, syncLook, sourceRig } from '../scenario/photolook.js';
 import { assetList, importedList, importFile, loadVoice, playVoice, setListener, audioCtx, rawBytes, voiceStream } from './voice.js';
 import { align, segments as speechSegments, loadCaptions, saveCaptions, cueAt } from './captions.js';
 import { AMBIENCES, startBed, stopBed, setVolume as bedVolume, playing as bedPlaying, stopAll as stopBeds } from './ambience.js';
@@ -131,9 +132,21 @@ function buildTerrain(force) {
   world = generatePlace(p);
   world.name = p.name;
   scene.add(world.group);
-  if (PLAYER) stage.setRes(p.res, true, P.outW); else stage.setRes(p.res); stage.vhs = p.vhs; stage.sat = p.sat;
+  applyFrame(p);
+  if (look()) applyLook(world.group, look());
   return true;
 }
+// looks (terrain.look): drawn (none), 'photo' (PS2 horror: photographed surfaces) or 'source' (Source-engine
+// realism: lit photo materials, shadows, a sharper frame); a switch under Mood (photolook.js). The photos load
+// once, before the first scene (the end of this file).
+const look = () => rec?.terrain?.look || undefined;
+const rig = sourceRig(scene, stage.renderer);
+function applyFrame(p = terrainParams()) { // (the Source look renders sharper, with the tape wear nearly off)
+  const src = look() === 'source', res = src ? Math.max(p.res, 640) : p.res;
+  if (PLAYER) stage.setRes(res, true, P.outW); else stage.setRes(res); stage.vhs = src ? Math.min(p.vhs, 0.15) : p.vhs; stage.sat = src ? Math.max(p.sat, 0.85) : p.sat;
+}
+function refreshLook() { applyLook(world?.group, look()); for (const pr of props.values()) applyLook(pr.built.group, look()); for (const o of actors.values()) applyLook(o.root, look()); applyFrame(); }
+const collectLights = () => [...props.values()].flatMap((pr) => pr.built.lights || []); // (the lamps' real light, in the Source look)
 
 // ---------------- characters ----------------
 const loader = new GLTFLoader();
@@ -161,6 +174,7 @@ async function spawnActor(a) {
   if (!c) return null;
   const root = SkeletonUtils.clone(c.gltf.scene);
   ps2ify(root);
+  if (look()) applyLook(root, look());
   const mixer = new THREE.AnimationMixer(root), clips = c.gltf.animations;
   const o = { root, mixer, clips, data: a, action: null, rig: makeRig(root), tween: null };
   root.userData.actorId = a.id;
@@ -346,9 +360,11 @@ function syncProps() {
   for (const d of list) {
     let pr = props.get(d.id); const key = `${d.kind}|${d.engraving || ''}|${d.engravingTurn || 0}`; // (what the build reads: a change rebuilds it)
     if (pr && pr.key !== key) { scene.remove(pr.built.group); props.delete(d.id); pr = null; }
-    if (!pr) { const built = buildProp(d.kind, d.id, d); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built, key }; props.set(d.id, pr); scene.add(built.group); }
+    let fresh = false;
+    if (!pr) { const built = buildProp(d.kind, d.id, d); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built, key }; props.set(d.id, pr); scene.add(built.group); fresh = true; }
     if (d.open != null && pr.built.open != null) pr.built.open = d.open; // (a door: "open": 0 keeps it shut)
     pr.data = d; resolvePlace(d); resolveFace(d); placeProp(pr);
+    if (fresh && look()) applyLook(pr.built.group, look()); // (after placing: its world scale sets the photo's size)
   }
   if (selectedProp && !props.has(selectedProp)) selectedProp = null;
 }
@@ -1318,7 +1334,10 @@ async function renderLibrary() {
 const MOOD = [['time', 'time of day', 0, 1], ['haze', 'fog', 0, 1], ['wrongness', 'wrongness', 0, 1], ['skyHue', 'sky hue', -60, 60]];
 function renderMood() {
   const box = $('#moodBox'), p = terrainParams();
-  box.replaceChildren(...MOOD.map(([k, label, mn, mx]) => {
+  const lk = document.createElement('div'); lk.className = 'row';
+  lk.innerHTML = `<span>Look</span><select title="drawn: the PS2 drawn textures · photo: photographed surfaces, PS2 horror · source: lit photo materials with shadows, like Garry's Mod (per scene)">${[['', 'drawn'], ['photo', 'photo (PS2 horror)'], ['source', "source (Garry's Mod)"]].map(([v, l]) => `<option value="${v}" ${(look() || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  lk.querySelector('select').onchange = (e) => { rec.terrain ||= { ...TERRAIN_DEFAULTS, biome: structuredClone(VILLAGE) }; if (e.target.value) rec.terrain.look = e.target.value; else delete rec.terrain.look; refreshLook(); autosave(); };
+  box.replaceChildren(lk, ...MOOD.map(([k, label, mn, mx]) => {
     const row = document.createElement('div'); row.className = 'row';
     row.innerHTML = `<span>${label}</span><input type="range" min="${mn}" max="${mx}" step="${(mx - mn) / 200}" value="${p[k]}"><output>${(+p[k]).toFixed(2)}</output>`;
     const input = row.querySelector('input'), out = row.querySelector('output');
@@ -1458,6 +1477,7 @@ function frame(now) {
   ring.visible = ringWanted && !performing;
   if (performing) handles.visible = false;
   world.update?.(t, camera.position);
+  rig.setLights(collectLights()); rig.update(camera, look() === 'source'); if (look() === 'source') syncLook(scene);
   stage.render(t);
   if (recorder) drawRecFrame();
   requestAnimationFrame(frame);
@@ -1574,6 +1594,7 @@ function playerStep(t, dt) {
   followers();
   for (const o of actors.values()) updateLook(o, 1); // (a whole step: a frozen frame is fully settled)
   world.update?.(t, camera.position);
+  rig.setLights(collectLights()); rig.update(camera, look() === 'source'); if (look() === 'source') syncLook(scene);
   stage.render(t, { card: false });
   P.lastT = t;
   P.onFrame?.(t);
@@ -1626,6 +1647,7 @@ window.__player = {
 };
 P.reload = async () => { const id = P.id; P.id = null; if (id) await window.__player.show(id, P.shot?.name, { frozen: P.frozen, outW: P.outW }); };
 
+await loadPhotos(); // (small: ~150 KB of CC0 photos, so the photo look is there on the first frame)
 if (!PLAYER) await load(true);
 else window.parent?.postMessage({ type: 'player-ready' }, location.origin);
 requestAnimationFrame(frame);

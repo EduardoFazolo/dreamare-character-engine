@@ -58,6 +58,15 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
 
 `kind` is one of `rockingChair`, `chair`, `bench`, `table`, `phoneBooth`, `lamp`, `lantern`, `lanternPost`, `lanternTree`, `busStop`, `mailbox`, `deadTree`, `rock`, `mushroom`, `tv`, `doorway`, `swing`. Seats: rocking chair 1, chair 1, bench 3, bus stop 3, swing 1.
 
+## Look
+
+`terrain.look` dresses the same scene three ways. The toggle is *Look* under Mood in the editor:
+- **Drawn** (no `look`): the drawn textures under the PS2 shader. This is the default and is unchanged.
+- **`"photo"`**: PS2 horror. Real photographs of surfaces (brick, plaster, cobbles, planks, bark, rock, grass, rust, slate), shrunk to 128–256 px, unfiltered, same shader.
+- **`"source"`**: Source-engine realism, like Garry's Mod or Half-Life 2. Every surface becomes a lit material, using 512 px photos with normal maps. The scene's sun or moon casts shadows, its ambient becomes sky fill, and fog is ordinary distance fog. The frame is sharper (at least 640 lines) with the tape wear nearly off. Characters are lit the same way.
+
+The photos are CC0 (ambientCG), in `public/textures/photo` and `public/textures/source` (sources in their READMEs). `src/scenario/photolook.js` swaps them in by texture kind and re-maps UVs so each photo tiles at its real size. Things without a photo of their own (mushroom caps, lanterns, cloth) keep their drawn texture.
+
 ## Kinds
 
 `terrain.kind` picks the generator that builds the land (`src/scenario/kinds.js`):

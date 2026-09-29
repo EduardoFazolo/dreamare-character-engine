@@ -77,7 +77,8 @@
     "sat": 0.6,
     "vhs": 0.6,
     "affine": 0.5,
-    "name": "The Morning After"
+    "name": "The Morning After",
+    "look": "source"
   },
   "ambience": {},
   "props": [

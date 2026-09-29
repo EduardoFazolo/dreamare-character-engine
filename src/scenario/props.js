@@ -29,12 +29,17 @@ function tex() {
     lining: canvasTex(16, 32, (g, w, h) => { blotch(g, w, h, [210, 200, 170], 50, 14, r, 3); g.fillStyle = 'rgba(80,60,30,.3)'; g.fillRect(0, 0, w, 6); }),
     light: canvasTex(4, 4, (g) => { g.fillStyle = '#fff0c0'; g.fillRect(0, 0, 4, 4); }),
     facade: canvasTex(32, 64, (g, w, h) => { blotch(g, w, h, [150, 142, 132], 34, 16, r, 3); for (let y = 0; y < h; y += 4) { g.fillStyle = 'rgba(30,26,24,.18)'; g.fillRect(0, y, w, 1); } for (let i = 0; i < 10; i++) { g.fillStyle = 'rgba(40,36,30,.25)'; g.fillRect(r() * w | 0, r() * h | 0, 1, 3 + (r() * 8 | 0)); } }), // (streaked plaster, courses)
+    // a sash window: a painted frame, a cross of glazing bars, four panes of dark glass with a faint sheen
+    window: canvasTex(32, 64, (g, w, h) => { g.fillStyle = '#6a6258'; g.fillRect(0, 0, w, h); for (const [x, y] of [[3, 3], [17, 3], [3, 33], [17, 33]]) { const gr = g.createLinearGradient(x, y, x + 12, y + 28); gr.addColorStop(0, '#2c3238'); gr.addColorStop(0.5, '#15181c'); gr.addColorStop(1, '#22272c'); g.fillStyle = gr; g.fillRect(x, y, 12, 28); } g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, h - 3, w, 3); }),
+    windowLit: canvasTex(32, 64, (g, w, h) => { g.fillStyle = '#3a3026'; g.fillRect(0, 0, w, h); for (const [x, y] of [[3, 3], [17, 3], [3, 33], [17, 33]]) { const gr = g.createRadialGradient(x + 6, y + 18, 2, x + 6, y + 14, 18); gr.addColorStop(0, '#fff2c8'); gr.addColorStop(1, '#d89a52'); g.fillStyle = gr; g.fillRect(x, y, 12, 28); } }),
     cobble: canvasTex(32, 32, (g, w, h) => { g.fillStyle = '#3a3836'; g.fillRect(0, 0, w, h); for (let y = 0; y < h; y += 4) for (let x = (y / 4) % 2 ? 2 : 0; x < w; x += 4) { const v = 70 + r() * 40; g.fillStyle = `rgb(${v},${v - 3},${v - 6})`; g.fillRect(x, y, 3, 3); } }),
+    roof: canvasTex(32, 32, (g, w, h) => { blotch(g, w, h, [62, 60, 64], 26, 18, r, 3); for (let y = 0; y < h; y += 4) { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, y, w, 1); } }),
     slab: canvasTex(32, 32, (g, w, h) => { blotch(g, w, h, [120, 116, 110], 24, 14, r, 3); g.fillStyle = 'rgba(20,18,16,.4)'; for (let k = 0; k < w; k += 16) { g.fillRect(k, 0, 1, h); g.fillRect(0, k, w, 1); } }),
     leather: canvasTex(16, 16, (g, w, h) => blotch(g, w, h, [92, 62, 44], 22, 12, r, 2)),
     mud: canvasTex(16, 16, (g, w, h) => { blotch(g, w, h, [128, 124, 122], 40, 30, r, 3); for (let i = 0; i < 12; i++) { g.fillStyle = 'rgba(60,58,62,.7)'; g.fillRect(r() * w | 0, r() * h | 0, 2, 1); } }),
     bus: canvasTex(32, 32, (g) => { g.fillStyle = '#c8c4b8'; g.beginPath(); g.arc(16, 16, 15, 0, 7); g.fill(); g.fillStyle = '#6a3a34'; g.beginPath(); g.arc(16, 16, 12, 0, 7); g.fill(); g.fillStyle = '#d8d4c8'; g.font = 'bold 9px monospace'; g.textAlign = 'center'; g.fillText('BUS', 16, 19); }),
   };
+  for (const [k, t] of Object.entries(T)) t.name = k; // (its kind: the photo look swaps by it)
   return T;
 }
 const lit = (k, color) => oldMaterial({ map: tex()[k], color });
@@ -297,16 +302,19 @@ export const PROPS = {
       // (setLight(k): the lamp and the room it lights, 1 on .. 0 dark; the slides fade it out)
       const wall = lit('pale', [0.8, 0.76, 0.68]), inside = lit('pale', [0.8, 0.76, 0.68]), W = 3, H = 2.6, D = 3, wy = 0.75, ww = 1.2, wh = 1.1, t = 0.12, p = [], q = [];
       p.push(boxG((W - ww) / 2, H, t, -(W + ww) / 4, H / 2, 0), boxG((W - ww) / 2, H, t, (W + ww) / 4, H / 2, 0), boxG(ww, wy, t, 0, wy / 2, 0), boxG(ww, H - wy - wh, t, 0, wy + wh + (H - wy - wh) / 2, 0));
-      q.push(boxG(t, H, D, -W / 2, H / 2, -D / 2), boxG(t, H, D, W / 2, H / 2, -D / 2), boxG(W, H, t, 0, H / 2, -D), boxG(W, t, D, 0, H, -D / 2), boxG(W, 0.04, D, 0, 0.02, -D / 2));
+      q.push(boxG(t, H, D, -W / 2, H / 2, -D / 2), boxG(t, H, D, W / 2, H / 2, -D / 2), boxG(W, H, t, 0, H / 2, -D), boxG(W, t, D, 0, H, -D / 2)); const floor = [boxG(W, 0.04, D, 0, 0.02, -D / 2)]; // (the floor: bare boards, not the walls' plaster)
       const frame = [boxG(ww, 0.05, 0.06, 0, wy + wh / 2, 0.02), boxG(0.05, wh, 0.06, 0, wy + wh / 2, 0.02), boxG(ww + 0.1, 0.07, 0.2, 0, wy - 0.02, 0.06)];
       const lamp = glow('light', [1.25, 1.0, 0.7]);
-      const g = assemble([[wall, p], [inside, q], [lit('wood'), frame], [lamp, [boxG(0.18, 0.22, 0.18, 0.95, 0.95, -2.5), boxG(0.4, 0.5, 0.4, 0.95, 0.5, -2.5).scale(1, 1, 1)]]]);
+      const boards = lit('wood', [0.8, 0.72, 0.64]);
+      const g = assemble([[wall, p], [inside, q], [boards, floor], [lit('wood'), frame], [lamp, [boxG(0.18, 0.22, 0.18, 0.95, 0.95, -2.5), boxG(0.4, 0.5, 0.4, 0.95, 0.5, -2.5).scale(1, 1, 1)]]]);
       const bed = PROPS.bed.build().group; bed.position.set(0.1, 0.04, -1.9); bed.rotation.y = Math.PI / 2; g.add(bed);
-      const dim = [lamp, inside]; bed.traverse((o) => { if (o.material?.uniforms?.color && !dim.includes(o.material)) dim.push(o.material); });
+      const dim = [lamp, inside, boards]; bed.traverse((o) => { if (o.material?.uniforms?.color && !dim.includes(o.material)) dim.push(o.material); });
       const base = dim.map((m) => m.uniforms.color.value.clone());
       let was = 1;
+      const at = new THREE.Object3D(); at.position.set(0.95, 1.1, -2.3); g.add(at);
+      const lights = [{ at, color: [1, 0.8, 0.55], power: 3.5, distance: 6, level: () => was }];
       const setLight = (k) => { if (k === was) return; was = k; dim.forEach((m, i) => m.uniforms.color.value.copy(base[i]).multiplyScalar(m === lamp ? 0.04 + 0.96 * k : 0.1 + 0.9 * k)); };
-      return { group: g, seats: [], radius: 2, setLight };
+      return { group: g, seats: [], radius: 2, setLight, lights };
     },
   },
   rock: {
@@ -366,7 +374,7 @@ export const PROPS = {
       // "width": the road (7 m; a lane at 3); "pavement": false for none (a square); "edge": true ends the far
       // (-Z) side in a stone balustrade over nothing, the city simply stopping there
       const L = d.length || 60, RW = d.width || 7, PW = d.pavement === false ? 0 : 2.2, half = RW / 2 + PW, D = 7, gaps = d.gaps || [];
-      const road = [], pave = [], walls = [[], [], []], dark = [], warm = [], pale = [], roofs = [];
+      const road = [], pave = [], walls = [[], [], []], dark = [], warm = [], pale = [], roofs = [], doors = [];
       road.push(new THREE.PlaneGeometry(RW, L).rotateX(-Math.PI / 2).translate(0, 0.02, 0));
       if (PW) for (const sx of [-1, 1]) pave.push(boxG(PW, 0.14, L, sx * (RW / 2 + PW / 2), 0.07, 0), boxG(0.18, 0.2, L, sx * (RW / 2 + 0.09), 0.1, 0));
       if (d.edge) { // balusters under a heavy rail, a plinth under them
@@ -383,26 +391,26 @@ export const PROPS = {
           if (gap) { z = gap.at + (gap.w || 4) / 2 + 0.1; continue; }
           const w = 3 + rand() * 2.2, H = rand() < 0.15 ? 38 + rand() * 14 : 13 + rand() * 20, x = side * (half + D / 2), cz = z + w / 2;
           const lean = (rand() - 0.5) * 0.05, grp = [], tone = walls[(rand() * 3) | 0];
-          grp.push(uv(boxG(w - 0.08, H, D, 0, H / 2, 0), w / 4, H / 8));
+          grp.push(uv(boxG(D, H, w - 0.08, 0, H / 2, 0), w / 4, H / 8)); // (D deep toward the street's side, w along it: the facade is the x face the windows sit on)
           // a narrow pitched roof, or a flat parapet
-          if (rand() < 0.6) { const rg = new THREE.CylinderGeometry(0.01, (w / 2) * 1.35, 2.2 + rand() * 2.5, 4, 1); rg.rotateY(Math.PI / 4).scale(1, 1, D / w).translate(0, H + 1.1, 0); roofs.push(place(rg, x, 0, cz, 0, 0, side * lean)); }
-          else grp.push(boxG(w, 0.5, D + 0.2, 0, H + 0.25, 0));
+          if (rand() < 0.6) { const rg = new THREE.CylinderGeometry(0.01, (w / 2) * 1.35, 2.2 + rand() * 2.5, 4, 1); rg.rotateY(Math.PI / 4).scale(D / w, 1, 1).translate(0, H + 1.1, 0); roofs.push(place(rg, x, 0, cz, 0, 0, side * lean)); }
+          else grp.push(boxG(D + 0.2, 0.5, w, 0, H + 0.25, 0));
           for (const q of grp) tone.push(place(q, x, 0, cz, 0, 0, side * lean));
           // windows on the street face: a tall narrow grid, most dark, a few lit
           const cols = w > 4.2 ? 2 : 1, fx = -side * (D / 2 + 0.03);
           for (let y = 3.2; y < H - 1.5; y += 2.6 + rand() * 0.4) for (let c = 0; c < cols; c++) {
-            const wx = cols === 1 ? 0 : (c - 0.5) * w * 0.45, k = rand(), win = new THREE.PlaneGeometry(0.8, 1.5).rotateY(side * -Math.PI / 2).translate(fx, y, wx);
+            const wx = cols === 1 ? 0 : (c - 0.5) * w * 0.45, k = rand(), win = new THREE.BoxGeometry(0.9, 1.6, 0.14).rotateY(side * -Math.PI / 2).translate(fx + side * 0.08, y, wx); // (set into the wall, its face 2 cm proud: seen along a facade, nothing sticks out past its edge)
             (k < 0.1 ? warm : k < 0.14 ? pale : dark).push(place(win, x, 0, cz, 0, 0, side * lean));
           }
-          const door = new THREE.PlaneGeometry(1.1, 2.2).rotateY(side * -Math.PI / 2).translate(fx, 1.1, 0); dark.push(place(door, x, 0, cz));
+          const door = new THREE.BoxGeometry(1.1, 2.2, 0.14).rotateY(side * -Math.PI / 2).translate(fx + side * 0.08, 1.1, 0); doors.push(place(door, x, 0, cz));
           z += w;
         }
       }
       const tones = [[0.95, 0.92, 0.88], [0.78, 0.8, 0.84], [0.9, 0.84, 0.78]];
       const g = assemble([
-        [oldMaterial({ map: tex().cobble }), road], [lit('slab'), pave], [lit('dark'), [...dark, ...roofs]],
+        [oldMaterial({ map: tex().cobble }), road], [lit('slab'), pave], [lit('window'), dark], [lit('paint', [0.5, 0.45, 0.42]), doors], [lit('roof'), roofs],
         ...walls.map((q, i) => [lit('facade', tones[i]), q]),
-        [glow('light', [1.2, 0.95, 0.6]), warm], [glow('light', [0.7, 0.78, 0.85]), pale],
+        [glow('windowLit', [1.1, 1, 0.9]), warm], [glow('windowLit', [0.7, 0.8, 0.95]), pale],
       ]);
       return { group: g, seats: [], radius: half + D };
     },
@@ -416,7 +424,8 @@ export const PROPS = {
       const H = d.height || 6.5, lean = d.lean ?? 2.4, metal = lit('dark', [1.3, 1.3, 1.35]), lamp = glow('light', [1.4, 1.2, 0.85]), g = new THREE.Group();
       if (!lean) { // (the one that doesn't lean: a plain lamp post, head down, nothing wrong with it at all)
         g.add(assemble([[metal, [cylG(0.07, 0.11, H, 6).translate(0, H / 2, 0), cylG(0.16, 0.2, 0.3, 6).translate(0, 0.15, 0), cylG(0.3, 0.12, 0.35, 4).rotateY(Math.PI / 4).translate(0, H + 0.1, 0)]], [lamp, [boxG(0.3, 0.04, 0.3, 0, H - 0.08, 0)]]]));
-        return { group: g, seats: [], radius: 0.4 };
+        const at = new THREE.Object3D(); at.position.y = H - 0.3; g.add(at);
+        return { group: g, seats: [], radius: 0.4, lights: [{ at, color: [1, 0.82, 0.55], power: 70, distance: 18 }] }; // (lights: where a real light goes, in the lit looks)
       }
       const base = H * 0.45, neck = new THREE.Group(); neck.position.y = base; g.add(assemble([[metal, [cylG(0.07, 0.12, base, 6).translate(0, base / 2, 0), cylG(0.17, 0.21, 0.3, 6).translate(0, 0.15, 0)]]]), neck);
       const segs = 14, len = (H - base) / segs, parts = []; let p = V(0, 0, 0), a = 0;
@@ -427,8 +436,9 @@ export const PROPS = {
       // it watches: the neck keeps its bend where it was put, only turning a touch toward the camera, and the
       // lit shade points straight at it (a little unsteady, like something pretending to be a lamp)
       const ph = rand() * 6, v = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), wob = new THREE.Quaternion(), wobE = new THREE.Euler();
+      const at = new THREE.Object3D(); at.position.y = 0.6; head.add(at); // (just in front of its lit face)
       return {
-        group: g, seats: [], radius: 0.4,
+        group: g, seats: [], radius: 0.4, lights: [{ at, color: [1, 0.82, 0.55], power: 70, distance: 18 }],
         update: (t, cam) => {
           let yaw = 0;
           if (cam) { g.updateWorldMatrix(true, false); v.copy(cam.position); g.worldToLocal(v); { let dy = Math.atan2(v.x, v.z); dy = Math.atan2(Math.sin(dy), Math.cos(dy)); yaw = Math.max(-0.25, Math.min(0.25, dy * 0.15)) + Math.sin(t * 0.23 + ph) * 0.03; } }
@@ -491,7 +501,8 @@ export const PROPS = {
         const sign = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.4, (W - 0.4) * 40 / 256), oldMaterial({ map: t, glow: true, color: [0.9, 0.88, 0.84] })); sign.position.set(0, Hs + 0.35, 0.13); g.add(sign);
       }
       const ph = rand() * 6;
-      return { group: g, seats: [], radius: W / 2, update: (t) => { for (const h of hands) if (h.going) h.m.rotation.z = -((h.t0 + t * 0.02 * h.spin) % 12) / 12 * Math.PI * 2; lm.forEach((m, i) => m.uniforms.color.value.setRGB(...cols[i]).multiplyScalar(0.75 + 0.25 * Math.sin(t * (1.3 + i * 0.7) + ph + i * 2) + (hash2(Math.floor(t * 9), i, 5) < 0.05 ? -0.4 : 0))); } };
+      const at = new THREE.Object3D(); at.position.set(0, 1.8, -0.6); g.add(at);
+      return { group: g, seats: [], radius: W / 2, lights: [{ at, color: [1, 0.78, 0.5], power: 40, distance: 12 }], update: (t) => { for (const h of hands) if (h.going) h.m.rotation.z = -((h.t0 + t * 0.02 * h.spin) % 12) / 12 * Math.PI * 2; lm.forEach((m, i) => m.uniforms.color.value.setRGB(...cols[i]).multiplyScalar(0.75 + 0.25 * Math.sin(t * (1.3 + i * 0.7) + ph + i * 2) + (hash2(Math.floor(t * 9), i, 5) < 0.05 ? -0.4 : 0))); } };
     },
   },
   moon: {
