@@ -330,6 +330,40 @@ function presetPose(rig, name) {
   }
   rig.root.updateMatrixWorld(true);
 }
+// hand shapes: curl of each finger's three joints toward the palm (radians); point: the index stays straight
+const GRIPS = {
+  fist: { Index: [1.4, 1.5, 1.1], Middle: [1.4, 1.5, 1.1], Ring: [1.4, 1.5, 1.1], Pinky: [1.4, 1.5, 1.1], Thumb: [0.3, 0.7, 0.6] },
+  point: { Index: [0.05, 0.05, 0], Middle: [1.4, 1.5, 1.1], Ring: [1.5, 1.5, 1.1], Pinky: [1.5, 1.5, 1.1], Thumb: [0.4, 0.8, 0.6] },
+  claw: { Index: [-0.2, 1.1, 0.9], Middle: [-0.2, 1.1, 0.9], Ring: [-0.2, 1.1, 0.9], Pinky: [-0.2, 1.1, 0.9], Thumb: [0.2, 0.5, 0.5] },
+  pinch: { Index: [0.55, 0.95, 0.55], Middle: [1.25, 1.35, 0.9], Ring: [1.35, 1.4, 0.9], Pinky: [1.45, 1.4, 0.9], Thumb: [0.55, 0.75, 0.45] }, // (thumb and index meeting: the hold point is between their tips)
+  hook: { Index: [1.4, 1.35, 0.9], Middle: [1.42, 1.4, 0.9], Ring: [1.45, 1.4, 0.9], Pinky: [1.5, 1.4, 0.9], Thumb: [0.3, 0.55, 0.4] }, // (carrying: fingers wrapped round a handle with its room inside, looser than a fist)
+};
+export const GRIP_SIGN = { Left: -1 }; // (measured in the T-pose: the left fingers curl toward the palm about -z; the right hand mirrors it, see curlAxis)
+// a bone's rest rotation in Root space (the rest quaternions chained up to Root)
+function restRootQ(rig, bone) {
+  const q = new THREE.Quaternion();
+  for (let b = bone; b && b !== rig.skelRoot; b = b.parent) if (b.isBone) q.premultiply(rig.rest[b.name] || b.quaternion);
+  return q;
+}
+// The left hand curls about each finger's local z (measured, see GRIP_SIGN). The right hand's fingers curl about
+// the mirror image of that axis (reflected through the body's middle plane; an axis flips y and z), brought into
+// the right finger's own frame: the right hand is always the exact mirror of the left, whatever the bones' axes.
+function curlAxis(rig, side, name) {
+  const z = new THREE.Vector3(0, 0, 1);
+  if (side === 'Left') return z;
+  const L = rig.bones[name.replace('Right', 'Left')], R = rig.bones[name]; if (!L) return z;
+  const a = z.clone().applyQuaternion(restRootQ(rig, L)); a.set(a.x, -a.y, -a.z);
+  return a.applyQuaternion(restRootQ(rig, R).invert()).normalize();
+}
+function grip(rig, side, name) {
+  const g = GRIPS[name]; if (!g) return;
+  for (const [f, curl] of Object.entries(g)) curl.forEach((a, i) => {
+    const b = rig.bones[`${side}Hand${f}${i + 1}`]; if (!b) return;
+    b.quaternion.copy(rig.rest[b.name]).multiply(_q.setFromAxisAngle(curlAxis(rig, side, b.name), a * GRIP_SIGN.Left * CURL.k)).normalize();
+  });
+  rig.root.updateMatrixWorld(true);
+}
+export const CURL = { k: 1 };
 // compile a spec to a stored pose ({ bones, hips }); world targets need the character already placed in the scene
 export function compilePose(rig, spec) {
   presetPose(rig, spec.preset || 'stand');
@@ -337,12 +371,42 @@ export function compilePose(rig, spec) {
     const ctx = dragStart(rig), h0 = handlePos(rig, 'Hips');
     dragHandle(rig, 'Hips', h0.clone().add(new THREE.Vector3(0, -spec.hipsDown / (rig.root.scale.y || 1), 0)), { ...ctx, handle0: h0 });
   }
+  // bow: the back curls forward (radians, spread down the spine, most of it high in the back), knees giving a little
+  if (spec.bow) {
+    // from the hips up (the hips-to-waist segment is the longest: left straight, the arch was an L), the legs
+    // held where they were; then even down the spine: an inverted U, the head coming down in front
+    const b = spec.bow, share = { Spine: 0.2, Spine1: 0.2, Spine2: 0.15, Neck: 0.15 }, legs = ['LeftUpLeg', 'RightUpLeg'].map((n) => [n, rootQ(rig, rig.bones[n])]);
+    rig.bones.Hips.quaternion.multiply(_q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), b * 0.3)).normalize(); rig.root.updateMatrixWorld(true);
+    for (const [n, q] of legs) setRootQ(rig, n, q);
+    rig.root.updateMatrixWorld(true);
+    for (const [n, k] of Object.entries(share)) rig.bones[n]?.quaternion.multiply(_q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), b * k)).normalize();
+    rig.root.updateMatrixWorld(true);
+  }
   const ctx = { ...dragStart(rig) };
   for (const [key, bone] of [['leftHand', 'LeftHand'], ['rightHand', 'RightHand'], ['leftFoot', 'LeftFoot'], ['rightFoot', 'RightFoot']]) {
     if (!Array.isArray(spec[key])) continue;
+    // an elbow (knee) target: the upper limb aims at it first, so the IK bends that way (it keeps the current bend)
+    const pole = spec[key.replace('Hand', 'Elbow').replace('Foot', 'Knee')];
+    if (Array.isArray(pole)) { const up = HANDLES[bone][0]; aim(rig, up, toRoot(rig, new THREE.Vector3(...pole)).sub(rootPos(rig, rig.bones[up]))); rig.root.updateMatrixWorld(true); }
     dragHandle(rig, bone, toRoot(rig, new THREE.Vector3(...spec[key])), ctx);
   }
   if (Array.isArray(spec.look)) dragHandle(rig, 'Head', toRoot(rig, new THREE.Vector3(...spec.look)), ctx);
+  // a hand can aim at a point (the wrist bends: fingers toward it), then take its grip
+  for (const side of ['Left', 'Right']) { const t = spec[`${side.toLowerCase()}Aim`]; if (Array.isArray(t)) { const h = rig.bones[`${side}Hand`]; aim(rig, `${side}Hand`, toRoot(rig, new THREE.Vector3(...t)).sub(rootPos(rig, h))); rig.root.updateMatrixWorld(true); } }
+  for (const side of ['Left', 'Right']) if (spec[`${side.toLowerCase()}Grip`]) grip(rig, side, spec[`${side.toLowerCase()}Grip`]);
+  // palm down: roll the hand about its own axis until its curled fingers hook downward (measured, not guessed:
+  // the hand from above, fingers over a handle, like carrying a bag)
+  for (const side of ['Left', 'Right']) if (spec[`${side.toLowerCase()}PalmDown`]) {
+    const hand = rig.bones[`${side}Hand`], P = (n) => rootPos(rig, rig.bones[n]);
+    const axis = P(`${side}HandMiddle1`).sub(P(`${side}Hand`)).normalize();
+    const curl = P(`${side}HandMiddle3`).sub(P(`${side}HandMiddle1`)); curl.addScaledVector(axis, -curl.dot(axis));
+    const down = new THREE.Vector3(0, -1, 0); down.addScaledVector(axis, -down.dot(axis));
+    if (curl.lengthSq() < 1e-8 || down.lengthSq() < 1e-8) continue;
+    curl.normalize(); down.normalize();
+    const ang = Math.atan2(axis.dot(curl.clone().cross(down)), curl.dot(down));
+    setRootQ(rig, `${side}Hand`, new THREE.Quaternion().setFromAxisAngle(axis, ang).multiply(rootQ(rig, hand)));
+    rig.root.updateMatrixWorld(true);
+  }
   rig.root.updateMatrixWorld(true);
   return snapshot(rig);
 }

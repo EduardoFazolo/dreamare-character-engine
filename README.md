@@ -156,6 +156,10 @@ The Scenarios tab has two views: **World map** and **Scene**.
   - Archetypes: village, farmland, pine moor, dead wood, fungal, birch mere, heath, salt flats, willow fen.
 - **The village is exact**: `VILLAGE` rebuilds the original scene bit for bit. Every original feature keeps its place in the one random sequence, gated by a switch, and every added feature has its own random stream. This was verified by fingerprinting every mesh's vertices, colours, UVs, normals, transforms, material colours and texture pixels across 8 configurations, before and after.
 
+### Kinds and directives
+
+Scenes have a **kind** (the generator: `emptymemories` is the original) and **directives**, composition rules that organise the place around the scene's own things: `converge` (every road leads to it: laid stone, or trodden), `causeways` (stone stairways descending to it from every height and direction), `clearing`, `sightline`, `ring` (surround it with a prop). See `scenes/README.md`; the editor's right-click menu has an **Around …** submenu for them. Example: `scenes/mothwick-hollow.json`.
+
 ## The top bar
 
 Every tab shares a desktop-style bar (`src/menubar.js`): **DREAMARE** and the menus on the left, the five tabs on the right. Menus open on click, switch on hover while one is open, and close on Esc or a click outside.
@@ -272,6 +276,11 @@ Vertical slideshow decks for TikTok, from your own scenes and your own words (`s
   - Reorder, duplicate or delete slides; **+ Text slide** makes a dark slide with just text.
 - **Decks** are saved in this browser (name them, reopen them from the list).
 - **Export video:** a 1080×1920 MP4 (WebM where MP4 isn't supported) with each slide for its own duration and a soft 0.4 s cut between them. **Export as images** gives numbered PNGs in a zip.
+
+**Live scene slides:** under *Scenes* in the Pictures panel, pick a scene's shot and the selected slide becomes a reference to it (`{ live: { scene, shot, frozen, poster } }`). The scene keeps playing under your text: breathing, swaying lanterns, the VHS drift. **❄ Snap** stops time on the frame you see; that frame becomes the slide's picture, and nothing renders for it any more. **▶ Unsnap** makes it live again. Edits to the scene file show up live.
+- **The player** is the editor in player mode (`editor.html?player`). It is read-only (never writes a scene, the library or the open scene), with no panels and no audio, vertical, and the camera set straight from the shot.
+- **Optimisation:** there's one player for the whole page, running only while a live slide is selected. It renders at most 30 frames a second at a 540-wide preview, and stops entirely when snapped, paused or hidden. The strip and other slides use a poster still. Export plays each live slide in the player at 1080×1920, with the recorder paused while its scene loads, so there are no gaps.
+- Props are built from their id's seed, so a scene looks the same on every load (trees, lantern trees, rocks, swing phases).
 
 ## Items (`/items.html`)
 

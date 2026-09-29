@@ -15,7 +15,8 @@ let _white;
 const white = () => { if (!_white) { _white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); _white.needsUpdate = true; } return _white; };
 
 // glow: unlit (windows, lamps); still fogs, so lights sink into the haze like everything else
-export function oldMaterial({ map, color = [1, 1, 1], alphaTest = 0, side = THREE.FrontSide, vertexColors = false, glow = false } = {}) {
+// opacity < 1: screen-door see-through (a dither of dropped pixels, like the PS2 did: no sorting, no blending)
+export function oldMaterial({ map, color = [1, 1, 1], alphaTest = 0, side = THREE.FrontSide, vertexColors = false, glow = false, opacity = 1 } = {}) {
   const m = new THREE.ShaderMaterial({
     side, vertexColors,
     defines: glow ? { GLOW: 1 } : {},
@@ -23,7 +24,7 @@ export function oldMaterial({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
       ...PS2, ...SCENE,
       map: { value: map || white() },
       color: { value: new THREE.Color(...color) },
-      alphaTest: { value: alphaTest },
+      alphaTest: { value: alphaTest }, opacity: { value: opacity },
     },
     vertexShader: /* glsl */`
       uniform vec2 snapRes; uniform float fogNear, fogFar; uniform vec3 lightDir, lightCol, ambient;
@@ -46,7 +47,7 @@ export function oldMaterial({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
         vFog = smoothstep(fogNear, fogFar, -mv.z);
       }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D map; uniform vec3 color, fogColor; uniform float affine, alphaTest;
+      uniform sampler2D map; uniform vec3 color, fogColor; uniform float affine, alphaTest, opacity;
       varying vec3 vUvw; varying vec2 vUvP; varying vec3 vLight; varying float vFog;
       float bayer2(vec2 a){ a = floor(a); return fract(a.x / 2. + a.y * a.y * .75); }
       float bayer4(vec2 a){ return bayer2(.5 * a) * .25 + bayer2(a); }
@@ -54,6 +55,7 @@ export function oldMaterial({ map, color = [1, 1, 1], alphaTest = 0, side = THRE
         vec2 uv = mix(vUvP, vUvw.xy / vUvw.z, affine);
         vec4 t = texture2D(map, uv);
         if (t.a < alphaTest) discard;
+        if (opacity < 1. && bayer4(gl_FragCoord.xy) > opacity) discard;
         vec3 c = t.rgb * color * vLight;
         c = mix(c, fogColor, vFog);
         c = floor(clamp(c, 0., 1.) * 31. + bayer4(gl_FragCoord.xy)) / 31.;

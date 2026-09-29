@@ -65,9 +65,10 @@ export function createStage(canvas) {
     card.scale.set(w, (w * cardCanvas.height) / cardCanvas.width * a, 1);
   }
   // 4:3 at `res` lines, shown 3x. vertical (recording): 9:16, 0.75 x res game pixels wide (240 -> 180x320), 1080 wide out
-  function setRes(res, vertical = false) {
+  // (outW: the vertical output's width in real pixels, 1080 by default; a smaller preview costs less to upscale)
+  function setRes(res, vertical = false, outW = 1080) {
     let w, h, scale;
-    if (vertical) { w = Math.round(res * 0.75); h = Math.round((w * 16) / 9); scale = 1080 / w; } else { h = res; w = Math.round((h * 4) / 3); scale = 3; }
+    if (vertical) { w = Math.round(res * 0.75); h = Math.round((w * 16) / 9); scale = outW / w; } else { h = res; w = Math.round((h * 4) / 3); scale = 3; }
     camera.aspect = w / h; camera.fov = vertical ? 70 : 55; camera.updateProjectionMatrix();
     canvas.classList.toggle('vertical', vertical);
     lowRT?.dispose();

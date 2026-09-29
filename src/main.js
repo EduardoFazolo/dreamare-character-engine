@@ -468,7 +468,13 @@ renderFaces();
 status(`${faces.length} faces loaded. Drag to turn, scroll to zoom, double-click to reset. Drop your own photos anywhere.`);
 params = randomize(params);
 syncControls();
-window.__app = { setFace(i) { current = i; renderFaces(); return rebuild(); }, roll, randomize, defaults, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, idle: () => lastRebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera, body, analyzeHair, deform, canon, canonUV, rig };
+// the same validated export Send to scene uses (unlit, the editor re-applies the PS2 shader), for scripts
+async function characterGlb(name) {
+  await lastRebuild;
+  const canvases = new Map([[texture, $('#atlas')], [sk.bodyTexture, sk.bodyCanvas], [rig.headTexture, rig.headCanvas]]);
+  return exportGLB(sk, canvases, { name, materials: 'unlit' });
+}
+window.__app = { characterGlb, setFace(i) { current = i; renderFaces(); return rebuild(); }, roll, randomize, defaults, get params() { return params; }, set params(p) { params = p; syncControls(); rebuild(); }, rebuild, idle: () => lastRebuild, faces, get skin() { return lastSkin; }, sk, setYaw(v) { yaw = v; idle = -1e9; }, camera, body, analyzeHair, deform, canon, canonUV, rig };
 // experimental: webcam-driven character (experimental/webcam.js), loaded lazily
 import('../experimental/webcam.js').then((m) => m.mount(window.__app)).catch((e) => console.warn('experimental webcam unavailable', e));
 await rebuild();

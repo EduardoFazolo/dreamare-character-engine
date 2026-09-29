@@ -2,9 +2,64 @@
   "note": "written by the scene editor: characters you can put in scenes (by name or id)",
   "characters": [
     {
+      "id": "file:old-pim-holwub",
+      "name": "Old Pim Holwub",
+      "created": 1790659713238
+    },
+    {
+      "id": "file:traveller-1",
+      "name": "Gumm Thackeray-Jellybold",
+      "created": 1790650071981
+    },
+    {
+      "id": "file:traveller-2",
+      "name": "Professor Lionel Knatchbull",
+      "created": 1790650072002
+    },
+    {
+      "id": "file:traveller-3",
+      "name": "Reginald Glombs",
+      "created": 1790650072018
+    },
+    {
+      "id": "file:traveller-4",
+      "name": "Dee. Arr. Gravycombe",
+      "created": 1790650072028
+    },
+    {
+      "id": "file:traveller-5",
+      "name": "Marguerite Punch",
+      "created": 1790650072039
+    },
+    {
       "id": "muk3569y-t7lzfs",
       "name": "Reginald Rushcombe",
       "created": 1790529683974
+    },
+    {
+      "id": "mult17av-b9mhc6",
+      "name": "Violet Wishbonebottom",
+      "created": 1790633634871
+    },
+    {
+      "id": "multa3go-sl2xe8",
+      "name": "Little Cholmondeley",
+      "created": 1790634049800
+    },
+    {
+      "id": "muluiv2o-5bgxep",
+      "name": "Fudge Wetherby",
+      "created": 1790636138448
+    },
+    {
+      "id": "muluj1pj-mvtgp0",
+      "name": "Wob Cumberton",
+      "created": 1790636147047
+    },
+    {
+      "id": "mulycpjy-71kjeu",
+      "name": "Constance Pelford",
+      "created": 1790642569823
     }
   ],
   "id": "characters"

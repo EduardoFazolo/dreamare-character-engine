@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { PS2 } from '../head.js';
-import { generate } from './gen.js';
+import { generatePlace } from './kinds.js';
 import { createStage, bakeForExport } from './stage.js';
 import { setSceneTerrain } from '../store.js';
 import { menubar } from '../menubar.js';
@@ -41,7 +41,7 @@ let world = null, wire = null, lastRes = 0;
 function rebuild() {
   if (world) { scene.remove(world.group); dispose(world.group); }
   const seed = world?.seed;
-  world = generate(params); world.seed = params.seed;
+  world = generatePlace(params); world.seed = params.seed;
   const reg = link != null ? regionById(atlas, link) : null;
   world.name = reg ? reg.name : placeName(params.seed, { kind: params.biome.water ? 'coast' : 'any' });
   $('#placeName').textContent = world.name;
@@ -173,7 +173,7 @@ $('#placeName').onclick = () => drawCard(world.name); // show the card again
 $('#setScene').onclick = async () => {
   const reg = link != null ? regionById(atlas, link) : null;
   const { seed, biome, neighbors, seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine } = params;
-  await setSceneTerrain({ seed, biome: structuredClone(biome), neighbors: structuredClone(neighbors), seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine, name: world.name, region: reg ? { id: reg.id, world: atlas.seed } : null });
+  await setSceneTerrain({ kind: params.kind || 'emptymemories', seed, biome: structuredClone(biome), neighbors: structuredClone(neighbors), seaAngle, density, time, skyHue, haze, wrongness, res, sat, vhs, affine, name: world.name, region: reg ? { id: reg.id, world: atlas.seed } : null });
   $('#status').innerHTML = `“${world.name}” is now the current scene’s terrain · <a href="/editor.html">open the editor ▸</a>`;
 };
 

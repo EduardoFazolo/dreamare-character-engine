@@ -1,0 +1,170 @@
+{
+  "id": "old-pim-holwub",
+  "name": "Old Pim Holwub",
+  "created": 1790689916899,
+  "updated": 1790689916899,
+  "slides": [
+    {
+      "id": "pim-1",
+      "image": null,
+      "text": "Why has Old Pim Holwub never let the last lantern in Mothwick Hollow go out?",
+      "secs": 4,
+      "style": {
+        "look": "tiktok",
+        "pos": "low",
+        "size": 1
+      },
+      "live": {
+        "scene": "mothwick-hollow",
+        "sceneName": "Mothwick Hollow",
+        "shot": "1 his face, lit from below",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-2",
+      "image": null,
+      "text": "Every lantern in the trees has a name scratched into the brass. None of them are names anyone remembers giving.",
+      "secs": 4.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "mothwick-hollow",
+        "sceneName": "Mothwick Hollow",
+        "shot": "4 the lantern the tree grew around",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-3",
+      "image": null,
+      "text": "Nobody has seen what is behind his door. Someone keeps knocking on it from the inside.",
+      "secs": 4,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "mothwick-hollow",
+        "sceneName": "Mothwick Hollow",
+        "shot": "6 his door",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-4",
+      "image": null,
+      "text": "The only road to the Hollow runs through Dimmock Fen.",
+      "secs": 3.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "dimmock-fen",
+        "sceneName": "Dimmock Fen",
+        "shot": "4 the only road runs through the fen",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-5",
+      "image": null,
+      "text": "In the fen you can hear the Hollow before you see it: a sound like someone humming through a closed mouth.",
+      "secs": 4.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "dimmock-fen",
+        "sceneName": "Dimmock Fen",
+        "shot": "5 humming under the water",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-6",
+      "image": null,
+      "text": "The postman from Gumbleford still walks it every night. He stopped delivering letters a long time ago.",
+      "secs": 4.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "dimmock-fen",
+        "sceneName": "Dimmock Fen",
+        "shot": "6 the postman walks it every night",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-7",
+      "image": null,
+      "text": "In Nether Tobbing, children are told: if a tall man offers you a light, say you already have one.",
+      "secs": 4.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "nether-tobbing",
+        "sceneName": "Nether Tobbing",
+        "shot": "7 a small chair facing a doorway",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-8",
+      "image": null,
+      "text": "Marguerite Punch said she didn't need one. Her mother still leaves the window lit.",
+      "secs": 4.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "nether-tobbing",
+        "sceneName": "Nether Tobbing",
+        "shot": "8 her mother still leaves the window lit",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "pim-9",
+      "image": null,
+      "text": "",
+      "secs": 2.5,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "mothwick-hollow",
+        "sceneName": "Mothwick Hollow",
+        "shot": "9 she is very small now",
+        "frozen": null,
+        "poster": null
+      }
+    }
+  ]
+}

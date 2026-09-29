@@ -447,49 +447,51 @@
       "id": "mult17bq-96w29b",
       "charId": "mult17av-b9mhc6",
       "name": "Violet Wishbonebottom",
-      "x": -2.2019659243128245,
-      "z": -6.644647926577086,
-      "rotY": 0,
+      "x": 2.8907757609367404,
+      "z": -6.3752188589867735,
+      "rotY": -0.42571049474194655,
       "scale": 1,
-      "anim": null,
-      "rel": true
+      "anim": "Idle",
+      "rel": false
     },
     {
       "id": "multa3he-6pv9is",
       "charId": "multa3go-sl2xe8",
       "name": "Little Cholmondeley",
-      "x": 0,
-      "z": -7,
-      "rotY": 0,
+      "x": 4.749457407661853,
+      "z": -5.14224215034706,
+      "rotY": -0.7457104947419467,
       "scale": 1,
-      "anim": null,
-      "rel": true
+      "anim": "Idle",
+      "rel": false,
+      "lookAtMe": true
     },
     {
       "id": "muluiv35-siy5dt",
       "charId": "muluiv2o-5bgxep",
       "name": "Fudge Wetherby",
-      "x": 2.2019659243128245,
-      "z": -6.644647926577086,
-      "rotY": 0,
+      "x": 6.125930615116548,
+      "z": -3.3871778959449093,
+      "rotY": -1.2058789689234801,
       "scale": 1,
-      "anim": null,
-      "rel": true
+      "anim": "Idle",
+      "rel": false,
+      "lookAtMe": true
     },
     {
       "id": "muluj1ps-0w9uba",
       "charId": "muluj1pj-mvtgp0",
       "name": "Wob Cumberton",
-      "x": 4.180368089536745,
-      "z": -5.614670305190049,
-      "rotY": 0,
+      "x": 6.88044320950651,
+      "z": -1.2882163020066768,
+      "rotY": -1.3857104947419465,
       "scale": 1,
-      "anim": null,
-      "rel": true
+      "anim": "Idle",
+      "rel": false
     }
   ],
   "created": 1790527092819,
-  "updated": 1790636147056,
+  "updated": 1790652150656,
   "props": [
     {
       "id": "muk4k2gu-mdnvjr",
@@ -500,5 +502,6 @@
       "scale": 1.41
     }
   ],
-  "ambience": {}
+  "ambience": {},
+  "shots": []
 }

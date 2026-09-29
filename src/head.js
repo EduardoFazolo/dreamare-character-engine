@@ -461,7 +461,15 @@ export class HeadRig {
       const surf = keep.slice(0, keep.length - rig.extra.idx.length), eyePos = new Float32Array(rig.eyes.pos);
       const s0 = pos.length / 3 + rig.socketRange[0], s1 = pos.length / 3 + rig.socketRange[1], sm = (s0 + s1) >> 1, em = eyePos.length / 6;
       keepInside(allPos, s0, sm, pos, surf, C); keepInside(allPos, sm, s1, pos, surf, C); // (one eye at a time)
-      keepInside(eyePos, 0, em, pos, surf, C); keepInside(eyePos, em, em * 2, pos, surf, C);
+      // eyeballs move back whole (squashing each vertex in separately bent the iris off the ball's centre:
+      // big or warped eyes ended up wall-eyed, looking past you whatever the head did)
+      for (const [a, b] of [[0, em], [em, em * 2]]) {
+        const before = eyePos.slice(a * 3, b * 3); keepInside(eyePos, a, b, pos, surf, C);
+        let best = 0, bi = -1; for (let v = a; v < b; v++) { const d = Math.hypot(eyePos[v * 3] - before[(v - a) * 3], eyePos[v * 3 + 1] - before[(v - a) * 3 + 1], eyePos[v * 3 + 2] - before[(v - a) * 3 + 2]); if (d > best) { best = d; bi = v; } }
+        if (bi < 0) continue;
+        const sh = [0, 1, 2].map((k) => eyePos[bi * 3 + k] - before[(bi - a) * 3 + k]); // the largest pull, applied to the whole ball
+        for (let v = a; v < b; v++) for (let k = 0; k < 3; k++) eyePos[v * 3 + k] = before[(v - a) * 3 + k] + sh[k];
+      }
       rig.eyes.pos = eyePos;
     });
     setMesh(this.geo, allPos, allUV, keep, rig.headMorphs);

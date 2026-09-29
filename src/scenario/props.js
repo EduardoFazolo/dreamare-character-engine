@@ -6,6 +6,8 @@
 import * as THREE from 'three';
 import { oldMaterial } from './material.js';
 import { rng, canvasTex, blotch, css, boxG, cylG, place, assemble, hash2 } from './util.js';
+import { buildModel, buildModelMerged } from '../items/model.js';
+import oilLantern from '../../items/oil-lantern.json';
 
 let T = null; // textures, made once
 function tex() {
@@ -38,6 +40,7 @@ function bar(a, b, t = 0.04) { const o = new THREE.Object3D(); o.position.copy(a
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 // ---------------- the catalogue ----------------
+const OUT_MAT = {}; // (shared: a gone-out lantern's dead glass and wick)
 export const PROPS = {
   rockingChair: {
     label: 'Rocking chair', category: 'Furniture',
@@ -56,7 +59,7 @@ export const PROPS = {
       rock.add(assemble([[wood, parts]]));
       const g = new THREE.Group(); g.add(rock);
       const s = seat(rock, 0, 0.5, 0.0);
-      const ph = Math.random() * 6;
+      const ph = rand() * 6;
       return { group: g, seats: [s], radius: 0.6, update: (t) => { rock.rotation.x = Math.sin(t * 1.35 + ph) * 0.075; } }; // slow, soft: ~4.6 s a rock, ±4°
     },
   },
@@ -151,7 +154,7 @@ export const PROPS = {
   deadTree: {
     label: 'Dead tree', category: 'Nature',
     build() {
-      const r = rng(Math.floor(Math.random() * 1e6)), parts = [], up = V(0, 1, 0);
+      const r = rng(Math.floor(rand() * 1e6)), parts = [], up = V(0, 1, 0);
       const branch = (base, dir, len, rd, depth) => {
         parts.push(cylG(rd * 0.6, rd, len, 5).translate(0, len / 2, 0).applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, dir)).translate(base.x, base.y, base.z));
         if (!depth) return;
@@ -162,10 +165,113 @@ export const PROPS = {
       return { group: assemble([[lit('bark'), parts]]), seats: [], radius: 0.5 };
     },
   },
+  // lanterns: the Items tab's Oil Lantern (items/oil-lantern.json), so editing the item changes these too
+  lantern: {
+    label: 'Lantern (on the ground)', category: 'Lights',
+    build() { const g = new THREE.Group(), m = buildModelMerged(oilLantern.model).group; m.scale.setScalar(1.4); g.add(m); return { group: g, seats: [], radius: 0.25 }; },
+  },
+  lanternOut: {
+    label: 'Lantern (gone out)', category: 'Lights',
+    build() { const g = new THREE.Group(), m = buildModelMerged(oilLantern.model).group; m.scale.setScalar(1.4); m.traverse((o) => { if (o.material?.defines?.GLOW) o.material = OUT_MAT[o.name === 'glass' ? 'glass' : 'dark'] ||= oldMaterial({ color: [0.22, 0.22, 0.2], opacity: o.name === 'glass' ? 0.38 : 1 }); }); m.rotation.z = rand() < 0.3 ? 1.45 : 0; g.add(m); return { group: g, seats: [], radius: 0.25 }; }, // (now and then knocked over)
+  },
+  lanternPost: {
+    label: 'Lantern on a hook', category: 'Lights',
+    build() {
+      const g = assemble([[lit('wood'), [boxG(0.1, 2.2, 0.1, 0, 1.1, 0), boxG(0.6, 0.07, 0.07, 0.25, 2.12, 0)]]]);
+      const hang = new THREE.Group(); hang.position.set(0.5, 2.08, 0); g.add(hang);
+      const m = buildModelMerged(oilLantern.model).group; m.scale.setScalar(1.3); m.position.y = -0.62; hang.add(m, assemble([[lit('metal'), [bar(V(0, 0, 0), V(0, -0.3, 0), 0.01)]]]));
+      const ph = rand() * 6;
+      return { group: g, seats: [], radius: 0.4, update: (t) => { hang.rotation.z = Math.sin(t * 0.8 + ph) * 0.05; hang.rotation.x = Math.sin(t * 0.55 + ph) * 0.03; } };
+    },
+  },
+  lanternTree: {
+    label: 'Tree hung with lanterns', category: 'Lights',
+    build() {
+      // a dead tree whose branch tips each hold a lantern on a string, barely swaying; one lantern the bark has
+      // grown around, still faintly lit
+      const r = rng(Math.floor(rand() * 1e6)), parts = [], up = V(0, 1, 0), tips = [];
+      const branch = (base, dir, len, rd, depth) => {
+        parts.push(cylG(rd * 0.6, rd, len, 5).translate(0, len / 2, 0).applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, dir)).translate(base.x, base.y, base.z));
+        const tip = base.clone().addScaledVector(dir, len);
+        if (!depth) { if (tip.y > 2) tips.push(tip); return; }
+        for (let k = 0, n = 2 + (r() * 2 | 0); k < n; k++) branch(tip, dir.clone().add(V((r() - 0.5) * 1.8, 0.1 + r() * 0.4, (r() - 0.5) * 1.8)).normalize(), len * (0.55 + r() * 0.2), rd * 0.55, depth - 1);
+      };
+      branch(V(0, -0.2, 0), V((r() - 0.5) * 0.2, 1, (r() - 0.5) * 0.2).normalize(), 2.6 + r() * 1.5, 0.26, 3);
+      const g = assemble([[lit('bark'), parts]]), swings = [];
+      tips.sort(() => r() - 0.5).slice(0, 3 + (r() * 3 | 0)).forEach((tip) => {
+        const hang = new THREE.Group(); hang.position.copy(tip); g.add(hang);
+        const len = 0.3 + r() * 0.6, m = buildModelMerged(oilLantern.model).group; m.scale.setScalar(1.2); m.position.y = -len - 0.52;
+        hang.add(m, assemble([[lit('metal'), [bar(V(0, 0, 0), V(0, -len, 0), 0.008)]]]));
+        swings.push([hang, r() * 6, 0.5 + r() * 0.5]);
+      });
+      // the swallowed one: half sunk into the trunk, glass still glowing through the bark
+      const sunk = buildModelMerged(oilLantern.model).group; sunk.scale.setScalar(1.2); sunk.position.set(0.12, 1.1 + r() * 0.5, 0.1); sunk.rotation.z = 0.3; g.add(sunk);
+      return { group: g, seats: [], radius: 0.5, update: (t) => { for (const [h, ph, sp] of swings) { h.rotation.z = Math.sin(t * sp + ph) * 0.06; h.rotation.x = Math.sin(t * sp * 0.7 + ph) * 0.04; } } };
+    },
+  },
+  moths: {
+    label: 'Moths (round a light)', category: 'Lights',
+    build() {
+      // a dozen small pale moths circling the spot (lift it to the lamp with "y"), each on its own lopsided orbit,
+      // lurching up and down, wings beating; drawn as two flat triangles, like everything else
+      const g = new THREE.Group(), wingMat = oldMaterial({ color: [0.92, 0.82, 0.64], glow: true, side: THREE.DoubleSide }) /* (lit by the lamp they circle) */, moths = [];
+      const wingGeo = new THREE.BufferGeometry(); wingGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.022, 0, 0, -0.025, 0.055, 0, -0.012], 3)); wingGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 1, 1, 0.5], 2)); wingGeo.computeVertexNormals();
+      for (let i = 0, n = 10 + Math.floor(rand() * 6); i < n; i++) {
+        const m = new THREE.Group(), L = new THREE.Mesh(wingGeo, wingMat), R = new THREE.Mesh(wingGeo, wingMat); R.scale.x = -1; m.add(L, R); g.add(m);
+        moths.push({ m, L, R, r: 0.18 + rand() * 0.5, sp: (0.9 + rand() * 1.6) * (rand() < 0.5 ? -1 : 1), ph: rand() * 6.3, h: rand() * 0.5 - 0.15, tilt: rand() * 0.8, flap: 18 + rand() * 10 });
+      }
+      return { group: g, seats: [], radius: 0.3, update: (t) => {
+        for (const q of moths) {
+          const a = t * q.sp + q.ph, r = q.r * (1 + 0.25 * Math.sin(t * 2.3 + q.ph)); // (lopsided, drawn in and flung out)
+          q.m.position.set(Math.cos(a) * r, q.h + Math.sin(t * 3.1 + q.ph * 2) * 0.12 + Math.sin(a) * q.tilt * 0.2, Math.sin(a) * r);
+          q.m.rotation.y = -a + (q.sp > 0 ? 0 : Math.PI);
+          const f = Math.sin(t * q.flap + q.ph) * 1.1; q.L.rotation.z = f; q.R.rotation.z = -f;
+        }
+      } };
+    },
+  },
+  boardwalk: {
+    label: 'Plank walk (12 m)', category: 'Paths',
+    build() {
+      // grey planks across two stringers on posts, a board missing now and then, sagging a little; runs along +Z
+      const L = 12, parts = [], posts = [], sag = (z) => -0.12 * Math.sin((z / L) * Math.PI);
+      for (let z = -L / 2; z < L / 2; z += 0.32) { if (rand() < 0.08) continue; const g = boxG(1.2, 0.05, 0.26, 0, 0.55 + sag(z + L / 2) + (rand() - 0.5) * 0.03, z); g.rotateY((rand() - 0.5) * 0.06); parts.push(g); }
+      for (const x of [-0.5, 0.5]) { parts.push(boxG(0.08, 0.08, L, x, 0.5, 0)); for (let z = -L / 2; z <= L / 2; z += 2) posts.push(boxG(0.1, 1.6, 0.1, x + (rand() - 0.5) * 0.05, -0.2, z)); }
+      return { group: assemble([[lit('wood', [0.75, 0.75, 0.72]), [...parts, ...posts]]]), seats: [], radius: 0.8 };
+    },
+  },
+  sack: {
+    label: 'Sack', category: 'Strange',
+    build() { const g = new THREE.SphereGeometry(0.28, 7, 5).scale(1, 1.25, 0.8).translate(0, 0.32, 0); return { group: assemble([[lit('pale', [0.62, 0.52, 0.4]), [g, cylG(0.07, 0.12, 0.14, 6).translate(0, 0.7, 0)]]]), seats: [], radius: 0.3 }; },
+  },
+  bed: {
+    label: 'Bed', category: 'Furniture',
+    build() {
+      const wood = lit('wood'), p = [boxG(0.95, 0.3, 1.95, 0, 0.3, 0), boxG(0.95, 0.9, 0.06, 0, 0.45, -0.98), boxG(0.95, 0.55, 0.06, 0, 0.28, 0.98)];
+      for (const [x, z] of [[-0.44, -0.94], [0.44, -0.94], [-0.44, 0.94], [0.44, 0.94]]) p.push(boxG(0.06, 0.3, 0.06, x, 0.15, z));
+      const cloth = [boxG(0.88, 0.12, 1.8, 0, 0.5, 0.04), boxG(0.6, 0.1, 0.3, 0, 0.6, -0.72)];
+      const g = assemble([[wood, p], [lit('pale', [0.95, 0.93, 0.88]), cloth]]);
+      return { group: g, seats: [seat(g, 0, 0.55, 0.3)], radius: 1.1 };
+    },
+  },
+  bedroom: {
+    label: 'Bedroom seen through a window', category: 'Strange',
+    build() {
+      // a scrap of cottage: front wall with a four-pane window, a small room behind it lit by one warm lamp, a
+      // made bed that nobody is in; the window faces +Z
+      const wall = lit('pale', [0.8, 0.76, 0.68]), W = 3, H = 2.6, D = 3, wy = 0.75, ww = 1.2, wh = 1.1, t = 0.12, p = [];
+      p.push(boxG((W - ww) / 2, H, t, -(W + ww) / 4, H / 2, 0), boxG((W - ww) / 2, H, t, (W + ww) / 4, H / 2, 0), boxG(ww, wy, t, 0, wy / 2, 0), boxG(ww, H - wy - wh, t, 0, wy + wh + (H - wy - wh) / 2, 0));
+      p.push(boxG(t, H, D, -W / 2, H / 2, -D / 2), boxG(t, H, D, W / 2, H / 2, -D / 2), boxG(W, H, t, 0, H / 2, -D), boxG(W, t, D, 0, H, -D / 2), boxG(W, 0.04, D, 0, 0.02, -D / 2));
+      const frame = [boxG(ww, 0.05, 0.06, 0, wy + wh / 2, 0.02), boxG(0.05, wh, 0.06, 0, wy + wh / 2, 0.02), boxG(ww + 0.1, 0.07, 0.2, 0, wy - 0.02, 0.06)];
+      const g = assemble([[wall, p], [lit('wood'), frame], [glow('light', [1.25, 1.0, 0.7]), [boxG(0.18, 0.22, 0.18, 0.95, 0.95, -2.5), boxG(0.4, 0.5, 0.4, 0.95, 0.5, -2.5).scale(1, 1, 1)]]]);
+      const bed = PROPS.bed.build().group; bed.position.set(0.1, 0.04, -1.9); bed.rotation.y = Math.PI / 2; g.add(bed);
+      return { group: g, seats: [], radius: 2 };
+    },
+  },
   rock: {
     label: 'Rock', category: 'Nature',
     build() {
-      const g = new THREE.IcosahedronGeometry(1, 0).toNonIndexed(), pa = g.attributes.position, sd = Math.random() * 100;
+      const g = new THREE.IcosahedronGeometry(1, 0).toNonIndexed(), pa = g.attributes.position, sd = rand() * 100;
       for (let v = 0; v < pa.count; v++) { const k = 0.75 + hash2(pa.getX(v) * 7, pa.getY(v) * 7 + pa.getZ(v) * 3, sd) * 0.5; pa.setXYZ(v, pa.getX(v) * k, pa.getY(v) * k, pa.getZ(v) * k); }
       g.scale(0.7, 0.45, 0.6).translate(0, 0.2, 0);
       return { group: assemble([[lit('rock'), [g]]]), seats: [], radius: 0.7 };
@@ -195,7 +301,8 @@ export const PROPS = {
     build() {
       const wood = lit('wood'), g = assemble([[wood, [boxG(0.15, 2.3, 0.15, -0.5, 1.15, 0), boxG(0.15, 2.3, 0.15, 0.5, 1.15, 0), boxG(1.15, 0.15, 0.15, 0, 2.3, 0)]]]);
       const door = assemble([[lit('paint'), [boxG(0.85, 2.1, 0.06, 0.425, 1.05, 0)]]]); door.position.set(-0.43, 0.05, 0); g.add(door);
-      return { group: g, seats: [], radius: 0.7, update: (t) => { door.rotation.y = -0.9 + Math.sin(t * 0.3) * 0.05; } };
+      const b = { group: g, seats: [], radius: 0.7, open: 0.9, update: (t) => { door.rotation.y = -b.open + Math.sin(t * 0.3) * 0.05 * Math.min(1, b.open * 3); } }; // (open: 0 = shut)
+      return b;
     },
   },
   swing: {
@@ -204,10 +311,14 @@ export const PROPS = {
       const H = 2.3, g = assemble([[lit('metal'), [bar(V(-1, 0, -0.6), V(-1, H, 0)), bar(V(-1, 0, 0.6), V(-1, H, 0)), bar(V(1, 0, -0.6), V(1, H, 0)), bar(V(1, 0, 0.6), V(1, H, 0)), bar(V(-1.05, H, 0), V(1.05, H, 0), 0.06)]]]);
       const sw = new THREE.Group(); sw.position.set(0, H, 0); g.add(sw);
       sw.add(assemble([[lit('metal'), [bar(V(-0.25, 0, 0), V(-0.25, -1.75, 0), 0.015), bar(V(0.25, 0, 0), V(0.25, -1.75, 0), 0.015)]], [lit('wood'), [boxG(0.6, 0.04, 0.22, 0, -1.78, 0)]]]));
-      const s = seat(sw, 0, -1.74, 0.0), ph = Math.random() * 6;
+      const s = seat(sw, 0, -1.74, 0.0), ph = rand() * 6;
       return { group: g, seats: [s], radius: 1.2, update: (t) => { sw.rotation.x = Math.sin(t * 0.9 + ph) * 0.07; } }; // barely moving, as if someone just got off
     },
   },
 };
 export const CATEGORIES = [...new Set(Object.values(PROPS).map((p) => p.category))];
-export function buildProp(kind) { const def = PROPS[kind]; if (!def) return null; const b = def.build(); b.group.name = `prop-${kind}`; return b; }
+// seeded: the same prop (by id) is built the same way every time, so a scene looks the same on every load
+// (a slide that references it must match what was shot)
+let rand = Math.random;
+const seedOf = (str) => { let h = 2166136261; for (const ch of String(str)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) % 2147483646 + 1; };
+export function buildProp(kind, seed) { const def = PROPS[kind]; if (!def) return null; rand = seed != null ? rng(seedOf(seed)) : Math.random; const b = def.build(); rand = Math.random; b.group.name = `prop-${kind}`; return b; }

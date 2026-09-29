@@ -6,7 +6,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ps2Material } from '../head.js';
-import { generate } from '../scenario/gen.js';
+import { generatePlace } from '../scenario/kinds.js';
 import { createStage, bakeForExport } from '../scenario/stage.js';
 import { VILLAGE } from '../scenario/biomes.js';
 import { menubar } from '../menubar.js';
@@ -18,6 +18,11 @@ import { AMBIENCES, startBed, stopBed, setVolume as bedVolume, playing as bedPla
 import { currentScene, setCurrentScene, emptyScene, onSceneChange, get, put, del, all, uid, newActor, listScenes, removeScene, freeSceneId, openScene, writtenText, sceneFiles } from '../store.js';
 
 const $ = (s) => document.querySelector(s);
+// Player mode (editor.html?player): the Slides tab's live view of a scene. Same scene, same breathing and
+// atmosphere, but read-only (never writes a scene, the library or which scene is open), no panels, no audio,
+// the camera straight from a shot, vertical 9:16. Driven by the parent page through window.__player.
+const PLAYER = new URLSearchParams(location.search).has('player');
+if (PLAYER) document.body.classList.add('player');
 const status = (t) => ($('#status').textContent = t);
 const slug = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'scene';
 const TERRAIN_DEFAULTS = { seed: 1998, biome: VILLAGE, neighbors: [], seaAngle: undefined, density: 1, time: 0.3, skyHue: 0, haze: 0.62, wrongness: 0.2, res: 240, sat: 0.7, vhs: 0.6, affine: 0.5, name: 'The default village' };
@@ -35,22 +40,98 @@ let selected = null;
 
 // ---------------- persistence ----------------
 let saveT = 0;
-const autosave = () => { clearTimeout(saveT); saveT = setTimeout(() => { saveT = 0; setCurrentScene(rec); }, 250); };
+const autosave = () => { if (PLAYER || document.visibilityState === 'hidden') return; clearTimeout(saveT); saveT = setTimeout(() => { saveT = 0; setCurrentScene(rec); }, 250); };
 // leaving the tab: write a pending change now instead of waiting for the debounce
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && saveT) { clearTimeout(saveT); saveT = 0; setCurrentScene(rec); } });
 addEventListener('pagehide', () => { if (saveT) { clearTimeout(saveT); saveT = 0; setCurrentScene(rec); } });
 
 // ---------------- terrain ----------------
-function terrainParams() { return { ...TERRAIN_DEFAULTS, ...(rec.terrain || {}), biome: structuredClone(rec.terrain?.biome || VILLAGE) }; }
+function terrainParams() { return { ...TERRAIN_DEFAULTS, ...(rec.terrain || {}), biome: structuredClone(rec.terrain?.biome || VILLAGE), directives: resolvedDirectives }; }
+// ---------------- directives: the scene's composition rules (scenes/README.md) ----------------
+// converge / clearing / sightline reshape the land (gen.js), so their targets are resolved to ground points
+// first (targets are the scene's own props / actors, placed relative to the spawn); ring expands into props.
+let resolvedDirectives = [];
+const xz = (ref) => { const v = resolvePoint(ref); return v ? [+v.x.toFixed(2), +v.z.toFixed(2)] : null; };
+function resolveDirectives() {
+  return (rec.directives || []).map((d) => {
+    if (d.kind === 'converge') { const at = xz(d.toward); return at && { kind: 'converge', at, count: d.count ?? 4, surface: d.surface ?? 'stone' }; }
+    if (d.kind === 'causeways') { const at = xz(d.toward); return at && { kind: 'causeways', at, count: d.count ?? 6, heights: d.heights || [5, 32] }; }
+    if (d.kind === 'clearing') { const at = xz(d.around); return at && { kind: 'clearing', at, radius: d.radius ?? 5 }; }
+    if (d.kind === 'sightline') { const from = xz(d.from || 'spawn'), to = xz(d.to); return from && to && { kind: 'sightline', from, to }; }
+    return null;
+  }).filter(Boolean);
+}
+// ring { prop, around, radius, count, face: 'in' | 'out' | 'along', jitter }: that many of a prop, evenly round the
+// target (a seeded jitter so it isn't a clock face). Generated each load: they're not in rec.props.
+function ringProps() {
+  const out = [];
+  (rec.directives || []).forEach((d, n) => {
+    if (d.kind !== 'ring' || !PROPS[d.prop]) return;
+    const c = resolvePoint(d.around); if (!c) return;
+    let s = (n + 1) * 9301 + (d.count || 6) * 49297; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+    const count = Math.max(1, Math.min(48, d.count ?? 6)), R = d.radius ?? 10, J = d.jitter ?? 0.35, a0 = rnd() * Math.PI * 2;
+    for (let k = 0; k < count; k++) {
+      const a = a0 + (k / count) * Math.PI * 2 + (rnd() - 0.5) * J * (Math.PI * 2 / count), rr = R * (1 + (rnd() - 0.5) * J * 0.5);
+      const x = c.x + Math.cos(a) * rr, z = c.z + Math.sin(a) * rr, toC = Math.atan2(c.x - x, c.z - z);
+      const rotY = d.face === 'out' ? toC + Math.PI : d.face === 'along' ? toC + Math.PI / 2 : toC;
+      out.push({ id: `${d.id || `ring${n}`}#${k}`, kind: d.prop, x, z, rotY: rotY + (rnd() - 0.5) * 0.4, scale: (d.scale ?? 1) * (0.85 + rnd() * 0.3), generated: true });
+    }
+  });
+  return out.concat(world ? travellers().lamps : []);
+}
+// travellers { characters: [names], toward, count (16), pose ("kneel" | "sit" | "crouch"), lanterns: "out" | "none",
+// between: [near, far] metres from the target (12, 70) }: people along the converging roads, at the roadside,
+// all facing the thing, heads bowed, their lanterns gone out beside them. Generated each load (not in rec.actors);
+// cached until the directive, the roads or the target move.
+let travCache = { key: null, actors: [], lamps: [] };
+function travellers() {
+  const ds = (rec?.directives || []).filter((d) => d.kind === 'travellers' && d.characters?.length);
+  if (!ds.length || !world?.roads?.length) return { actors: [], lamps: [] };
+  const targets = ds.map((d) => resolvePoint(d.toward));
+  const key = JSON.stringify([ds, world.roads.length, world.roads[0]?.[0], targets.map((t) => t && t.toArray().map((v) => Math.round(v)))]);
+  if (travCache.key === key) return travCache;
+  const out = { key, actors: [], lamps: [] };
+  ds.forEach((d, n) => {
+    const c = targets[n]; if (!c) return;
+    let s = (n + 7) * 7919 + (d.count || 16) * 104729; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+    const [near, far] = d.between || [12, 70], count = Math.max(1, Math.min(60, d.count ?? 16));
+    // candidate spots: every ~6 m along every road, within the distance band
+    const spots = [];
+    for (const road of world.roads) for (let i = 1; i < road.length - 1; i += 3) {
+      const [x, z] = road[i], dist = Math.hypot(x - c.x, z - c.z); if (dist < near || dist > far) continue;
+      const [ax, az] = road[i - 1], [bx, bz] = road[i + 1], l = Math.hypot(bx - ax, bz - az) || 1;
+      spots.push([x, z, -(bz - az) / l, (bx - ax) / l]);
+    }
+    for (let k = 0; k < count && spots.length; k++) {
+      const [x0, z0, nx, nz] = spots.splice(Math.floor(rnd() * spots.length), 1)[0], side = rnd() < 0.5 ? -1 : 1, off = 1.8 + rnd() * 0.8;
+      const x = x0 + nx * side * off, z = z0 + nz * side * off, rotY = Math.atan2(c.x - x, c.z - z) + (rnd() - 0.5) * 0.25, fx = Math.sin(rotY), fz = Math.cos(rotY);
+      const gy = world.floor(x, z), id = `${d.id || `trav${n}`}#${k}`;
+      out.actors.push({ id, generated: true, character: d.characters[Math.floor(rnd() * d.characters.length)], x, z, rotY, scale: 0.9 + rnd() * 0.15,
+        pose: { preset: d.pose || 'kneel', look: [x + fx * 1.1, gy, z + fz * 1.1], alive: { blink: true, sway: 0.25 } } });
+      if ((d.lanterns ?? 'out') === 'out') out.lamps.push({ id: `${id}-lamp`, kind: 'lanternOut', x: x + Math.cos(rotY) * 0.55, z: z - Math.sin(rotY) * 0.55, rotY: rnd() * 6.28, generated: true });
+    }
+  });
+  travCache = out;
+  return out;
+}
+// after the scene's own props are placed: resolve the directives, rebuild the land if they changed it, then
+// place the rings (and re-seat everything on the reshaped ground)
+function applySceneDirectives() {
+  const next = resolveDirectives(), changed = JSON.stringify(next) !== JSON.stringify(resolvedDirectives);
+  resolvedDirectives = next;
+  if (changed) buildTerrain(false);
+  syncProps();
+  return changed;
+}
 function buildTerrain(force) {
   const p = terrainParams(), key = JSON.stringify(p);
   if (!force && key === terrainKey) return false;
   terrainKey = key;
   if (world) { scene.remove(world.group); world.group.traverse((m) => m.geometry?.dispose()); }
-  world = generate(p);
+  world = generatePlace(p);
   world.name = p.name;
   scene.add(world.group);
-  stage.setRes(p.res); stage.vhs = p.vhs; stage.sat = p.sat;
+  if (PLAYER) stage.setRes(p.res, true, P.outW); else stage.setRes(p.res); stage.vhs = p.vhs; stage.sat = p.sat;
   return true;
 }
 
@@ -75,6 +156,7 @@ function ps2ify(root) {
   });
 }
 async function spawnActor(a) {
+  if (!a.charId) return null; // (a character nobody has: skipped, not a crash)
   const c = await loadChar(a.charId);
   if (!c) return null;
   const root = SkeletonUtils.clone(c.gltf.scene);
@@ -114,9 +196,56 @@ function place(o) {
     return;
   }
   if (o.root.parent !== scene) scene.add(o.root);
-  o.root.position.set(a.x, world.floor(a.x, a.z), a.z);
+  if (a.inside && props.get(a.inside)) { o.root.scale.setScalar(a.scale); placeInside(o); return; }
+  o.root.position.set(a.x, (a.float ? Math.max(world.floor(a.x, a.z), -1.6) : world.floor(a.x, a.z)) + (a.y || 0), a.z); // (float: from the water's surface, e.g. walking a plank walk over it)
   o.root.rotation.set(0, a.rotY, 0);
   o.root.scale.setScalar(a.scale);
+}
+// Things that follow other things each frame, after everyone is posed:
+//   a prop with "hold": { "actor", "hand": "right" | "left", "offset": [x, y, z] } hangs from that hand
+//   an actor with "inside": "<prop id>" (and "offset") sits in that prop (a tiny person in a lantern), wherever it goes
+const _hv = new THREE.Vector3();
+function followers() {
+  for (const pr of props.values()) {
+    const h = pr.data.hold; if (!h) continue;
+    const o = actors.get(h.actor) || [...actors.values()].find((x) => x.data.name === h.actor); if (!o) continue;
+    o.root.updateWorldMatrix(true, true);
+    const side = h.hand === 'left' ? 'Left' : 'Right', B = o.rig.bones, g = pr.built.group;
+    if (h.by === 'pinch' && B[`${side}HandIndex3`] && B[`${side}HandThumb3`]) {
+      // held at the pinch: the point between the thumb's and the index finger's tips (each tip = its last joint
+      // carried on by that segment's length again); the ring's top sits there, the lantern hangs below
+      const tip = (f) => { const a = B[`${side}Hand${f}2`].getWorldPosition(new THREE.Vector3()), b = B[`${side}Hand${f}3`].getWorldPosition(new THREE.Vector3()); return b.addScaledVector(b.clone().sub(a), 0.55); }; // (the pad of the fingertip, not past it)
+      _hv.copy(tip('Index')).add(tip('Thumb')).multiplyScalar(0.5);
+      const a = B[`${side}HandIndex1`].getWorldPosition(new THREE.Vector3()), b = B[`${side}HandPinky1`].getWorldPosition(new THREE.Vector3());
+      g.position.set(_hv.x, _hv.y - (h.ring ?? 0.47), _hv.z);
+      g.rotation.set(0, Math.atan2(b.x - a.x, b.z - a.z), 0);
+    } else if (h.by === 'fingers' && B[`${side}HandMiddle2`]) {
+      // carried by a ring hooked over the curled fingers: it hangs from the middle finger joints (ring = how far its
+      // ring's inside top is above its base), turned so the ring threads along the fingers
+      const a = B[`${side}HandIndex2`].getWorldPosition(new THREE.Vector3()), b = B[`${side}HandPinky2`].getWorldPosition(new THREE.Vector3());
+      _hv.copy(a).add(b).multiplyScalar(0.5);
+      g.position.set(_hv.x, _hv.y - (h.ring ?? 0.47), _hv.z);
+      g.rotation.set(0, Math.atan2(b.x - a.x, b.z - a.z), 0); // (the ring's plane across the fingers: the fingers pass through it)
+    } else {
+      B[`${side}Hand`].getWorldPosition(_hv);
+      const off = h.offset || [0, -0.62, 0];
+      g.position.set(_hv.x + off[0], _hv.y + off[1], _hv.z + off[2]);
+    }
+  }
+  for (const o of actors.values()) if (o.data.inside) placeInside(o);
+}
+function placeInside(o) {
+  const pr = props.get(o.data.inside); if (!pr) return;
+  if (!pr.occupied) { pr.occupied = true; pr.built.group.traverse((m) => { if (m.name === 'wick flame') m.visible = false; }); } // (their flame is out: they're what's in there)
+  const g = pr.built.group; g.updateWorldMatrix(true, false);
+  o.root.position.copy(g.localToWorld(_hv.set(...(o.data.offset || [0, 0.08, 0])))); // (offset in the prop's own frame)
+  o.root.rotation.y = o.data.face === 'camera' ? Math.atan2(camera.position.x - o.root.position.x, camera.position.z - o.root.position.z) : o.data.rotY || 0;
+}
+// leaning in: the spine bends toward the camera (pose.lean 0..1), after the pose and breathing
+function leanIn(o) {
+  const k = o.data.pose?.lean; if (!k || o.data.pose?.bow) return; // (a bow already curls toward the camera: leaning too pulls it straight)
+  o.root.updateWorldMatrix(true, true);
+  for (const b of ['Spine1', 'Spine2', 'Neck']) turnToward(o.rig.bones[b], camera.position, k * 0.45, 0.7);
 }
 // sent characters arrive with offsets relative to the spawn's view: turn them into world spots facing you
 function settle(a) {
@@ -146,6 +275,16 @@ function resolvePoint(ref) {
   if (ref == null) return null;
   if (Array.isArray(ref)) return ref.length === 2 ? new THREE.Vector3(ref[0], world.floor(ref[0], ref[1]), ref[1]) : new THREE.Vector3(...ref);
   if (typeof ref === 'object' && ref.at != null) { const p = resolvePoint(ref.at); return p && p.add(new THREE.Vector3(...(ref.offset || [0, 0, 0]))); }
+  if (typeof ref === 'object' && ref.rel != null) { // { rel: actor/prop id, right, forward, up }: in that thing's own frame (up from its ground)
+    const e = findEntity(ref.rel); if (!e) return null;
+    const d = e.kind === 'actor' ? e.o.data : e.pr.data, r = (e.kind === 'actor' ? e.o.baseRotY ?? d.rotY : d.rotY) || 0, fx = Math.sin(r), fz = Math.cos(r), x = d.x + fx * (ref.forward || 0) - fz * (ref.right || 0), z = d.z + fz * (ref.forward || 0) + fx * (ref.right || 0);
+    return new THREE.Vector3(x, world.floor(d.x, d.z) + (ref.up || 0), z);
+  }
+  if (typeof ref === 'object' && ref.behind != null) { // { behind: A, toward: B, back: m, up: m, side: m }: over A's shoulder, looking at B
+    const a = resolvePoint(ref.behind), b = resolvePoint(ref.toward); if (!a || !b) return null;
+    const d = a.clone().sub(b); d.y = 0; d.normalize();
+    return a.addScaledVector(d, ref.back ?? 2).add(new THREE.Vector3(-d.z, 0, d.x).multiplyScalar(ref.side ?? 0)).add(new THREE.Vector3(0, ref.up ?? 0.5, 0));
+  }
   if (ref === 'spawn') return spawnFrame().pos.add(new THREE.Vector3(0, 1.6, 0));
   if (ref === 'camera') return camera.position.clone();
   const e = findEntity(ref);
@@ -167,7 +306,28 @@ function resolveCharacter(a) { if (!a.charId && a.character) { const c = library
 // the character library, written to library/characters.json so scenes can be written by hand (names -> ids)
 async function refreshLibrary() {
   library = (await all('characters')).map((c) => ({ id: c.id, name: c.name, created: c.created }));
-  if (await sceneFiles()) fetch('/__library/characters', { method: 'PUT', body: JSON.stringify({ note: 'written by the scene editor: characters you can put in scenes (by name or id)', characters: library }, null, 2) }).catch(() => {});
+  await characterFiles();
+  if (!PLAYER && await sceneFiles()) fetch('/__library/characters', { method: 'PUT', body: JSON.stringify({ note: 'written by the scene editor: characters you can put in scenes (by name or id)', characters: library }, null, 2) }).catch(() => {});
+}
+
+// Character files: public/characters/<slug>.glb (index.json lists them), characters made outside this browser,
+// e.g. written by Claude for a scene. Each is copied into this browser's library once (id "file:<slug>"), so
+// scenes name them like any other character ("character": "Old Pim Holwub").
+async function characterFiles() {
+  let list = [];
+  try { list = await (await fetch('/characters/index.json')).json(); } catch { return; }
+  let added = false;
+  for (const c of list) {
+    const id = `file:${c.file.replace(/\.glb$/, '')}`, have = library.some((l) => l.id === id);
+    if (have && (await get('characters', id))?.version === c.version) continue; // (a new version of the file replaces the copy)
+    try {
+      const glb = await (await fetch(`/characters/${c.file}`)).arrayBuffer();
+      await put('characters', id, { id, name: c.name, glb, thumb: c.thumb ? `/characters/${c.thumb}` : null, version: c.version, created: Date.now() });
+      if (!have) library.push({ id, name: c.name, created: Date.now() });
+      chars.delete(id); for (const [aid, o] of actors) if (o.data.charId === id) { o.root.removeFromParent(); actors.delete(aid); } // (re-spawned from the new file)
+      added = true;
+    } catch (e) { console.warn('character file', c.file, e); }
+  }
 }
 
 // ---------------- props ----------------
@@ -175,15 +335,18 @@ const props = new Map(); // propId -> { data, built }
 let selectedProp = null, picking = null; // picking: { propId } while choosing who sits
 function placeProp(pr) {
   const d = pr.data, g = pr.built.group;
-  g.position.set(d.x, world.height(d.x, d.z) - 0.02, d.z); g.rotation.set(0, d.rotY, 0); g.scale.setScalar(d.scale || 1);
+  const ground = d.float ? Math.max(world.height(d.x, d.z), -1.6) : world.height(d.x, d.z) - 0.02; // (float: sits on the water, -1.6 = the scenario sea level)
+  g.position.set(d.x, ground + (d.y || 0), d.z); g.rotation.set(0, d.rotY || 0, 0); g.scale.setScalar(d.scale || 1); // (y: lifted off the ground, e.g. a lantern held up)
 }
 function syncProps() {
   rec.props ||= [];
-  const want = new Set(rec.props.map((p) => p.id));
+  const list = [...rec.props, ...(world ? ringProps() : [])];
+  const want = new Set(list.map((p) => p.id));
   for (const [id, pr] of props) if (!want.has(id)) { scene.remove(pr.built.group); props.delete(id); }
-  for (const d of rec.props) {
+  for (const d of list) {
     let pr = props.get(d.id);
-    if (!pr) { const built = buildProp(d.kind); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built }; props.set(d.id, pr); scene.add(built.group); }
+    if (!pr) { const built = buildProp(d.kind, d.id); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built }; props.set(d.id, pr); scene.add(built.group); }
+    if (d.open != null && pr.built.open != null) pr.built.open = d.open; // (a door: "open": 0 keeps it shut)
     pr.data = d; resolvePlace(d); resolveFace(d); placeProp(pr);
   }
   if (selectedProp && !props.has(selectedProp)) selectedProp = null;
@@ -199,7 +362,7 @@ function removeProp(id) {
 }
 function pickProp() {
   const hits = ray.intersectObjects([...props.values()].map((p) => p.built.group), true);
-  for (const h of hits) { let o = h.object; while (o && o.userData.propId == null) o = o.parent; if (o) return o.userData.propId; }
+  for (const h of hits) { let o = h.object; while (o && o.userData.propId == null) o = o.parent; if (o && !props.get(o.userData.propId)?.data.generated) return o.userData.propId; } // (ring props belong to their directive)
   return null;
 }
 function freeSeat(propId) {
@@ -228,9 +391,11 @@ async function syncActors() {
   let moved = false;
   for (const a of rec.actors) moved = settle(a) || moved;
   if (moved) autosave();
-  const want = new Set(rec.actors.map((a) => a.id));
+  const list = [...rec.actors, ...(world ? travellers().actors : [])];
+  for (const a of list) if (a.generated) resolveCharacter(a);
+  const want = new Set(list.map((a) => a.id));
   for (const [id, o] of actors) if (!want.has(id)) { o.root.removeFromParent(); actors.delete(id); }
-  for (const a of rec.actors) {
+  for (const a of list) {
     const o = actors.get(a.id);
     if (o) { o.data = a; place(o); } else await spawnActor(a);
   }
@@ -239,38 +404,73 @@ async function syncActors() {
   updateRing();
 }
 // directed poses ({ preset, look, leftHand… } in the file) compile to bones once everyone is placed
-function compileDirected() {
-  for (const o of actors.values()) {
+function compileDirected() { for (const o of actors.values()) compileOne(o); }
+function compileOne(o) {
+  {
     const spec = o.data.pose;
-    if (!spec || spec.bones || !(spec.preset || spec.look || spec.leftHand || spec.rightHand)) { o.compiled = null; o.lookCamera = false; continue; }
-    const key = JSON.stringify([spec, o.data.x, o.data.z, o.data.rotY, o.data.seat]);
+    if (!spec || spec.bones || !(spec.preset || spec.look || spec.leftHand || spec.rightHand)) { o.compiled = null; o.lookCamera = false; return; }
+    const camHands = ['leftHand', 'rightHand'].filter((k) => spec[k] === 'camera');
+    const key = JSON.stringify([spec, o.data.x, o.data.z, o.data.rotY, o.data.seat, camHands.length ? camera.position.toArray().map((v) => Math.round(v * 3)) : 0]);
     o.lookCamera = spec.look === 'camera';
-    if (o.compiledKey === key && o.compiled) continue;
+    if (o.compiledKey === key && o.compiled) return;
     o.mixer.stopAllAction(); o.action = null; place(o); o.root.updateWorldMatrix(true, true);
-    const T = (k) => (spec[k] == null || spec[k] === 'camera' ? null : resolvePoint(spec[k])?.toArray() || null);
-    o.compiled = compilePose(o.rig, { preset: spec.preset || (o.data.seat ? 'sit' : 'stand'), hipsDown: spec.hipsDown, look: T('look'), leftHand: T('leftHand'), rightHand: T('rightHand'), leftFoot: T('leftFoot'), rightFoot: T('rightFoot') });
+    const T = (k) => {
+      if (spec[k] == null) return null;
+      if (spec[k] === 'camera') { // a hand held out toward you: at full reach, from the shoulder, straight at the camera
+        if (k === 'look') return null;
+        const side = k === 'leftHand' ? 'Left' : 'Right', B = o.rig.bones, sh = B[`${side}Arm`].getWorldPosition(new THREE.Vector3());
+        const reach = sh.distanceTo(B[`${side}ForeArm`].getWorldPosition(new THREE.Vector3())) + B[`${side}ForeArm`].getWorldPosition(new THREE.Vector3()).distanceTo(B[`${side}Hand`].getWorldPosition(new THREE.Vector3()));
+        // (level-ish and a little low: offering, not waving; the camera is usually at or above the shoulder)
+        const dir = camera.position.clone().sub(sh); dir.y = Math.min(dir.y, 0) - Math.hypot(dir.x, dir.z) * 0.25; dir.normalize();
+        return sh.clone().addScaledVector(dir, reach * 0.9).toArray();
+      }
+      return resolvePoint(spec[k])?.toArray() || null;
+    };
+    const preset = spec.preset || (o.data.seat ? 'sit' : 'stand');
+    if (spec.bow) { applyPose(o.rig, compilePose(o.rig, { preset, hipsDown: spec.hipsDown, bow: spec.bow })); o.root.updateWorldMatrix(true, true); } // (reach from where the bowed shoulder is)
+    // bowed over, a free hand hangs straight down from its shoulder (left to the body it swung round behind the back)
+    const hang = (k) => { if (!spec.bow || spec[k] != null) return T(k); const side = k === 'leftHand' ? 'Left' : 'Right', B = o.rig.bones, sh = B[`${side}Arm`].getWorldPosition(new THREE.Vector3()), fa = B[`${side}ForeArm`].getWorldPosition(new THREE.Vector3()), hd = B[`${side}Hand`].getWorldPosition(new THREE.Vector3()); return sh.clone().add(new THREE.Vector3(0, -(sh.distanceTo(fa) + fa.distanceTo(hd)) * 0.97, 0)).toArray(); };
+    o.compiled = compilePose(o.rig, { preset, bow: spec.bow, hipsDown: spec.hipsDown, look: T('look'), leftHand: hang('leftHand'), rightHand: hang('rightHand'), leftElbow: T('leftElbow'), rightElbow: T('rightElbow'), leftGrip: spec.leftGrip, rightGrip: spec.rightGrip, leftAim: T('leftAim'), rightAim: T('rightAim'), leftPalmDown: spec.leftPalmDown, rightPalmDown: spec.rightPalmDown, leftFoot: T('leftFoot'), rightFoot: T('rightFoot') });
     o.compiledKey = key; o.data.breathe ??= true; o.sitOffset = null; place(o);
   }
 }
 const rawPose = (o) => o.compiled || (o.data.pose?.bones ? o.data.pose : null);
+// hands held out to the camera follow it (re-aimed when it has moved ~30 cm; the IK is cheap)
+function reachCamera() {
+  for (const o of actors.values()) {
+    const sp = o.data.pose; if (!sp || (sp.leftHand !== 'camera' && sp.rightHand !== 'camera' && sp.turn !== 'camera')) continue;
+    const k = JSON.stringify(camera.position.toArray().map((v) => Math.round(v * 3)));
+    if (o.camKey !== k) {
+      o.camKey = k;
+      if (sp.turn === 'camera' && !o.data.seat) o.baseRotY ??= o.data.rotY; // (shots placed relative to him use where he stood, or camera and body chase each other round)
+      if (sp.turn === 'camera' && !o.data.seat) o.data.rotY = Math.atan2(camera.position.x - o.data.x, camera.position.z - o.data.z) + (sp.turnOffset || 0); // (the body turns to you, turnOffset radians off it: the curl reads in silhouette)
+      compileOne(o);
+    }
+  }
+}
 
 // ---------------- load / reload ----------------
+let loadedId = null;
 async function load(fresh = true) {
   rec = await currentScene();
+  if (rec.id !== loadedId) { resolvedDirectives = []; loadedId = rec.id; for (const o of actors.values()) o.root.removeFromParent(); actors.clear(); selected = null; } // (a new scene: fresh actors; reusing them by id carried the last scene's pose, frozen, into this one)
   rec.actors ||= []; rec.props ||= []; rec.shots ||= []; rec.ambience ||= {};
   if (fresh || !library.length) await refreshLibrary();
   renderPoses();
-  const rebuilt = buildTerrain(false);
+  let rebuilt = buildTerrain(false);
   syncProps();
   await syncActors();
+  if (applySceneDirectives()) rebuilt = true;
+  await syncActors(); // (re-seated on the reshaped land; travellers placed along its roads)
   if (fresh || rebuilt) { resetCamera(); stage.drawCard(rec.name || world.name); }
   if (fresh) { stopBeds(); ambienceArmed = false; }
   syncAmbience();
   renderPanel();
 }
-onSceneChange(() => load(false)); // e.g. a character was sent from another tab
+if (!PLAYER) onSceneChange(() => load(false)); // e.g. a character was sent from another tab
 // the scene file changed on disk (edited by hand / by Claude): reload it, unless this tab has unsaved edits
 import.meta.hot?.on('scenes:changed', async ({ file }) => {
+  if (PLAYER) { if (rec && file === `${rec.id}.json`) P.reload(); return; } // (the live view follows edits to its scene)
   if (!rec || file !== `${rec.id}.json` || saveT) { if (file !== `${rec?.id}.json`) renderScenes(); return; }
   const disk = await fetch(`/__scenes/${rec.id}`).then((r) => (r.ok ? r.text() : null)).catch(() => null);
   if (!disk) return;
@@ -332,8 +532,8 @@ function placeCamera(dt) {
   }
   const k = (c) => (keys.has(c) ? 1 : 0);
   const f = k('KeyW') + k('ArrowUp') - k('KeyS') - k('ArrowDown'), s = k('KeyD') + k('ArrowRight') - k('KeyA') - k('ArrowLeft');
-  const u = k('Space') + (rmb || !selected ? k('KeyE') - k('KeyQ') : 0); // Q/E turn a selected character unless you're looking
-  // C toggles a crouch to half the travel height; easing down and back up works standing still too
+  const u = k('Space') - k('KeyC') + (rmb || !selected ? k('KeyE') - k('KeyQ') : 0); // Space up, C down; Q/E turn a selected character unless you're looking
+  // (fly: no crouch; C is "down", see u)
   const crouch = crouchOn ? 1 : 0;
   if (crouch !== cam.crouched) { cam.crouched = crouch; cam.easeH = true; }
   if ((f || s || u) && cam.tween) cam.tween = null;
@@ -402,6 +602,7 @@ function pickActor() {
   let best = null, bd = 0.7;
   const P = new THREE.Vector3(), Q = new THREE.Vector3();
   for (const [id, o] of actors) {
+    if (o.data.generated) continue; // (travellers belong to their directive)
     // the body as it really stands (or sits): feet-level under the hips up to the head, in world space
     o.root.updateWorldMatrix(true, true); // the whole chain: seat -> rocking part -> prop above, bones below (all current)
     const s = o.data.scale, hips = o.rig.bones.Hips.getWorldPosition(new THREE.Vector3()), head = o.rig.bones.Head.getWorldPosition(new THREE.Vector3());
@@ -495,11 +696,11 @@ canvas.addEventListener('dblclick', (e) => {
   flyTo(to, P.clone().add(new THREE.Vector3(0, 0.8, 0)));
 });
 let crouchOn = false;
-const FLY = /^(Key[WASDQE]|Space|Arrow(Up|Down|Left|Right)|Shift(Left|Right)|Alt(Left|Right))$/;
+const FLY = /^(Key[WASDQEC]|Space|Arrow(Up|Down|Left|Right)|Shift(Left|Right)|Alt(Left|Right))$/;
 addEventListener('keydown', (e) => {
   if (e.target.closest?.('input[type=text], input:not([type]), select, textarea')) return; // typing a name
   if (e.target.tagName === 'BUTTON' || e.target.type === 'checkbox' || e.target.type === 'range') e.target.blur(); // keys fly the camera, they don't press panel controls
-  if (e.code === 'KeyC' && !e.repeat) { if (walking) me.crouched = !me.crouched; else crouchOn = !crouchOn; } // crouch on / off
+  if (e.code === 'KeyC' && !e.repeat && walking) me.crouched = !me.crouched; // walk mode: C toggles a crouch (in free fly, holding C goes down, like Space goes up)
   if (FLY.test(e.code)) { keys.add(e.code); if (e.code.startsWith('Arrow') || e.code === 'Space' || e.code.startsWith('Alt')) e.preventDefault(); }
   if (walking) return;
   if (/^Digit[1-5]$/.test(e.code)) { cam.speed = SPEEDS[+e.code.slice(5) - 1]; }
@@ -599,14 +800,31 @@ function turnToward(bone, target, amount, maxAngle) { // rotate a bone (world-sp
   bone.quaternion.copy(parentQ.clone().invert().multiply(delta).multiply(q)).normalize();
   bone.updateMatrixWorld(true);
 }
+// the point between the eyes, as rendered (the eye landmarks ride the head bone)
+function eyeMid(o) {
+  if (o.eyeLm === undefined) { const L = o.root.getObjectByName('lm_leftEye'), R = o.root.getObjectByName('lm_rightEye'); o.eyeLm = L && R ? [L, R] : null; }
+  if (!o.eyeLm) return null;
+  return o.eyeLm[0].getWorldPosition(new THREE.Vector3()).add(o.eyeLm[1].getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+}
+// (the original look, restored: it worked; every later change to it made it worse)
 function updateLook(o, dt) {
   const a = o.data; o.lookW = THREE.MathUtils.clamp((o.lookW || 0) + (a.lookAtMe || o.lookCamera ? dt : -dt) / 0.35, 0, 1);
   if (o.lookW <= 0) { if (o.eyesTouched) { for (const m of eyeMeshes(o)) for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = 0; o.eyesTouched = false; } return; }
   const w = o.lookW * o.lookW * (3 - 2 * o.lookW), neck = o.rig.bones.Neck, head = o.rig.bones.Head;
   o.root.updateWorldMatrix(true, true);
   const eye = camera.position;
-  turnToward(neck, eye, w * 0.35, 0.45); // neck: a third of the turn, up to ~26°
-  turnToward(head, eye, w, 1.0); // head: the rest, up to ~57° more
+  if (a.pose?.bow) { // bowed into a hook: the neck keeps its curl, the head alone cranes round to face you, crown up
+    // (the normal limits can't reach past the hook, and a shortest-arc turn rolled the head onto its side)
+    for (let k = 0; k < 2; k++) {
+      const hp = head.getWorldPosition(new THREE.Vector3()), E = eyeMid(o) || hp;
+      const m = new THREE.Matrix4().lookAt(eye.clone().sub(E).add(hp), hp, new THREE.Vector3(0, 1, 0)); // (aimed from the eyes)
+      const cur = head.getWorldQuaternion(new THREE.Quaternion()).slerp(new THREE.Quaternion().setFromRotationMatrix(m), w);
+      head.quaternion.copy(head.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(cur)).normalize(); head.updateMatrixWorld(true);
+    }
+  } else {
+    turnToward(neck, eye, w * 0.35, 0.45); // neck: a third of the turn, up to ~26°
+    turnToward(head, eye, w, 1.0); // head: the rest, up to ~57° more
+  }
   // eyes: what's left, measured in the head's own frame (+Z forward, +X the character's left, +Y up)
   head.getWorldQuaternion(_lq);
   _lv.copy(eye).sub(head.getWorldPosition(_lf)).applyQuaternion(_lq.invert()).normalize();
@@ -615,6 +833,31 @@ function updateLook(o, dt) {
   const look = { eyeLookLeft: Math.max(0, yaw) / 0.4, eyeLookRight: Math.max(0, -yaw) / 0.4, eyeLookUp: Math.max(0, pitch) / 0.32, eyeLookDown: Math.max(0, -pitch) / 0.32 };
   for (const m of eyeMeshes(o)) for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = Math.min(1, look[k]) * w;
   o.eyesTouched = true;
+}
+
+// ---------------- a face that's alive: a held expression, blinking, muttering, a slow head tilt ----------------
+// pose.face: { mouthSmile, browInnerUp, browUp, browDown, mouthPucker, mouthWide, jawOpen, eyeBlinkLeft, … } (0..1)
+// pose.alive: { blink: true, mutter: 0..1 (lips moving on their own), sway: 0..1 (the head drifting, tilting) }
+// Driven by time alone, so a snapped frame is exactly the moment it was snapped.
+const LIFE = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'browUp', 'browDown', 'browInnerUp'];
+function lifeMeshes(o) { if (!o.lifeM) { o.lifeM = []; o.root.traverse((m) => { if (m.morphTargetDictionary && 'mouthSmile' in m.morphTargetDictionary) o.lifeM.push(m); }); } return o.lifeM; }
+function faceLife(o, t) {
+  const spec = o.data.pose, face = spec?.face, alive = spec?.alive;
+  if (!face && !alive) { if (o.lifeOn) { for (const m of lifeMeshes(o)) for (const k of LIFE) if (k in m.morphTargetDictionary) m.morphTargetInfluences[m.morphTargetDictionary[k]] = 0; o.lifeOn = false; } return; }
+  o.lifeOn = true;
+  const ph = (o.data.id.charCodeAt(0) % 11) * 1.7, w = { ...face };
+  if (alive?.blink !== false) { // a blink every 3-6 s (irregular, from a hash of the beat), ~0.16 s long
+    const beat = 4.2, n = Math.floor((t + ph) / beat), at = n * beat + 1.5 * (((Math.sin(n * 12.9898) * 43758.5453) % 1 + 1) % 1), d = t + ph - at;
+    const b = d > 0 && d < 0.16 ? Math.sin((d / 0.16) * Math.PI) : 0;
+    w.eyeBlinkLeft = Math.max(w.eyeBlinkLeft || 0, b); w.eyeBlinkRight = Math.max(w.eyeBlinkRight || 0, b);
+  }
+  if (alive?.mutter && !speaking.has(o.data.id)) { // lips working over words nobody hears
+    const m = alive.mutter, on = 0.5 + 0.5 * Math.sin(t * 0.7 + ph); // comes and goes
+    w.jawOpen = (w.jawOpen || 0) + m * on * 0.22 * Math.max(0, Math.sin(t * 7.3 + ph) * Math.sin(t * 3.1));
+    w.mouthPucker = (w.mouthPucker || 0) + m * on * 0.35 * Math.max(0, Math.sin(t * 5.2 + 1 + ph));
+  }
+  for (const m of lifeMeshes(o)) for (const k of LIFE) if (k in m.morphTargetDictionary) m.morphTargetInfluences[m.morphTargetDictionary[k]] = Math.min(1, w[k] || 0);
+  if (alive?.sway) { const hd = o.rig.bones.Head, a = alive.sway; hd.rotateZ(Math.sin(t * 0.31 + ph) * 0.12 * a); hd.rotateX(Math.sin(t * 0.23 + ph * 2) * 0.05 * a); hd.rotateY(Math.sin(t * 0.17 + ph) * 0.06 * a); }
 }
 
 // ---------------- voices: 3D audio from the head + lip sync ----------------
@@ -827,6 +1070,20 @@ async function openMenu(e) {
     m.appendChild(item('Add character here', null, lib.length ? list(lib.map((c) => item(c.name, () => addActorAt(c.id, p)))) : list([item('(send one from the Characters tab)')])));
     if (sel && !sel.data.seat) m.appendChild(item(`Move ${sel.data.name.split(' ')[0]} here`, () => { sel.data.x = p.x; sel.data.z = p.z; place(sel); updateRing(); autosave(); }));
     if (selP) m.appendChild(item(`Move the ${PROPS[selP.data.kind].label.toLowerCase()} here`, () => { selP.data.x = p.x; selP.data.z = p.z; placeProp(selP); updateRing(); autosave(); }));
+    // composition (directives, see scenes/README.md) around the selected prop or character
+    const focus = selP ? selP.data : sel ? sel.data : null;
+    if (focus) {
+      const who = selP ? `the ${PROPS[selP.data.kind].label.toLowerCase()}` : sel.data.name.split(' ')[0];
+      const addDir = (d, msg) => { rec.directives ||= []; rec.directives.push({ id: `${d.kind}-${uid().slice(-4)}`, ...d }); applySceneDirectives(); syncActors(); autosave(); renderPanel(); status(msg); };
+      m.appendChild(item(`Around ${who}`, null, list([
+        item('Make every path lead here', () => addDir({ kind: 'converge', toward: focus.id, count: 5 }, `paths now wander in toward ${who}`)),
+        item('Bring stone causeways down to it', () => addDir({ kind: 'causeways', toward: focus.id, count: 7 }, `stone causeways now come down to ${who} from every side`)),
+        item('Clear the ground around it', () => addDir({ kind: 'clearing', around: focus.id, radius: 6 }, `the ground is cleared around ${who}`)),
+        item('Keep it in sight from the spawn', () => addDir({ kind: 'sightline', from: 'spawn', to: focus.id }, `nothing stands between the spawn and ${who}`)),
+        item('Ring it with', null, list(CATEGORIES.map((c) => item(c, null, list(Object.entries(PROPS).filter(([, d]) => d.category === c).map(([k, d]) => item(d.label, () => addDir({ kind: 'ring', prop: k, around: focus.id, radius: 10, count: 8, face: 'in' }, `${who} is ringed with ${d.label.toLowerCase()}s`)))))))),
+        ...((rec.directives || []).some((d) => [d.toward, d.around, d.to].includes(focus.id)) ? [item('Undo its directives', () => { rec.directives = rec.directives.filter((d) => ![d.toward, d.around, d.to].includes(focus.id)); applySceneDirectives(); syncActors(); autosave(); renderPanel(); status(`${who} no longer shapes the place`); })] : []),
+      ])));
+    }
     m.appendChild(item('Fly here', () => { const dir = p.clone().sub(cam.pos); dir.y = 0; dir.normalize(); const to = p.clone().addScaledVector(dir, -9); to.y = Math.max(p.y + 3.5, world.height(to.x, to.z) + 1); flyTo(to, p.clone().add(new THREE.Vector3(0, 0.8, 0))); }));
   } else m.appendChild(item('(point at the ground)'));
   document.body.appendChild(m); menuEl = m;
@@ -1176,16 +1433,20 @@ $('#importInput').onchange = async (e) => {
 // ---------------- loop ----------------
 let last = performance.now();
 function frame(now) {
+  if (PLAYER) { playerFrame(now); return; }
   const t = now / 1000, dt = Math.min(0.1, (now - last) / 1000); last = now;
   placeCamera(dt);
   for (const pr of props.values()) pr.built.update?.(t);
   for (const o of actors.values()) {
     const rp = rawPose(o);
-    if (!rp) { o.mixer.update(dt); continue; }
+    if (!rp) { if (!o.action) setAnim(o, o.data.anim); o.mixer.update(dt); continue; } // (no pose: always an animation playing, it resets the bones every frame)
     if (o.tween) { o.tween.t = Math.min(1, o.tween.t + dt / 0.35); const k = o.tween.t * o.tween.t * (3 - 2 * o.tween.t); applyPose(o.rig, lerpPose(o.tween.from, rp, k)); if (o.tween.t >= 1) o.tween = null; }
     else applyPose(o.rig, rp);
     if (o.data.breathe && !(hdrag && hdrag.o === o)) breathe(o.rig, t, (o.data.id.charCodeAt(0) % 7) * 0.9); // each breathes on its own rhythm
+    if (!(hdrag && hdrag.o === o)) { faceLife(o, t); leanIn(o); }
   }
+  reachCamera();
+  followers();
   for (const o of actors.values()) updateLook(o, dt);
   updateVoices(dt);
   updateCaptions();
@@ -1257,7 +1518,7 @@ function goShot(sh) { if (walking) $('#walkMode').click(); const p = resolvePoin
 
 // ---------------- the top bar ----------------
 const press = (id) => () => $(id).click();
-menubar([
+if (!PLAYER) menubar([
   { label: 'Scene', items: [
     { label: 'New scene', action: press('#newScene') },
     { label: 'Save scene', key: '⌘S', action: press('#save') },
@@ -1286,5 +1547,77 @@ addEventListener('keydown', (e) => { // ⌘S / Ctrl+S save, with Shift: save as 
 });
 
 window.__editor = { goShot, resolvePoint, refreshLibrary, get library() { return library; }, openFinder, startRec, stopRec, alignScript, loadCaptions, speaking, speak, playScene, renderActorBox, THREE, pickActor, pickProp, setRay, __ray: () => ray, handles, get selected() { return selected; }, get selectedProp() { return selectedProp; }, get rec() { return rec; }, actors, props, spawnProp, seatActor, selectProp, openMenu, get picking() { return picking; }, select, addActor, load, camera, cam, stage, poseFromImage, setPose, get world() { return world; }, set editPose(v) { editPose = v; } };
-await load(true);
+// ---------------- player mode ----------------
+// P.frozen: the time the scene is stopped at (null: live). Frozen or paused, nothing renders at all: one frame
+// is drawn when it's asked for and the loop stops. Live, it renders at most 30 times a second.
+const P = { outW: 540, frozen: null, paused: true, looping: false, lastT: 0, lastRender: 0, shot: null, onFrame: null, id: null };
+function applyShot() {
+  const sh = P.shot; if (!sh) return;
+  const p = resolvePoint(sh.pos), t = resolvePoint(sh.look);
+  if (p && t) { camera.position.copy(p); camera.lookAt(t); }
+}
+function playerStep(t, dt) {
+  for (const pr of props.values()) pr.built.update?.(t);
+  for (const o of actors.values()) {
+    const rp = rawPose(o);
+    if (!rp) { if (!o.action) setAnim(o, o.data.anim); o.mixer.setTime ? o.mixer.setTime(t) : o.mixer.update(dt); continue; }
+    applyPose(o.rig, rp);
+    if (o.data.breathe) breathe(o.rig, t, (o.data.id.charCodeAt(0) % 7) * 0.9);
+    faceLife(o, t);
+  }
+  applyShot();
+  for (const o of actors.values()) leanIn(o);
+  reachCamera();
+  followers();
+  for (const o of actors.values()) updateLook(o, 1); // (a whole step: a frozen frame is fully settled)
+  world.update?.(t, camera.position);
+  stage.render(t, { card: false });
+  P.lastT = t;
+  P.onFrame?.(t);
+}
+function playerFrame(now) {
+  if (P.paused || P.frozen != null || !world) { P.looping = false; return; }
+  if (now - P.lastRender >= 33 || P.onFrame) { const t = now / 1000; playerStep(t, Math.min(0.1, (now - P.lastRender) / 1000)); P.lastRender = now; }
+  requestAnimationFrame(frame);
+}
+const kick = () => { if (!P.looping && !P.paused && P.frozen == null) { P.looping = true; requestAnimationFrame(frame); } };
+async function playerLoad(id) {
+  const r = await fetch(`/__scenes/${id}`); if (!r.ok) throw new Error(`no scene ${id}`);
+  rec = await r.json(); rec.actors ||= []; rec.props ||= []; rec.shots ||= [];
+  if (rec.id !== loadedId) { resolvedDirectives = []; loadedId = rec.id; for (const o of actors.values()) o.root.removeFromParent(); actors.clear(); selected = null; } // (a new scene: fresh actors; reusing them by id carried the last scene's pose, frozen, into this one)
+  if (!library.length) await refreshLibrary();
+  buildTerrain(false); syncProps(); await syncActors();
+  applySceneDirectives(); await syncActors();
+  P.id = id;
+}
+const shotOf = (i) => (typeof i === 'number' ? rec.shots[i] : rec.shots.find((x) => x.name === i)) || rec.shots[0] || { pos: 'spawn', look: { at: 'spawn', offset: [0, 0, -5] } };
+window.__player = {
+  // show a scene's shot; frozen: a time to stop at (null = live). Resolves once it's drawn.
+  async show(id, shot, { frozen = null, outW = 540 } = {}) {
+    P.outW = outW;
+    if (P.id !== id) await playerLoad(id);
+    else if (terrainKey) { const p = terrainParams(); stage.setRes(p.res, true, P.outW); }
+    P.shot = shotOf(shot); P.frozen = frozen;
+    playerStep(frozen ?? performance.now() / 1000, 0.016);
+    P.paused = false; kick();
+  },
+  pause(v = true) { P.paused = v; if (!v) kick(); },
+  freeze() { P.frozen = P.lastT; playerStep(P.lastT, 0); return P.lastT; }, // stop time at the frame on screen
+  live() { P.frozen = null; kick(); },
+  // this frame at full size (1080 wide) as a JPEG; the time stays where it is
+  capture(q = 0.9) {
+    const p = terrainParams(), was = P.outW; stage.setRes(p.res, true, 1080); playerStep(P.frozen ?? P.lastT, 0);
+    const url = canvas.toDataURL('image/jpeg', q); stage.setRes(p.res, true, was); playerStep(P.frozen ?? P.lastT, 0); return url;
+  },
+  setOutW(w) { P.outW = w; if (world) { stage.setRes(terrainParams().res, true, w); playerStep(P.frozen ?? P.lastT, 0); } },
+  set onFrame(fn) { P.onFrame = fn; },
+  // (scripts / tests: any shot object, frozen at time t)
+  showShotObject(sh, t) { P.shot = sh; P.frozen = t; playerStep(t, 0); },
+  get canvas() { return canvas; },
+  get shots() { return rec ? rec.shots.map((s) => s.name) : []; },
+};
+P.reload = async () => { const id = P.id; P.id = null; if (id) await window.__player.show(id, P.shot?.name, { frozen: P.frozen, outW: P.outW }); };
+
+if (!PLAYER) await load(true);
+else window.parent?.postMessage({ type: 'player-ready' }, location.origin);
 requestAnimationFrame(frame);

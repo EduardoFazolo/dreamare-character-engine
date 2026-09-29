@@ -60,6 +60,40 @@ export function terrainFn(seed, B, sa) {
 // how much each neighbour owns a point: 0 inside the region, rising toward (and past) the shared edge
 export const edgeWeight = (x, z, u) => smooth(45, 135, x * u[0] + z * u[1]);
 
+// ---------- directives: composition rules a scene imposes on the generator ----------
+// Resolved by the editor to world points (x, z):
+//   converge  { at, count, from?, surface: 'stone' | 'trodden' }: roads that start out at the edge of the land
+//             (count of them, spread around it) and all wander in toward `at`, as if every road led there;
+//             stone: laid cobbles with kerbs (default), trodden: just a worn line in the grass
+//   clearing  { at, radius }: the ground flattens there and nothing grows or stands in it
+//   sightline { from, to }: nothing stands between the two (you can always see the thing)
+//   causeways { at, count, heights: [min, max] }: stone walkways from every direction and height, stepping
+//             down in flights of stairs to `at` (built in generate)
+// Returns the extra paths; clearings and sightlines are marked as taken ground in `placed`.
+function applyDirectives(D, placed, seed) {
+  const paths = [];
+  let stone = false;
+  D.forEach((d, n) => {
+    if (d.kind === 'converge' && d.at) {
+      if ((d.surface ?? 'stone') === 'stone') stone = true;
+      const r = rng(seed * 31 + 7 + n * 101), count = Math.max(1, Math.min(12, d.count ?? 4)), a0 = r() * Math.PI * 2, R = d.from ?? 115;
+      for (let k = 0; k < count; k++) {
+        const a = a0 + (k / count) * Math.PI * 2 + (r() - 0.5) * (Math.PI / count), sx = Math.cos(a) * R, sz = Math.sin(a) * R;
+        const dx = d.at[0] - sx, dz = d.at[1] - sz, L = Math.hypot(dx, dz), m = Math.ceil(L / 2), px = -dz / L, pz = dx / L, wob = 3 + r() * 7, ph = r() * 6, bends = 1 + r() * 1.5;
+        const pts = [];
+        for (let i = 0; i <= m; i++) { const t = i / m, side = Math.sin(t * Math.PI * bends + ph) * wob * Math.sin(t * Math.PI); if (L * (1 - t) < 2.5) break; pts.push([sx + dx * t + px * side, sz + dz * t + pz * side]); }
+        if (pts.length > 1) paths.push(pts);
+      }
+    }
+    if (d.kind === 'clearing' && d.at) placed.push([d.at[0], d.at[1], d.radius ?? 5]);
+    if (d.kind === 'sightline' && d.from && d.to) {
+      const L = Math.hypot(d.to[0] - d.from[0], d.to[1] - d.from[1]);
+      for (let s = 0; s <= L; s += 3) { const t = s / L; placed.push([d.from[0] + (d.to[0] - d.from[0]) * t, d.from[1] + (d.to[1] - d.from[1]) * t, 2.5]); }
+    }
+  });
+  return { paths, stone };
+}
+
 // ---------- the scenario ----------
 export function generate(p) {
   const B = p.biome || { ...VILLAGE, duneHeight: p.duneHeight }, NB = (p.neighbors || []).filter((n) => n?.biome);
@@ -71,7 +105,15 @@ export function generate(p) {
   const localH = terrainFn(p.seed, B, sa);
   const nbH = NB.map((n) => terrainFn(p.seed, n.biome, Math.atan2(n.u[1], n.u[0])));
   const weights = (x, z) => { const w = NB.map((n) => edgeWeight(x, z, n.u)); const t = 1 + w.reduce((a, b) => a + b, 0); return [1 / t, ...w.map((v) => v / t)]; };
-  const height = NB.length ? (x, z) => { const w = weights(x, z); let y = w[0] * localH(x, z); for (let i = 0; i < NB.length; i++) y += w[i + 1] * nbH[i](x, z); return y; } : localH;
+  const heightRaw = NB.length ? (x, z) => { const w = weights(x, z); let y = w[0] * localH(x, z); for (let i = 0; i < NB.length; i++) y += w[i + 1] * nbH[i](x, z); return y; } : localH;
+  // directives (composition rules from the scene, resolved to world points by the editor): see applyDirectives.
+  // Without any, nothing below changes (the village stays exact).
+  const D = p.directives || [];
+  const clearings = D.filter((d) => d.kind === 'clearing' && d.at);
+  const height = !clearings.length ? heightRaw : (() => { // the ground settles flat around each clearing's centre
+    const levels = clearings.map((d) => heightRaw(d.at[0], d.at[1]));
+    return (x, z) => { let y = heightRaw(x, z); clearings.forEach((d, i) => { const k = 1 - smooth(d.radius * 0.8, d.radius * 1.8, Math.hypot(x - d.at[0], z - d.at[1])); y += (levels[i] - y) * k; }); return y; };
+  })();
 
   // light: low sun from the sea side, a pale overhead moon at night
   const sunA = sa + 0.9;
@@ -148,15 +190,19 @@ export function generate(p) {
       path.push([home[0] * t + px * side, home[1] * t + pz * side]);
     }
   }
-  const pathDist = !B.path ? () => 1e9 : (x, z) => {
+  const segDist = (pts) => (x, z) => {
     let best = 1e9;
-    for (let i = 0; i + 1 < path.length; i++) {
-      const [ax, az] = path[i], [bx, bz] = path[i + 1], dx = bx - ax, dz = bz - az;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, az] = pts[i], [bx, bz] = pts[i + 1], dx = bx - ax, dz = bz - az;
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
       best = Math.min(best, Math.hypot(x - ax - dx * t, z - az - dz * t));
     }
     return best;
   };
+  const basePathDist = !B.path ? () => 1e9 : segDist(path);
+  const extra = applyDirectives(D, placed, p.seed);
+  const extraDist = extra.paths.map(segDist);
+  const pathDist = !extraDist.length ? basePathDist : (x, z) => { let d = basePathDist(x, z); for (const f of extraDist) d = Math.min(d, f(x, z)); return d; };
   const near = (x, z, gap) => placed.some(([px, pz, pr]) => Math.hypot(px - x, pz - z) < pr + gap);
   const spot = (minR, maxR, gap, offPath = 3) => {
     for (let k = 0; k < 80; k++) {
@@ -390,6 +436,117 @@ export function generate(p) {
     }
   }
 
+  // ---- causeways: stone walkways converging on a point from every direction and height (Gunz's stairways).
+  // Each starts broken off in the air far out, at its own height, runs level, then steps down in flights of
+  // stairs, level again, down again... until it lands at the target. Parapets on both sides, square piers
+  // down into the ground every few metres. Pale block stone; the fog swallows the far ends. ----
+  const causeways = D.filter((d) => d.kind === 'causeways' && d.at);
+  if (causeways.length) {
+    const cr = rng(p.seed * 41 + 17);
+    const stoneTex = canvasTex(64, 64, (g, w, h) => {
+      blotch(g, w, h, [196, 194, 186], 40, 22, cr, 4);
+      g.fillStyle = 'rgba(60,58,54,.55)';
+      for (let y = 0; y < h; y += 16) { g.fillRect(0, y, w, 1); for (let x = ((y / 16) % 2) * 16; x < w; x += 32) g.fillRect(x, y, 1, 16); } // blocks
+      for (let i = 0; i < 18; i++) { g.fillStyle = `rgba(${70 + cr() * 30 | 0},${90 + cr() * 30 | 0},60,.3)`; g.fillRect(cr() * w | 0, cr() * h | 0, 3 + cr() * 8 | 0, 1 + cr() * 3 | 0); } // moss, stains
+    });
+    const stone = oldMaterial({ map: stoneTex }), parts = [];
+    const box = (len, hgt, wid, cx, cy, cz, yaw) => { const g = tileUV(boxG(wid, hgt, len, 0, 0, 0), Math.max(1, wid / 2), Math.max(1, len / 2)); g.rotateY(yaw); g.translate(cx, cy, cz); parts.push(g); };
+    for (const d of causeways) {
+      const count = Math.max(1, Math.min(14, d.count ?? 6)), a0 = cr() * Math.PI * 2, [hMin, hMax] = d.heights || [5, 32];
+      for (let k = 0; k < count; k++) {
+        let a = a0 + (k / count) * Math.PI * 2 + (cr() - 0.5) * (Math.PI / count);
+        // (not from the spawn's side: the thing stays in view from where you arrive)
+        const toSpawn = Math.atan2(-d.at[1], -d.at[0]); let da = Math.atan2(Math.sin(a - toSpawn), Math.cos(a - toSpawn));
+        if (Math.abs(da) < 0.5) a = toSpawn + Math.sign(da || 1) * 0.5;
+        const R = 45 + cr() * 55, land = d.land ?? 8; // they land in a ring round it, not on top of it
+        const S = [d.at[0] + Math.cos(a) * R, d.at[1] + Math.sin(a) * R], E = [d.at[0] + Math.cos(a) * land, d.at[1] + Math.sin(a) * land];
+        // plan: one soft bend (a quadratic through a side-shifted middle)
+        const side = (cr() - 0.5) * R * 0.5, px = -Math.sin(a), pz = Math.cos(a), M = [(S[0] + E[0]) / 2 + px * side, (S[1] + E[1]) / 2 + pz * side];
+        const at = (t) => [(1 - t) * (1 - t) * S[0] + 2 * (1 - t) * t * M[0] + t * t * E[0], (1 - t) * (1 - t) * S[1] + 2 * (1 - t) * t * M[1] + t * t * E[1]];
+        const N = 400, pts = [...Array(N + 1).keys()].map((i) => at(i / N)), cum = [0];
+        for (let i = 1; i <= N; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+        const L = cum[N], hE = height(...E) + 0.25;
+        let h0 = height(...S) + hMin + cr() * (hMax - hMin);
+        const RISE = 0.62; // stairs: rise per metre run
+        if ((h0 - hE) / RISE > L * 0.7) h0 = hE + L * 0.7 * RISE;
+        // the profile: flights spread along the way, level stretches between
+        const nf = 2 + Math.floor(cr() * 3), drop = h0 - hE, runs = [];
+        let rest = L - drop / RISE; const gaps = [...Array(nf + 1)].map(() => 0.3 + cr()), gs = gaps.reduce((x, y) => x + y, 0);
+        let sAt = 0; const shares = [...Array(nf)].map(() => 0.5 + cr()), ss = shares.reduce((x, y) => x + y, 0);
+        for (let f = 0; f < nf; f++) { sAt += (gaps[f] / gs) * rest; const len = (shares[f] / ss) * drop / RISE; runs.push([sAt, sAt + len, (shares[f] / ss) * drop]); sAt += len; }
+        const hAt = (sd) => { let hh = h0; for (const [s0, s1, dd] of runs) { if (sd >= s1) hh -= dd; else if (sd > s0) { hh -= dd * (sd - s0) / (s1 - s0); break; } else break; } return hh; };
+        const inFlight = (sd) => runs.some(([s0, s1]) => sd > s0 && sd < s1);
+        const posAt = (sd) => { let i = 1; while (i < N && cum[i] < sd) i++; const t = (sd - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1); return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t, Math.atan2(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])]; };
+        const W2 = 2.2 + cr() * 0.8, broken = 2 + cr() * 5;
+        // deck: level pieces 1.5 m, stair steps 0.3 m (each step a block from its tread down to the slab's underside)
+        for (let sd = 0; sd < L; ) {
+          const flight = inFlight(sd + 0.01), step = flight ? 0.32 : 1.5, mid = sd + step / 2, [x, z, yaw] = posAt(mid);
+          if (sd < broken && cr() < 0.6 * (1 - sd / broken)) { sd += step; continue; } // the far end, crumbled off in the air
+          const top = flight ? hAt(sd + step) : hAt(mid), thick = flight ? 0.7 : 0.55;
+          box(step + 0.02, thick, W2, x, top - thick / 2, z, yaw);
+          for (const sgn of [-1, 1]) { // parapets
+            const ox = Math.cos(yaw) * sgn * (W2 / 2 - 0.12), oz = -Math.sin(yaw) * sgn * (W2 / 2 - 0.12);
+            if (cr() < 0.93) box(step + 0.02, 0.6, 0.24, x + ox, top + 0.3, z + oz, yaw);
+          }
+          sd += step;
+        }
+        // piers: every ~8 m, from below the ground up to the deck's underside (none where it's nearly on the ground)
+        for (let sd = broken + 3 + cr() * 3; sd < L - 4; sd += 7 + cr() * 3) {
+          const [x, z, yaw] = posAt(sd), top = hAt(sd) - 0.6, gy = height(x, z);
+          if (top - gy < 1.5) continue;
+          box(1.3, top - gy + 1, 1.3, x, (top + gy - 1) / 2, z, yaw);
+          placed.push([x, z, 1.4]); shadows.push([x, z, 1.4]);
+        }
+      }
+    }
+    const cw = new THREE.Mesh(mergeGeometries(parts.map((g) => (g.index ? g.toNonIndexed() : g))), stone); cw.name = 'causeways'; group.add(cw);
+  }
+
+  // ---- stone roads (converge, surface 'stone', the default): a cobbled ribbon laid on the ground along each
+  // converging path, kerb stones down both edges; stones missing here and there, the road crumbling out at
+  // the edge of the land and whole where it arrives ----
+  if (extra.paths.length && extra.stone) {
+    const sr = rng(p.seed * 13 + 3);
+    const cobble = canvasTex(64, 64, (g, w, h) => {
+      g.fillStyle = '#141210'; g.fillRect(0, 0, w, h); // grout
+      for (let row = 0; row < 8; row++) for (let col = -1; col < 8; col++) {
+        const x = col * 8 + (row % 2) * 4 + (sr() - 0.5) * 2, y = row * 8 + (sr() - 0.5) * 2, v = 62 + sr() * 58; // (dark, wet-looking setts: they must read against any ground)
+        g.fillStyle = css([v * 1.08, v, v * 0.88]); g.beginPath(); g.ellipse(x + 4, y + 4, 3.4 + sr() * 0.6, 3.2 + sr() * 0.6, sr(), 0, 7); g.fill();
+        g.fillStyle = 'rgba(255,240,220,.22)'; g.fillRect(x + 2, y + 2, 3, 1); // worn, catching the light
+        if (sr() < 0.12) { g.fillStyle = 'rgba(70,90,50,.45)'; g.fillRect(x + 1, y + 6, 6, 2); } // moss in the joints
+      }
+    });
+    const kerbTex = canvasTex(16, 16, (g, w, h) => blotch(g, w, h, [150, 146, 138], 50, 30, sr, 3));
+    const roadMat = oldMaterial({ map: cobble }), kerbMat = oldMaterial({ map: kerbTex });
+    const RW = 2.4, COLS = 4, pos = [], uv = [], idx = [], kerbs = [];
+    for (const pts of extra.paths) {
+      const n = pts.length, base = pos.length / 3; let dist = 0;
+      for (let i = 0; i < n; i++) {
+        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)], tl = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / tl, nz = (b[0] - a[0]) / tl;
+        if (i) dist += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+        for (let c = 0; c <= COLS; c++) {
+          const o = (c / COLS - 0.5) * RW, x = pts[i][0] + nx * o, z = pts[i][1] + nz * o;
+          pos.push(x, height(x, z) + 0.06, z); uv.push((c / COLS) * (RW / 2.4), dist / 2.4);
+        }
+        // kerb stones every ~1.1 m, both sides, now and then one gone or knocked askew
+        if (i % 1 === 0 && sr() < 0.85) for (const side of [-1, 1]) {
+          if (sr() < 0.12) continue;
+          const o = side * (RW / 2 + 0.12), x = pts[i][0] + nx * o, z = pts[i][1] + nz * o, g = boxG(0.28, 0.22, 0.95, 0, 0, 0);
+          g.rotateY(Math.atan2(b[0] - a[0], b[1] - a[1]) + (sr() - 0.5) * 0.3 * (1 + W)); g.rotateZ((sr() - 0.5) * 0.25); g.translate(x, height(x, z) + 0.06, z); kerbs.push(g);
+        }
+      }
+      for (let i = 0; i + 1 < n; i++) for (let c = 0; c < COLS; c++) {
+        const t = i / (n - 1); // crumbling toward the outer end (t = 0), whole near the arrival
+        if (sr() < 0.5 * (1 - smooth(0, 0.35, t)) + 0.03) continue;
+        const a = base + i * (COLS + 1) + c, b2 = a + COLS + 1;
+        idx.push(a, a + 1, b2, a + 1, b2 + 1, b2); // (wound to face up)
+      }
+    }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals();
+    const road = new THREE.Mesh(geo, roadMat); road.name = 'roads'; group.add(road);
+    if (kerbs.length) { const k = new THREE.Mesh(mergeGeometries(kerbs.map((g) => g.index ? g.toNonIndexed() : g)), kerbMat); k.name = 'kerbs'; group.add(k); }
+  }
+
   // ---- added features: each has its own random stream, so the original sequence above never shifts ----
   const shadows2 = []; // shadows of added things (applied after the original ones)
   const extras = addFeatures({ p, B, NB, weights, height, pathDist, path, home, near, placed, solids, shadows2, group, put, makeHouse, M, T, lit, tr: rng(p.seed + 991), anyWater, toSea });
@@ -407,6 +564,10 @@ export function generate(p) {
       c.lerp(q.copy(sand), smooth(SEA_Y + 2.5, SEA_Y + 1, y)).lerp(wet, smooth(SEA_Y + 0.8, SEA_Y, y)); // beach -> wet edge
       if (extras.fieldAt) { const f = extras.fieldAt(x, z); if (f) c.lerp(q.copy(dirt).lerp(grassB, f.row), f.k * 0.8); } // ploughed rows
       c.lerp(dirt, (1 - smooth(0.6, 2.2, pathDist(x, z))) * 0.85); // the path
+      if (extraDist.length) { // converging paths: trodden paler than any biome's dirt, so they show even where dirt ~ grass
+        let d = 1e9; for (const f of extraDist) d = Math.min(d, f(x, z));
+        c.lerp(q.copy(dirt).lerp(sand, 0.6).multiplyScalar(1.4), (1 - smooth(0.9, 3.2, d)) * 0.9);
+      }
     };
     for (let i = 0; i < pa.count; i++) {
       const x = pa.getX(i), z = pa.getZ(i), y = height(x, z); pa.setY(i, y);
@@ -492,5 +653,5 @@ export function generate(p) {
       const k = stutter ? inK * 0.3 : inK; inside.uniforms.color.value.setRGB(k, k * 0.96, k * 0.85);
     }
   };
-  return { group, height, floor, walkable, solids, spawn: new THREE.Vector3(0, height(0, 0) + 1.7, 0), palette: pal, homeYaw, update, biome: B };
+  return { group, height, floor, walkable, solids, spawn: new THREE.Vector3(0, height(0, 0) + 1.7, 0), palette: pal, homeYaw, update, biome: B, roads: extra.paths }; // (roads: the converging paths, for directives placing things along them)
 }

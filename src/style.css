@@ -196,3 +196,15 @@ body.has-menubar { padding-top: 30px; }
 .partrow { padding: 4px 6px; cursor: pointer; font: 13px Georgia, serif; }
 .partrow.on { background: #2a2433; color: var(--accent); }
 .row input[type=color] { grid-column: span 2; height: 22px; background: none; border: 1px solid var(--line); padding: 0; }
+
+/* editor.html?player: the Slides tab's live view of a scene, nothing but the picture */
+body.player { margin: 0; padding: 0 !important; overflow: hidden; background: #000; }
+body.player #panel, body.player .sidepanel, body.player #status, body.player #captions, body.player .menubar { display: none !important; }
+body.player #view { position: fixed; inset: 0; width: 100vw !important; height: 100vh !important; aspect-ratio: auto; object-fit: contain; cursor: default; }
+/* slides: a live scene plays under the text layer */
+.slidemain { position: relative; }
+.slidemain .slideplayer { position: absolute; inset: 0; width: 100%; aspect-ratio: 9 / 16; border: 0; visibility: hidden; background: #000; }
+.slidemain.live .slideplayer { visibility: visible; }
+.slidemain.live #slideView { position: relative; background: transparent; pointer-events: none; }
+.sceneshots details { margin: 4px 0; } .sceneshots summary { cursor: pointer; color: var(--muted); }
+.shotbtn { display: block; width: 100%; text-align: left; margin: 3px 0; font-size: 12px; }

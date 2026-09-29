@@ -61,7 +61,7 @@ export async function writeScene(s) {
 export async function removeScene(id) { if (!(await sceneFiles())) return del('scenes', id); await fetch(`/__scenes/${id}`, { method: 'DELETE' }); }
 export async function freeSceneId(name) { const taken = new Set((await listScenes()).map((s) => s.id)); const base = slugify(name); let id = base, n = 2; while (taken.has(id)) id = `${base}-${n++}`; return id; }
 
-export function emptyScene(name = 'Untitled scene', id = uid()) { const now = Date.now(); return { id, name, terrain: null, actors: [], props: [], shots: [], ambience: {}, created: now, updated: now }; }
+export function emptyScene(name = 'Untitled scene', id = uid()) { const now = Date.now(); return { id, name, terrain: null, actors: [], props: [], directives: [], shots: [], ambience: {}, created: now, updated: now }; }
 // scenes saved in this browser before scenes became files: written out once
 async function migrate() {
   if (localStorage.getItem('dreamare.scenesMigrated')) return;

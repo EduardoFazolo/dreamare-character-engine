@@ -8,7 +8,7 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
 {
   "id": "the-waiting-field",            // = the file name
   "name": "The Waiting Field",          // title card, finder
-  "terrain": { "seed": 4242, "biome": { … }, "time": 0.55, "haze": 0.62, "wrongness": 0.2, "name": "Gumboworth Heath", … },
+  "terrain": { "kind": "emptymemories", "seed": 4242, "biome": { … }, "time": 0.55, "haze": 0.62, "wrongness": 0.2, "name": "Gumboworth Heath", … },
   "ambience": { "night-field-dogs": 0.7, "power-lines": 0.2 },   // ids from public/ambience
   "props": [
     { "id": "rocking-chair", "kind": "rockingChair", "place": { "from": "spawn", "right": -1.5, "forward": 6 }, "face": "spawn" }
@@ -22,13 +22,14 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
       "pose": { "preset": "crouch", "look": "reginald", "rightHand": { "at": "rocking-chair", "offset": [0, 0.1, 0] } },
       "voice": { "src": "asset:/assets/remember2.wav", "name": "remember2.wav", "loop": false, "autoplay": true } }
   ],
+  "directives": [ { "id": "roads", "kind": "converge", "toward": "rocking-chair", "count": 5 } ],
   "shots": [ { "name": "close on the chair", "pos": { "at": "rocking-chair", "offset": [2.2, 1.2, 2.4] }, "look": "rocking-chair" } ]
 }
 ```
 
 ## References
 
-- **point:** `[x, y, z]`, `[x, z]` (on the ground), `"spawn"`, `"camera"`, an actor or prop id or name (a character's head, a prop's middle), or `{ "at": <point>, "offset": [x, y, z] }`.
+- **point:** `{ "behind": A, "toward": B, "back": m, "up": m, "side": m }` (over A's shoulder, looking at B), `[x, y, z]`, `[x, z]` (on the ground), `"spawn"`, `"camera"`, an actor or prop id or name (a character's head, a prop's middle), or `{ "at": <point>, "offset": [x, y, z] }`.
 - **place:** `{ "from": "spawn" | "<id>", "right": m, "forward": m }`, relative to that thing's own facing. It sets x / z. Dragging the thing in the editor replaces it with plain `x` / `z`.
 - **face:** `"spawn"`, `"camera"`, an id, or `[x, z]`. It sets `rotY`.
 - Plain numbers work anywhere: `"x"`, `"z"`, `"rotY"` (radians), `"scale"`.
@@ -38,9 +39,51 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
 - **Directed:** `{ "preset": …, "look": <point> | "camera", "leftHand" / "rightHand" / "leftFoot" / "rightFoot": <point>, "hipsDown": m }`.
   - Presets: `stand`, `sit`, `crouch`, `kneel`, `arms-up`, `reach`, `t-pose`. A seated actor defaults to `sit`.
   - Hands and feet reach with two-bone IK and stop at full reach. `"look": "camera"` follows the camera live (like *Look at me*).
+- **Face and life** (with any pose):
+  - `"face"`: a held expression, 0..1 per face shape: `mouthSmile`, `browInnerUp`, `browUp`, `browDown`, `mouthPucker`, `mouthWide`, `jawOpen`, `eyeBlinkLeft` / `eyeBlinkRight`.
+  - `"alive"`: `{ "blink": true, "mutter": 0..1, "sway": 0..1 }` means blinking every few seconds, lips working over words nobody hears, and the head drifting and tilting.
+
+  Both are driven by time alone, so a snapped slide freezes the exact moment.
+- **Reaching and leaning:** `"rightHand": "camera"` (or left) holds the hand out toward the camera, low, like an offering; it follows the camera. `"lean": 0..1` bends the spine toward it. `"bow": radians` (about 1 = deeply stooped) curls the back forward down the spine; the head cranes up further to keep looking at the camera, and a camera hand reaches from the bowed shoulder.
+- **Arms and hands:**
+  - `"rightElbow"` / `"leftElbow"` (a point) bends the elbow toward it before the hand reaches.
+  - `"rightAim"` / `"leftAim"` (a point) bends the wrist so the fingers point at it.
+  - `"rightGrip"` / `"leftGrip"` sets the fingers: `"fist"`, `"point"` (the index out), `"claw"`, or `"hook"` (long fingers hooked round a handle).
+  - Points can be body-relative: `{ "rel": "<id>", "right", "forward", "up" }`.
+- **Following:** a prop with `"hold": { "actor", "hand", "offset" }` hangs from that hand. An actor with `"inside": "<prop id>"`, `"offset"` and a small `"scale"` sits inside that prop, e.g. a tiny person curled in a lantern; that lantern's flame goes out. `"face": "camera"` turns them to you. Lantern glass is dithered see-through.
 - **No pose:** the actor plays its clip (`"anim": "Idle" | "Talk" | "Walk" | "Pose"`).
 - **Hand-edited poses** are stored as `{ "bones": { … }, "hips": [ … ] }` (per-bone rotations).
 
 ## Props
 
-`kind` is one of `rockingChair`, `chair`, `bench`, `table`, `phoneBooth`, `lamp`, `busStop`, `mailbox`, `deadTree`, `rock`, `mushroom`, `tv`, `doorway`, `swing`. Seats: rocking chair 1, chair 1, bench 3, bus stop 3, swing 1.
+`kind` is one of `rockingChair`, `chair`, `bench`, `table`, `phoneBooth`, `lamp`, `lantern`, `lanternPost`, `lanternTree`, `busStop`, `mailbox`, `deadTree`, `rock`, `mushroom`, `tv`, `doorway`, `swing`. Seats: rocking chair 1, chair 1, bench 3, bus stop 3, swing 1.
+
+## Kinds
+
+`terrain.kind` picks the generator that builds the land (`src/scenario/kinds.js`):
+- **`emptymemories`** (the default): the original generator. Overcast dunes dissolve into fog, a worn path leads to a lone house, and there are poles, a bus stop, a booth and a pier. Biomes change the ingredients, and the VILLAGE biome is exact.
+
+More kinds plug in beside it.
+
+## Directives
+
+Composition rules: the scene's own things organise the place. They're applied on every load, after the scene's props are placed. A scene without directives is exactly what the kind generates.
+
+| kind | fields | what happens |
+|---|---|---|
+| `converge` | `toward`, `count` (4), `surface` ("stone" \| "trodden") | that many roads start at the edge of the land, spread around it, and all wander in toward the thing; stone: laid dark cobbles with kerb stones, crumbling toward the edge of the land and whole where they arrive; trodden: a worn line in the grass. Trees and grass keep off them |
+| `causeways` | `toward`, `count` (6), `heights` ([5, 32]), `land` (8) | stone walkways from every direction and height: each starts broken off in the air far out, runs level, then steps down in flights of stairs (level, down, level…) on square piers, landing in a ring `land` m round the thing. None comes from the spawn's side, so the thing stays in view |
+| `travellers` | `characters` (names), `toward`, `count` (16), `pose` ("kneel"), `lanterns` ("out" \| "none"), `between` ([12, 70]) | people kneeling at the roadside along the converging roads, all facing the thing with heads bowed, their lanterns gone out beside them; generated each load |
+| `clearing` | `around`, `radius` (5) | the ground settles flat around it and nothing grows or stands there |
+| `sightline` | `from` ("spawn"), `to` | nothing stands between the two: you can always see it |
+| `ring` | `prop`, `around`, `radius` (10), `count` (6), `face` ("in" \| "out" \| "along"), `jitter` (0.35), `scale` | that many of a prop round the thing, evenly with a seeded jitter; generated each load, not stored as props |
+
+`toward` / `around` / `to` are prop or actor ids (or any point). In the editor, right-click with a prop or character selected, then **Around …**. From there: make every path lead here, clear the ground, keep it in sight, ring it with a prop, or undo its directives.
+
+Props for lit places: `lantern`, `lanternPost` (a lantern on a hook), `moths` (big pale moths circling a light; lift them to it with `"y"`), `lanternTree` (a dead tree hung with swaying lanterns, one swallowed by the bark). They are all built from the Items tab's Oil Lantern (`items/oil-lantern.json`).
+
+## Character files
+
+`public/characters/<slug>.glb`, listed in `public/characters/index.json` (`[{ file, name, thumb?, params?, face? }]`): characters made outside this browser, e.g. built by Claude with the Characters tab's own export. The editor copies each into this browser's library (id `file:<slug>`), again whenever its `version` changes. Scenes then name them like any other character (`"character": "Old Pim Holwub"`).
+
+A prop's `"y"` lifts it off the ground (a lantern held up). A doorway's `"open"` sets how far its door stands open: 0 keeps it shut.

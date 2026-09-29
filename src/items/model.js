@@ -10,6 +10,7 @@
 // Units are metres; the model sits on y = 0 and faces +Z.
 import * as THREE from 'three';
 import { oldMaterial } from '../scenario/material.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { rng, canvasTex, blotch } from '../scenario/util.js';
 
 export const SHAPES = ['box', 'cylinder', 'cone', 'sphere', 'torus', 'lathe'];
@@ -54,9 +55,34 @@ export function partGeometry(p) {
 export function partMaterial(p) {
   const T = textures(), m = p.material || 'iron', c = hex(p.color);
   const glowing = m === 'glass' || m === 'glow';
-  const mat = oldMaterial({ map: T[m] || T.iron, color: [c.r * (glowing ? 1.2 : 1.35), c.g * (glowing ? 1.2 : 1.35), c.b * (glowing ? 1.2 : 1.35)], glow: glowing, side: p.shape === 'lathe' || p.open ? THREE.DoubleSide : THREE.FrontSide });
+  const mat = oldMaterial({ map: T[m] || T.iron, color: [c.r * (glowing ? 1.2 : 1.35), c.g * (glowing ? 1.2 : 1.35), c.b * (glowing ? 1.2 : 1.35)], glow: glowing, opacity: m === 'glass' ? (p.opacity ?? 0.38) : 1, side: p.shape === 'lathe' || p.open ? THREE.DoubleSide : THREE.FrontSide }); // (glass: see-through, dithered)
   return mat;
 }
+// The model merged into one mesh per material and colour (a lantern's 11 parts -> 4 draw calls), built once per
+// model and shared: for props that place many copies. Parts' names are kept as groups of their material
+// ("glass", "wick flame": a part named that becomes its own mesh so it can be found and hidden).
+const mergedCache = new WeakMap();
+export function buildModelMerged(model, keep = ['wick flame']) {
+  let parts = mergedCache.get(model);
+  if (!parts) {
+    const buckets = new Map();
+    for (const p of model?.parts || []) {
+      let geo = partGeometry(p); geo = geo.index ? geo.toNonIndexed() : geo;
+      const m = new THREE.Matrix4().compose(new THREE.Vector3(...(p.pos || [0, 0, 0])), new THREE.Quaternion().setFromEuler(new THREE.Euler(...(p.rot || [0, 0, 0]).map((v) => v * D), 'YXZ')), new THREE.Vector3(...(p.scale || [1, 1, 1])));
+      geo.applyMatrix4(m); geo.computeVertexNormals();
+      for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+      const key = keep.includes(p.name) ? `name:${p.name}` : `${p.material}|${p.color}|${p.shape === 'lathe' || p.open ? 2 : 0}|${p.opacity ?? ''}`;
+      if (!buckets.has(key)) buckets.set(key, { geos: [], part: p });
+      buckets.get(key).geos.push(geo);
+    }
+    parts = [...buckets.entries()].map(([key, { geos, part }]) => ({ name: key.startsWith('name:') ? part.name : part.material, geo: mergeGeometries(geos), mat: partMaterial(part) }));
+    mergedCache.set(model, parts);
+  }
+  const g = new THREE.Group();
+  for (const p of parts) { const mesh = new THREE.Mesh(p.geo, p.mat); mesh.name = p.name; g.add(mesh); }
+  return { group: g };
+}
+
 // the whole model as a group (flat-shaded parts), plus its size for framing
 export function buildModel(model) {
   const g = new THREE.Group();
