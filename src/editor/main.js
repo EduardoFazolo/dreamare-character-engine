@@ -344,8 +344,9 @@ function syncProps() {
   const want = new Set(list.map((p) => p.id));
   for (const [id, pr] of props) if (!want.has(id)) { scene.remove(pr.built.group); props.delete(id); }
   for (const d of list) {
-    let pr = props.get(d.id);
-    if (!pr) { const built = buildProp(d.kind, d.id); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built }; props.set(d.id, pr); scene.add(built.group); }
+    let pr = props.get(d.id); const key = `${d.kind}|${d.engraving || ''}|${d.engravingTurn || 0}`; // (what the build reads: a change rebuilds it)
+    if (pr && pr.key !== key) { scene.remove(pr.built.group); props.delete(d.id); pr = null; }
+    if (!pr) { const built = buildProp(d.kind, d.id, d); if (!built) continue; built.group.userData.propId = d.id; pr = { data: d, built, key }; props.set(d.id, pr); scene.add(built.group); }
     if (d.open != null && pr.built.open != null) pr.built.open = d.open; // (a door: "open": 0 keeps it shut)
     pr.data = d; resolvePlace(d); resolveFace(d); placeProp(pr);
   }
@@ -1436,7 +1437,7 @@ function frame(now) {
   if (PLAYER) { playerFrame(now); return; }
   const t = now / 1000, dt = Math.min(0.1, (now - last) / 1000); last = now;
   placeCamera(dt);
-  for (const pr of props.values()) pr.built.update?.(t);
+  for (const pr of props.values()) pr.built.update?.(t, camera); // (the camera: props that watch it, like the leaning lamps)
   for (const o of actors.values()) {
     const rp = rawPose(o);
     if (!rp) { if (!o.action) setAnim(o, o.data.anim); o.mixer.update(dt); continue; } // (no pose: always an animation playing, it resets the bones every frame)
@@ -1550,14 +1551,16 @@ window.__editor = { goShot, resolvePoint, refreshLibrary, get library() { return
 // ---------------- player mode ----------------
 // P.frozen: the time the scene is stopped at (null: live). Frozen or paused, nothing renders at all: one frame
 // is drawn when it's asked for and the loop stops. Live, it renders at most 30 times a second.
-const P = { outW: 540, frozen: null, paused: true, looping: false, lastT: 0, lastRender: 0, shot: null, onFrame: null, id: null };
+// P.light: room lights (props with setLight, e.g. the bedroom), 1 on .. 0 out; the slides fade it.
+const P = { queue: Promise.resolve(), outW: 540, frozen: null, paused: true, looping: false, lastT: 0, lastRender: 0, shot: null, onFrame: null, id: null, light: 1 };
 function applyShot() {
   const sh = P.shot; if (!sh) return;
   const p = resolvePoint(sh.pos), t = resolvePoint(sh.look);
   if (p && t) { camera.position.copy(p); camera.lookAt(t); }
 }
 function playerStep(t, dt) {
-  for (const pr of props.values()) pr.built.update?.(t);
+  applyShot(); // (first: props that watch the camera must see where it is in this frame)
+  for (const pr of props.values()) { pr.built.update?.(t, camera); pr.built.setLight?.(P.light); }
   for (const o of actors.values()) {
     const rp = rawPose(o);
     if (!rp) { if (!o.action) setAnim(o, o.data.anim); o.mixer.setTime ? o.mixer.setTime(t) : o.mixer.update(dt); continue; }
@@ -1593,17 +1596,20 @@ async function playerLoad(id) {
 const shotOf = (i) => (typeof i === 'number' ? rec.shots[i] : rec.shots.find((x) => x.name === i)) || rec.shots[0] || { pos: 'spawn', look: { at: 'spawn', offset: [0, 0, -5] } };
 window.__player = {
   // show a scene's shot; frozen: a time to stop at (null = live). Resolves once it's drawn.
-  async show(id, shot, { frozen = null, outW = 540 } = {}) {
+  // (one at a time: two overlapping loads each spawned the characters, leaving a frozen duplicate in the scene)
+  show(id, shot, opts) { const run = P.queue.then(() => this._show(id, shot, opts)); P.queue = run.catch(() => {}); return run; },
+  async _show(id, shot, { frozen = null, outW = 540 } = {}) {
     P.outW = outW;
     if (P.id !== id) await playerLoad(id);
     else if (terrainKey) { const p = terrainParams(); stage.setRes(p.res, true, P.outW); }
-    P.shot = shotOf(shot); P.frozen = frozen;
+    P.shot = shotOf(shot); P.frozen = frozen; P.light = 1;
     playerStep(frozen ?? performance.now() / 1000, 0.016);
     P.paused = false; kick();
   },
   pause(v = true) { P.paused = v; if (!v) kick(); },
   freeze() { P.frozen = P.lastT; playerStep(P.lastT, 0); return P.lastT; }, // stop time at the frame on screen
   live() { P.frozen = null; kick(); },
+  light(k) { P.light = k; }, // room lights, 1 on .. 0 out (taken up by the next frame drawn)
   // this frame at full size (1080 wide) as a JPEG; the time stays where it is
   capture(q = 0.9) {
     const p = terrainParams(), was = P.outW; stage.setRes(p.res, true, 1080); playerStep(P.frozen ?? P.lastT, 0);
@@ -1611,6 +1617,8 @@ window.__player = {
   },
   setOutW(w) { P.outW = w; if (world) { stage.setRes(terrainParams().res, true, w); playerStep(P.frozen ?? P.lastT, 0); } },
   set onFrame(fn) { P.onFrame = fn; },
+  // draw one frame at time t now (export drives the player this way: a hidden iframe's own loop is throttled)
+  render(t) { playerStep(t, 1 / 30); },
   // (scripts / tests: any shot object, frozen at time t)
   showShotObject(sh, t) { P.shot = sh; P.frozen = t; playerStep(t, 0); },
   get canvas() { return canvas; },

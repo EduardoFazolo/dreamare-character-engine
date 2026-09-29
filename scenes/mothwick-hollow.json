@@ -93,7 +93,9 @@
       "face": "spawn",
       "x": 13.382213427670731,
       "z": -17.57601672098286,
-      "rotY": -0.6507513069741093
+      "rotY": -0.6507513069741093,
+      "engraving": "Marguerite Punch",
+      "engravingTurn": 1.28
     },
     {
       "id": "held-lantern",
@@ -170,6 +172,28 @@
       "y": 0.75,
       "x": 11.730806766981486,
       "z": -17.387984699690758
+    },
+    {
+      "id": "named",
+      "name": "a lantern with a name",
+      "kind": "namedLantern",
+      "engraving": "Albertine Gorse",
+      "place": {
+        "from": "pims-lantern",
+        "forward": 7,
+        "right": -6
+      },
+      "face": "spawn"
+    },
+    {
+      "id": "named-moths",
+      "kind": "moths",
+      "place": {
+        "from": "named",
+        "forward": 0,
+        "right": 0
+      },
+      "y": 1.85
     }
   ],
   "directives": [
@@ -469,7 +493,7 @@
       "pos": {
         "rel": "hung#0",
         "forward": 2.2,
-        "right": 1.0,
+        "right": 1,
         "up": 2.2
       },
       "look": {
@@ -480,16 +504,15 @@
     {
       "name": "4 the lantern the tree grew around",
       "pos": {
-        "rel": "hung#3",
-        "forward": 0.55,
-        "right": 0.35,
-        "up": 1.5
+        "rel": "named",
+        "forward": 1,
+        "up": 1.95,
+        "right": 0.15
       },
       "look": {
-        "rel": "hung#3",
-        "forward": 0.1,
-        "right": 0.1,
-        "up": 1.35
+        "rel": "named",
+        "forward": 0,
+        "up": 1.95
       }
     },
     {
@@ -497,7 +520,7 @@
       "pos": {
         "rel": "pim",
         "forward": 2.4,
-        "up": 1.0,
+        "up": 1,
         "right": 0.5
       },
       "look": {

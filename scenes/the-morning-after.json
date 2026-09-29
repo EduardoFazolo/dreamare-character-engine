@@ -1,0 +1,160 @@
+{
+  "id": "the-morning-after",
+  "name": "The Morning After",
+  "terrain": {
+    "kind": "emptymemories",
+    "seed": 3171,
+    "biome": {
+      "archetype": "heath",
+      "duneHeight": 1,
+      "hills": 2,
+      "water": 0,
+      "grassA": [
+        112,
+        104,
+        96
+      ],
+      "grassB": [
+        134,
+        122,
+        108
+      ],
+      "dirt": [
+        110,
+        100,
+        90
+      ],
+      "sand": [
+        150,
+        142,
+        124
+      ],
+      "wet": [
+        92,
+        90,
+        84
+      ],
+      "tuftA": [
+        120,
+        108,
+        100
+      ],
+      "tuftB": [
+        150,
+        132,
+        120
+      ],
+      "tufts": 0.8,
+      "house": 0,
+      "path": 0,
+      "busStop": 0,
+      "booth": 0,
+      "lamps": 0,
+      "fence": 0,
+      "poles": 0,
+      "tower": 0,
+      "pier": 0,
+      "figure": 0,
+      "deadTrees": 0,
+      "houses": 0,
+      "trees": "none",
+      "treeDensity": 0,
+      "treeSize": 1,
+      "treeTint": [
+        0,
+        0,
+        0
+      ],
+      "rocks": 0,
+      "fields": 0
+    },
+    "time": 0.03,
+    "haze": 0.7,
+    "wrongness": 0.1,
+    "skyHue": 0,
+    "density": 1,
+    "res": 240,
+    "sat": 0.6,
+    "vhs": 0.6,
+    "affine": 0.5,
+    "name": "The Morning After"
+  },
+  "ambience": {},
+  "props": [
+    {
+      "id": "room",
+      "name": "your room",
+      "kind": "bedroom",
+      "place": {
+        "from": "spawn",
+        "forward": 6
+      },
+      "face": "spawn"
+    },
+    {
+      "id": "shoes",
+      "name": "your shoes",
+      "kind": "shoes",
+      "y": 0.04,
+      "place": {
+        "from": "room",
+        "right": 0.35,
+        "forward": -1.05
+      },
+      "face": "room"
+    },
+    {
+      "id": "prints-yours",
+      "kind": "prints",
+      "length": 0.8,
+      "y": 0.04,
+      "place": {
+        "from": "room",
+        "right": 0.35,
+        "forward": -0.2
+      },
+      "face": "shoes"
+    },
+    {
+      "id": "prints-long",
+      "kind": "prints",
+      "length": 1.25,
+      "y": 0.04,
+      "place": {
+        "from": "room",
+        "right": -0.25,
+        "forward": -0.2
+      },
+      "style": "long",
+      "face": "shoes"
+    }
+  ],
+  "directives": [
+    {
+      "id": "flat",
+      "kind": "clearing",
+      "around": "room",
+      "radius": 8
+    }
+  ],
+  "actors": [],
+  "shots": [
+    {
+      "name": "6 check your shoes",
+      "pos": {
+        "rel": "room",
+        "forward": -0.4,
+        "right": -0.25,
+        "up": 0.34
+      },
+      "look": {
+        "at": "shoes",
+        "offset": [
+          0,
+          -0.1,
+          0
+        ]
+      }
+    }
+  ]
+}

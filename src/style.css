@@ -208,3 +208,4 @@ body.player #view { position: fixed; inset: 0; width: 100vw !important; height: 
 .slidemain.live #slideView { position: relative; background: transparent; pointer-events: none; }
 .sceneshots details { margin: 4px 0; } .sceneshots summary { cursor: pointer; color: var(--muted); }
 .shotbtn { display: block; width: 100%; text-align: left; margin: 3px 0; font-size: 12px; }
+.strip .thumb .secs { position: absolute; right: 3px; bottom: 3px; font: 10px/1 monospace; font-style: normal; background: rgba(0,0,0,.7); color: #eee; padding: 2px 3px; border-radius: 2px; }

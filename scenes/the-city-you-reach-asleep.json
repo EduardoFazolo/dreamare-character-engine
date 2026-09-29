@@ -1,0 +1,414 @@
+{
+  "id": "the-city-you-reach-asleep",
+  "name": "The City You Reach Asleep",
+  "terrain": {
+    "kind": "emptymemories",
+    "seed": 3170,
+    "biome": {
+      "archetype": "saltflats",
+      "duneHeight": 0.3,
+      "hills": 0,
+      "water": 0,
+      "grassA": [
+        70,
+        72,
+        78
+      ],
+      "grassB": [
+        84,
+        84,
+        90
+      ],
+      "dirt": [
+        72,
+        70,
+        70
+      ],
+      "sand": [
+        90,
+        88,
+        86
+      ],
+      "wet": [
+        60,
+        60,
+        62
+      ],
+      "tuftA": [
+        70,
+        72,
+        70
+      ],
+      "tuftB": [
+        90,
+        92,
+        88
+      ],
+      "tufts": 0.1,
+      "house": 0,
+      "path": 0,
+      "busStop": 0,
+      "booth": 0,
+      "lamps": 0,
+      "fence": 0,
+      "poles": 0,
+      "tower": 0,
+      "pier": 0,
+      "figure": 0,
+      "deadTrees": 0,
+      "houses": 0,
+      "trees": "none",
+      "treeDensity": 0,
+      "treeSize": 1,
+      "treeTint": [
+        0,
+        0,
+        0
+      ],
+      "rocks": 0,
+      "fields": 0
+    },
+    "time": 0.8,
+    "haze": 0.5,
+    "wrongness": 0.25,
+    "skyHue": 0,
+    "density": 1,
+    "res": 240,
+    "sat": 0.6,
+    "vhs": 0.6,
+    "affine": 0.5,
+    "name": "The City You Reach Asleep"
+  },
+  "ambience": {},
+  "props": [
+    {
+      "id": "street",
+      "name": "the street",
+      "kind": "dreamStreet",
+      "length": 90,
+      "place": {
+        "from": "spawn",
+        "forward": 40
+      },
+      "face": "spawn"
+    },
+    {
+      "id": "street-b",
+      "name": "the street of the shop",
+      "kind": "dreamStreet",
+      "length": 90,
+      "gaps": [
+        {
+          "side": "left",
+          "at": -10,
+          "w": 4.6
+        }
+      ],
+      "place": {
+        "from": "street",
+        "right": -25.5,
+        "forward": 0
+      },
+      "rotY": 2.70764
+    },
+    {
+      "id": "lane",
+      "name": "the narrow lane",
+      "kind": "dreamStreet",
+      "length": 90,
+      "width": 3,
+      "place": {
+        "from": "street",
+        "right": 24,
+        "forward": 0
+      },
+      "rotY": 2.70764
+    },
+    {
+      "id": "square",
+      "name": "the square at the end of the city",
+      "kind": "dreamStreet",
+      "length": 46,
+      "width": 76,
+      "pavement": false,
+      "edge": true,
+      "place": {
+        "from": "street",
+        "right": 0,
+        "forward": -68
+      },
+      "rotY": 2.70764
+    },
+    {
+      "id": "jar-shop",
+      "name": "the shop of hours",
+      "kind": "jarShop",
+      "sign": "Hours, by the Jar",
+      "height": 22,
+      "place": {
+        "from": "street-b",
+        "right": -5.75,
+        "forward": -10
+      },
+      "rotY": -2.00474
+    },
+    {
+      "id": "lamp-shop",
+      "kind": "leaningLamp",
+      "lean": 2.2,
+      "place": {
+        "from": "street-b",
+        "right": 3.9,
+        "forward": -7
+      },
+      "face": "jar-shop"
+    },
+    {
+      "id": "lamp-l1",
+      "kind": "leaningLamp",
+      "lean": 2.5,
+      "place": {
+        "from": "street",
+        "right": 3.9,
+        "forward": 30
+      },
+      "face": "lamp-r1"
+    },
+    {
+      "id": "lamp-r1",
+      "kind": "leaningLamp",
+      "lean": 2.3,
+      "place": {
+        "from": "street",
+        "right": -3.9,
+        "forward": 26
+      },
+      "face": "lamp-l1"
+    },
+    {
+      "id": "lamp-l2",
+      "kind": "leaningLamp",
+      "lean": 2.8,
+      "place": {
+        "from": "street",
+        "right": 3.9,
+        "forward": 18
+      },
+      "face": "lamp-r2"
+    },
+    {
+      "id": "lamp-r2",
+      "kind": "leaningLamp",
+      "lean": 2.1,
+      "place": {
+        "from": "street",
+        "right": -3.9,
+        "forward": 14
+      },
+      "face": "lamp-l2"
+    },
+    {
+      "id": "lamp-straight",
+      "name": "the one that doesn't lean",
+      "kind": "leaningLamp",
+      "lean": 0,
+      "height": 5.6,
+      "place": {
+        "from": "street",
+        "right": -3.9,
+        "forward": 2
+      },
+      "face": "street"
+    },
+    {
+      "id": "lamp-l3",
+      "kind": "leaningLamp",
+      "lean": 2.4,
+      "place": {
+        "from": "street",
+        "right": 3.9,
+        "forward": -6
+      },
+      "face": "lamp-r3"
+    },
+    {
+      "id": "lamp-r3",
+      "kind": "leaningLamp",
+      "lean": 2.6,
+      "place": {
+        "from": "street",
+        "right": -3.9,
+        "forward": -12
+      },
+      "face": "lamp-l3"
+    },
+    {
+      "id": "lamp-sq-1",
+      "kind": "leaningLamp",
+      "lean": 2.5,
+      "place": {
+        "from": "square",
+        "right": -6,
+        "forward": 12
+      },
+      "face": "square"
+    },
+    {
+      "id": "lamp-sq-2",
+      "kind": "leaningLamp",
+      "lean": 2.3,
+      "place": {
+        "from": "square",
+        "right": 7,
+        "forward": 6
+      },
+      "face": "square"
+    },
+    {
+      "id": "skyline",
+      "name": "the rest of the city",
+      "kind": "skyline",
+      "width": 420,
+      "depth": 150,
+      "count": 450,
+      "place": {
+        "from": "square",
+        "forward": -95
+      },
+      "rotY": 2.70764,
+      "height": 0.7,
+      "front": 70
+    },
+    {
+      "id": "moon",
+      "name": "the moon",
+      "kind": "moon",
+      "size": 250,
+      "y": 95,
+      "place": {
+        "from": "spawn",
+        "forward": 285
+      },
+      "face": "spawn"
+    }
+  ],
+  "directives": [
+    {
+      "id": "flat",
+      "kind": "clearing",
+      "around": "street",
+      "radius": 60
+    },
+    {
+      "id": "flat-sq",
+      "kind": "clearing",
+      "around": "square",
+      "radius": 45
+    }
+  ],
+  "actors": [
+    {
+      "id": "double",
+      "character": "The One Wearing Your Face",
+      "place": {
+        "from": "lane",
+        "forward": -22
+      },
+      "face": "spawn",
+      "pose": {
+        "preset": "stand",
+        "look": "camera",
+        "face": {
+          "mouthSmile": 1,
+          "jawOpen": 0.2
+        },
+        "alive": {
+          "blink": true,
+          "sway": 0.15
+        }
+      }
+    },
+    {
+      "id": "watcher",
+      "character": "The One Wearing Your Face",
+      "place": {
+        "from": "square",
+        "forward": -21.4,
+        "right": 1.5
+      },
+      "face": "moon",
+      "anim": "Idle"
+    }
+  ],
+  "shots": [
+    {
+      "name": "1 the city",
+      "pos": {
+        "rel": "street",
+        "forward": 62,
+        "right": 4,
+        "up": 70
+      },
+      "look": {
+        "rel": "street",
+        "forward": -40,
+        "up": 29
+      }
+    },
+    {
+      "name": "2 the lamps lean down to look",
+      "pos": {
+        "rel": "street",
+        "forward": 21,
+        "right": -1.2,
+        "up": 1.2
+      },
+      "look": {
+        "rel": "street",
+        "forward": 16,
+        "right": -2.4,
+        "up": 5.2
+      }
+    },
+    {
+      "name": "3 hours in jars",
+      "pos": {
+        "rel": "street-b",
+        "forward": -4.5,
+        "right": -2.5,
+        "up": 1.6
+      },
+      "look": {
+        "rel": "street-b",
+        "forward": -10,
+        "right": 5.75,
+        "up": 2.3
+      }
+    },
+    {
+      "name": "4 someone wearing your face",
+      "pos": {
+        "rel": "lane",
+        "forward": -18.3,
+        "up": 1.35
+      },
+      "look": {
+        "at": "double",
+        "offset": [
+          0,
+          -0.35,
+          0
+        ]
+      }
+    },
+    {
+      "name": "5 the moon is much closer",
+      "pos": {
+        "rel": "square",
+        "forward": 22,
+        "up": 0.7
+      },
+      "look": "moon"
+    }
+  ]
+}

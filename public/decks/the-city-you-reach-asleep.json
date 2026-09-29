@@ -1,0 +1,116 @@
+{
+  "id": "city-asleep",
+  "name": "The City You Reach Asleep",
+  "created": 1790718214521,
+  "updated": 1790720485458,
+  "slides": [
+    {
+      "id": "city-1",
+      "image": null,
+      "text": "There exists a city you can only reach by falling asleep with your shoes on. Before you go, I must advise you of a few rules.",
+      "secs": null,
+      "style": {
+        "look": "tiktok",
+        "pos": "low",
+        "size": 1
+      },
+      "live": {
+        "scene": "the-city-you-reach-asleep",
+        "sceneName": "The City You Reach Asleep",
+        "shot": "1 the city",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "city-2",
+      "image": null,
+      "text": "Rule one: the streetlamps there lean down to look at you. Let them. The ones that don't lean are not streetlamps.",
+      "secs": null,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "the-city-you-reach-asleep",
+        "sceneName": "The City You Reach Asleep",
+        "shot": "2 the lamps lean down to look",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "city-3",
+      "image": null,
+      "text": "Rule two: the shops sell hours in jars. Never buy more than one. The rest belong to someone, and they will come for them.",
+      "secs": null,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "the-city-you-reach-asleep",
+        "sceneName": "The City You Reach Asleep",
+        "shot": "3 hours in jars",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "city-4",
+      "image": null,
+      "text": "Rule three: if you meet someone with strange proportions wearing your face, don't speak. They're waiting to hear how you do it.",
+      "secs": null,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "the-city-you-reach-asleep",
+        "sceneName": "The City You Reach Asleep",
+        "shot": "4 someone wearing your face",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "city-5",
+      "image": null,
+      "text": "Rule four: the moon is much closer there. If it starts lowering itself toward the street, go indoors. Any door. Don't ask whose house it is.",
+      "secs": null,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "the-city-you-reach-asleep",
+        "sceneName": "The City You Reach Asleep",
+        "shot": "5 the moon is much closer",
+        "frozen": null,
+        "poster": null
+      }
+    },
+    {
+      "id": "city-6",
+      "image": null,
+      "text": "When you wake up, check your shoes. If they're muddy, you didn't come back alone.",
+      "secs": null,
+      "style": {
+        "look": "tiktok",
+        "pos": "top",
+        "size": 1
+      },
+      "live": {
+        "scene": "the-morning-after",
+        "sceneName": "The Morning After",
+        "shot": "6 check your shoes",
+        "frozen": null,
+        "poster": null
+      }
+    }
+  ]
+}

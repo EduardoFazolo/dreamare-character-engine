@@ -86,4 +86,15 @@ Props for lit places: `lantern`, `lanternPost` (a lantern on a hook), `moths` (b
 
 `public/characters/<slug>.glb`, listed in `public/characters/index.json` (`[{ file, name, thumb?, params?, face? }]`): characters made outside this browser, e.g. built by Claude with the Characters tab's own export. The editor copies each into this browser's library (id `file:<slug>`), again whenever its `version` changes. Scenes then name them like any other character (`"character": "Old Pim Holwub"`).
 
+Props for the city you reach asleep:
+- `dreamStreet`: a cobbled street along the prop's Z (`"length"`, 60 m) between two rows of impossibly tall, narrow houses with a few lit windows. `"gaps": [{ "side": "left" | "right", "at": z, "w": m }]` leaves room for a shop.
+- `leaningLamp`: an iron lamp whose post bends over like a neck, its lit shade hanging down to look at you. `"lean"` goes up to about 3; 0 is a plain, honest lamp.
+- `jarShop`: a narrow tall shopfront, with shelves of jars behind the window, each holding a flickering light. `"sign"` sets its painted text, `"height"` the building.
+- `moon`: a huge moon outside the fog (`"size"` is its diameter). Place it far away, lift it with `"y"`, and face it to the camera.
+- `shoes`: a muddy pair of shoes.
+- `prints`: a trail of muddy prints along +Z (`"length"`). `"style": "long"` gives bare, too-long feet.
+- `lanternPost` also takes `"engraving"` (a brass name plate on the lantern) and `"engravingTurn"` (radians, to face the plate at a shot).
+
+Careful: a prop's `place.right` and a shot's `rel.right` point opposite ways.
+
 A prop's `"y"` lifts it off the ground (a lantern held up). A doorway's `"open"` sets how far its door stands open: 0 keeps it shut.
