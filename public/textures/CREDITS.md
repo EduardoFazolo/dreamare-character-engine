@@ -20,3 +20,7 @@ All outfit textures are CC0 materials from [ambientCG](https://ambientcg.com) (c
 - [Leather026](https://ambientcg.com/view?id=Leather026)
 - [Leather033C](https://ambientcg.com/view?id=Leather033C)
 - [Leather037](https://ambientcg.com/view?id=Leather037)
+- [Fabric029](https://ambientcg.com/view?id=Fabric029)
+- [Fabric063](https://ambientcg.com/view?id=Fabric063)
+- [Fabric044](https://ambientcg.com/view?id=Fabric044)
+- [Leather027](https://ambientcg.com/view?id=Leather027)

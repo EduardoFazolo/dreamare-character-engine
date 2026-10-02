@@ -7,6 +7,7 @@ import { perf } from './perf.js';
 import { unwrap, BodyBaker } from './bodybake.js';
 import { paintSkinTile } from './skintile.js';
 import { boundaryLoop } from './outline.js';
+import { scalpStrip } from './atlas.js';
 import { buildFaceRig, drawMouth, drawEye, hueShift, MORPHS, alignToTexture } from './faceanim.js';
 
 // ---------------- PS2-ish material: vertex snapping, gouraud, affine UVs, 15-bit dither, fog ----------------
@@ -113,6 +114,13 @@ export class HeadRig {
     this.headMat.name = 'face';
     this.head = new THREE.Mesh(this.geo, this.headMat);
     this.group.add(this.head);
+    // the seamless scalp (scalp: 'seamless'): the skull as its own mesh with its own texture, painted from the
+    // face's outline colours with the face's own skin detail and dither (paintScalp), so face and skull read as one skin
+    this.scalpCanvas = document.createElement('canvas'); this.scalpCanvas.width = this.scalpCanvas.height = 4;
+    this.scalpTex = new THREE.CanvasTexture(this.scalpCanvas); this.scalpTex.magFilter = this.scalpTex.minFilter = THREE.NearestFilter;
+    this.scalpMat = ps2Material({ map: this.scalpTex }); this.scalpMat.name = 'scalp';
+    this.scalp = new THREE.Mesh(new THREE.BufferGeometry(), this.scalpMat); this.scalp.visible = false;
+    this.group.add(this.scalp);
     // mouth interior (cavity + teeth) behind the cut lips, see faceanim.js
     this.mouthMat = ps2Material({ map: canvasTex(64, 64, drawMouth), side: THREE.DoubleSide }); // (seen from inside)
     this.mouthMat.name = 'mouth';
@@ -190,8 +198,9 @@ export class HeadRig {
     for (const v of P) for (const c of v) hk = (Math.imul(hk, 31) + Math.round(c * 1e4)) | 0;
     if (uvW) for (const v of uvW) for (const c of v) hk = (Math.imul(hk, 31) + Math.round(c * 1e4)) | 0;
     if (hairUV) for (let i = 0; i < hairUV.data.length; i += 7) hk = (Math.imul(hk, 31) + hairUV.data[i]) | 0;
-    const headKey = `${hk}|${p.headDepth}|${p.cranium}`;
+    const headKey = `${hk}|${p.headDepth}|${p.cranium}|${p.scalp}|${p.sphere || 0}|${p.sphereTop || 0}|${p.faceShape}|${p.faceShapeAmt}|${p.rimInset || 0}`;
     if (headKey !== this.headKey) { this.headKey = headKey; this.buildHead(P, p); }
+    if (this.scalpLayout && atlas) this.paintScalp(atlas, p);
     const earKey = `${headKey}|${animal?.name}|${p.earSize}`;
     if (earKey !== this.earKey) { this.earKey = earKey; this.buildEars(P, animal, p); }
     else if (this.eyeRegions) this.paintEyes(this.eyeRegions, p);
@@ -204,7 +213,7 @@ export class HeadRig {
     for (const v of P) front = Math.max(front, v[2]);
     const rim = this.loop.map((i) => P[i].map((x) => Math.round(x * 200)));
     const key = JSON.stringify([rim, Math.round(front * 50), [10, 152, 234, 454, 33, 263, 9, 151].map((i) => P[i].map((x) => Math.round(x * 200))),
-      p.cranium, p.headDepth, p.earSize, p.hairVolume, p.girth, p.headScale, Math.max(0, p.fat), p.clay, style, p.hat]);
+      p.cranium, p.headDepth, p.earSize, p.hairVolume, p.girth, p.headScale, Math.max(0, p.fat), p.clay, style, p.hat, p.hatSize ?? 1]);
     let pending = null;
     if (key !== this.key) {
       if (this.cache.has(key)) this.apply(key, P);
@@ -268,14 +277,9 @@ export class HeadRig {
     if (this.photo) this.buildPhotoHair(hair, p, hairId);
 
     // masks (people only) and gadgets, rebuilt when the head or the choice changes; a sack or bandages hide the hair
-    const mask = p.faceKind === 'mask' ? p.mask || 'doll' : null, wearKey = `${this.headKey}|${mask}|${p.gadget}`;
-    if (wearKey !== this.wearKey && this.shell) {
-      this.wearKey = wearKey;
-      this.wear.traverse((o) => { o.geometry?.dispose(); o.material?.map?.dispose?.(); });
-      this.wear.clear();
-      if (mask) this.wear.add(buildMask(mask, this.shell, this.faceP));
-      if (p.gadget && p.gadget !== 'none') this.wear.add(buildGadget(p.gadget, this.faceP));
-    }
+    const mask = p.faceKind === 'mask' ? p.mask || 'doll' : null;
+    this.wearArgs = { mask, p };
+    this.buildWear();
     const hideHair = mask && MASK_HIDES_HAIR.has(mask);
     if (hideHair) this.hairShell.visible = false;
     this.buildHair(p.hair === 'stringy' && !hideHair);
@@ -331,11 +335,20 @@ export class HeadRig {
     const L = this.loop.length, K = CLASSIC_K, n = 468 + L * (K - 1) + 1;
     const C = [0, (P[10][1] + P[152][1]) / 2 + 0.05, (P[234][2] + P[454][2]) / 2 - 0.08];
     const depth = 0.62 * (1 + p.headDepth * 0.6), cranium = 0.4 + p.cranium * 0.45;
-    const dupN = this.last?.uvBase ? L : 0; // (animals: the hull's own copy of the outline, see the fur patch)
+    const patch = !!this.last?.uvBase || p.scalp === 'skin' || p.scalp === 'forehead' || p.scalp === 'seamless'; // (animals, or scalp: 'skin': the skull wears a tiled patch of the forehead, not the mirror)
+    const dupN = patch ? L : 0; // (the hull's own copy of the outline, see the fur patch)
     const pos = new Float32Array((n + dupN) * 3), uv = new Float32Array((n + dupN) * 2), uv0 = this.last?.uvBase || this.canon.uv; // (animals: their own layout)
     // mouth and eye rims moved to where the texture draws them (faceanim.js alignToTexture)
     const al = perf.time('head.align', () => alignToTexture(P, uv0, this.last?.uvW || uv0, this.canon.index, this.loop));
     for (let i = 0; i < 468; i++) { pos.set(al.P[i], i * 3); uv.set(al.uv[i], i * 2); }
+    if (p.rimInset > 0) { // the outline's texture pulled in toward the face's middle: a photo's outline often runs over sideburns, ears or the jaw's shadow, which drew a dark line round the face against the skull's skin
+      const cu = [0, 0]; for (const i of this.loop) { cu[0] += uv[i * 2] / L; cu[1] += uv[i * 2 + 1] / L; }
+      const rimSet = new Set(this.loop);
+      for (let i = 0; i < 468; i++) {
+        const k = rimSet.has(i) ? p.rimInset : 0; if (!k) continue;
+        uv[i * 2] += (cu[0] - uv[i * 2]) * k; uv[i * 2 + 1] += (cu[1] - uv[i * 2 + 1]) * k;
+      }
+    }
     const A = this.last?.uvW || uv0, c0 = [0.5, 0.5], ang = (q) => Math.atan2(q[1] - c0[1], q[0] - c0[0]);
     const target = (v) => { const th = ang(uv0[v]); let wx = 0, wy = 0, ws = 0;
       for (const a of SKIN_ANCHORS) { let d = Math.abs(ang(uv0[a]) - th); d = Math.min(d, 2 * Math.PI - d); const w = Math.exp(-(d * d) / 0.18); wx += A[a][0] * w; wy += A[a][1] * w; ws += w; }
@@ -384,11 +397,16 @@ export class HeadRig {
     // upper corners), mirror-tiled 1:1; the tiling's seam around the ring starts under the chin.
     const pingpong = (x, span) => { const f = (x / span) % 2; return (f < 1 ? f : 2 - f) * span; };
     let fur = null, ringArc = null;
-    if (this.last?.uvBase) {
+    if (patch) {
       const x0 = Math.min(A[109][0], A[338][0]), x1 = Math.max(A[109][0], A[338][0]), yTop = Math.max(A[10][1], A[109][1], A[338][1]), yLow = Math.max(A[9][1], A[168][1]) + 0.02;
       const pad = (x1 - x0) * 0.12, top = yTop - 0.03;
       const mid = (x0 + x1) / 2 - 0.015; // one side of the brow only (a blaze or stripe down the middle would tile everywhere)
       if (top - yLow > 0.03 && mid - x0 > 0.04) fur = { x0: x0 + pad, w: mid - x0 - pad, y1: top, h: top - yLow };
+      if (!this.last?.uvBase && p.scalp !== 'forehead') { // (a human scalp: clean cheek skin instead, a bigger patch with no hair or brow in it: the forehead
+        // patch was small and often under a fringe, and its mirror bounces showed as bands on a tall dome)
+        const c = [(A[50][0] + A[117][0] + A[187][0]) / 3, (A[50][1] + A[117][1] + A[187][1]) / 3], s2 = Math.min(0.09, Math.hypot(A[50][0] - A[187][0], A[50][1] - A[187][1]) * 0.9);
+        fur = { x0: c[0] - s2 / 2, w: s2, y1: c[1] + s2 / 2, h: s2 };
+      }
       const start = Math.max(0, this.loop.indexOf(152)), per = [];
       ringArc = (k, i) => {
         if (!per[k]) { // cumulative distance around ring k from under the chin (positions of rings < k are set)
@@ -419,7 +437,7 @@ export class HeadRig {
         colArc[o] = arc[i];
       }
     }
-    // (animals) the fur patch, mirror-tiled around the ring x down the column (after all rings are placed)
+    // (animals, and a human's skin-patch scalp) the patch, mirror-tiled around the ring x down the column (after all rings are placed)
     // (from the outline itself: the hull gets its own copy of the outline's vertices, so no hull triangle's
     // texture spans from the face's rim across the face to the patch)
     if (fur) for (let k = 0; k < K; k++) for (let i = 0; i < L; i++) {
@@ -428,10 +446,18 @@ export class HeadRig {
       uv[o * 2] = fur.x0 + pingpong(ringArc(k, i) * uvPerUnit, fur.w);
       uv[o * 2 + 1] = fur.y1 - pingpong((k === 0 ? 0 : colArc[o]) * uvPerUnit, fur.h);
     }
+    if (fur && p.scalp === 'seamless' && !this.last?.uvBase) { // the skull's UVs into the face texture's scalp strip (atlas.js): ring k, outline point i (counted from under the chin, as the strip is painted)
+      const sr = scalpStrip(A), st = Math.max(0, this.loop.indexOf(152));
+      for (let k = 0; k < K; k++) for (let i = 0; i < L; i++) {
+        const o = k === 0 ? n + i : 468 + (k - 1) * L + i, c = (i - st + L) % L;
+        uv[o * 2] = sr.x0 + sr.w * (c + 0.5) / L; uv[o * 2 + 1] = sr.y0 + sr.h * (k === 0 ? 0.1 : 0.2 + 0.75 * (k / (K - 1)));
+      }
+      fur.seamless = sr;
+    }
     const pole = n - 1;
     pos.set([C[0], C[1] + cranium * 0.2, C[2] - depth], pole * 3);
     this.hull = { pos: pos.slice(), L, K, C, loop: this.loop }; // photo hair grows on it
-    uv.set(fur ? [fur.x0 + fur.w / 2, fur.y1 - fur.h / 2] : A[[151, 108, 337, 50, 280, 187, 411, 199].find((a) => !hairAt(A[a][0], A[a][1])) ?? 151], pole * 2);
+    uv.set(fur?.seamless ? [fur.seamless.x0 + fur.seamless.w / 2, fur.seamless.y0 + fur.seamless.h * 0.95] : fur ? [fur.x0 + fur.w / 2, fur.y1 - fur.h / 2] : A[[151, 108, 337, 50, 280, 187, 411, 199].find((a) => !hairAt(A[a][0], A[a][1])) ?? 151], pole * 2);
     const ring = (k, i) => (k === 0 ? (fur ? n + (i % L) : this.loop[i % L]) : 468 + (k - 1) * L + (i % L));
     const idx = [...this.canon.index], hullStart = idx.length;
     for (let k = 0; k < K; k++) for (let i = 0; i < L; i++) {
@@ -444,6 +470,69 @@ export class HeadRig {
     const u = b0.map((x, q) => x - a0[q]), w = c1.map((x, q) => x - a0[q]);
     const nn = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
     if (nn[0] * (a0[0] - C[0]) + nn[1] * (a0[1] - C[1]) + nn[2] * (a0[2] - C[2]) < 0) for (let q = hullStart; q < idx.length; q += 3) { const x = idx[q + 1]; idx[q + 1] = idx[q + 2]; idx[q + 2] = x; }
+    // sphere (0..1): the whole head, face and all, pulled out onto a lumpy ball (a sun, a moon, a planet with a
+    // face). Each point moves along its ray from a centre behind the nose to the ball's surface, which wobbles a
+    // little (low bumps, seeded by direction), keeping a trace of its own relief (the nose, brow and lips still
+    // stand out a touch). The face rig is built on the moved points, so the texture, eyes and mouth follow
+    // faceShape: the face's outline drawn to a shape, like a liquify filter. Seen from the front, each point
+    // moves along its ray from the face's middle: the outline goes all the way to the target shape (a circle,
+    // a square, a heart...), the head behind it follows whole, and the pull fades toward the middle, so the
+    // eyes, nose and mouth keep their proportions. The texture rides on the points and the face rig is built
+    // after, so the photo stretches with it and the expressions obey the new shape
+    if (p.faceShape && p.faceShape !== 'natural' && p.faceShapeAmt > 0) {
+      const cx = this.loop.reduce((a, i) => a + al.P[i][0], 0) / L, cy = this.loop.reduce((a, i) => a + al.P[i][1], 0) / L;
+      const rim = this.loop.map((i) => [Math.atan2(al.P[i][1] - cy, al.P[i][0] - cx), Math.hypot(al.P[i][0] - cx, al.P[i][1] - cy)]).sort((a, b) => a[0] - b[0]);
+      const rimAt = (th) => { // the outline's own distance at an angle (between its two nearest points)
+        let k = rim.findIndex((e) => e[0] > th); if (k < 0) k = 0;
+        const a = rim[(k - 1 + rim.length) % rim.length], b = rim[k], span = ((b[0] - a[0]) + Math.PI * 4) % (Math.PI * 2) || 1e-6, u = (((th - a[0]) + Math.PI * 4) % (Math.PI * 2)) / span;
+        return a[1] + (b[1] - a[1]) * Math.min(1, Math.max(0, u));
+      };
+      const poly = (n, phi) => (th) => { const seg = (Math.PI * 2) / n, t = ((((th - phi) % seg) + seg) % seg) - seg / 2; return Math.cos(Math.PI / n) / Math.cos(t); };
+      const SHAPES = {
+        circle: () => 1,
+        square: (th) => Math.pow(Math.abs(Math.cos(th)) ** 4 + Math.abs(Math.sin(th)) ** 4, -0.25),
+        diamond: poly(4, Math.PI / 2),
+        triangle: poly(3, -Math.PI / 2), // (point at the chin)
+        pyramid: poly(3, Math.PI / 2), // (point at the crown, wide jaw)
+        heart: (th) => 0.86 + 0.16 * Math.max(0, Math.sin(th)) ** 0.5 * Math.abs(Math.cos(th)) ** 0.3 + 0.2 * Math.max(0, -Math.sin(th)) ** 6,
+        pear: (th) => 1 - 0.22 * Math.sin(th),
+        egg: (th) => 1 + 0.18 * Math.sin(th),
+      };
+      const shape = SHAPES[p.faceShape] || SHAPES.circle;
+      let mean = 0, ms = 0; for (let i = 0; i < 72; i++) { const th = (i / 72) * Math.PI * 2 - Math.PI; mean += rimAt(th) / 72; ms += shape(th) / 72; }
+      const amt = p.faceShapeAmt;
+      const warp = (q, face) => {
+        const dx = q[0] - cx, dy = q[1] - cy, r = Math.hypot(dx, dy); if (r < 1e-6) return q;
+        const th = Math.atan2(dy, dx), ro = rimAt(th), sc = (shape(th) * mean / ms) / ro;
+        const f = face ? Math.min(1, Math.pow(r / ro, 1.6)) : 1, k = 1 + (sc - 1) * f * amt;
+        return [cx + dx * k, cy + dy * k, q[2]];
+      };
+      for (let i = 0; i < 468; i++) { al.P[i] = warp(al.P[i], true); pos.set(al.P[i], i * 3); }
+      for (let i = 468; i < pos.length / 3; i++) pos.set(warp([pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]], false), i * 3);
+      if (fur) for (let i = 0; i < L; i++) pos.set(pos.subarray(this.loop[i] * 3, this.loop[i] * 3 + 3), (n + i) * 3);
+    }
+    if (p.sphere > 0) {
+      const R = Math.hypot(P[454][0] - P[234][0], P[454][1] - P[234][1]) * 0.62, Cs = [0, (P[10][1] + P[152][1]) / 2 + R * (p.sphereTop || 0), P[4][2] - R * 1.08]; // (sphereTop: the ball's centre raised over the face, so the face sits low on it under a big bald dome)
+      const ref = (q) => Math.hypot(q[0] - Cs[0], q[1] - Cs[1], q[2] - Cs[2]);
+      const rimR = this.loop.reduce((a, i) => a + ref(al.P[i]), 0) / L; // (the face's own mean distance, for its relief)
+      const bump = (dx, dy, dz) => 1 + 0.014 * Math.sin(dx * 3.1 + dy * 1.7 + 0.6) * Math.cos(dy * 2.3 - dz * 1.9) + 0.01 * Math.sin(dz * 4.3 + dx * 2.9 + 1.3); // (a slight wobble: more and the ball reads as an oval)
+      const ball = (q, keep) => {
+        const d = ref(q) || 1e-6, dx = (q[0] - Cs[0]) / d, dy = (q[1] - Cs[1]) / d, dz = (q[2] - Cs[2]) / d;
+        const r = R * bump(dx, dy, dz) + (keep ? (d - rimR) * 0.25 : 0);
+        return [0, 1, 2].map((k) => q[k] + (Cs[k] + [dx, dy, dz][k] * r - q[k]) * p.sphere);
+      };
+      for (let i = 0; i < 468; i++) { al.P[i] = ball(al.P[i], true); pos.set(al.P[i], i * 3); }
+      for (let i = 468; i < pos.length / 3; i++) pos.set(ball([pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]], false), i * 3);
+
+      { // evened out: the chin's relief left the ball a few percent taller than wide; squash it back to round
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        for (let i = 0; i < pos.length / 3; i++) { x0 = Math.min(x0, pos[i * 3]); x1 = Math.max(x1, pos[i * 3]); y0 = Math.min(y0, pos[i * 3 + 1]); y1 = Math.max(y1, pos[i * 3 + 1]); }
+        const k = 1 + ((x1 - x0) / (y1 - y0) - 1) * p.sphere, my = (y0 + y1) / 2;
+        for (let i = 0; i < pos.length / 3; i++) pos[i * 3 + 1] = my + (pos[i * 3 + 1] - my) * k;
+        for (let i = 0; i < 468; i++) al.P[i] = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
+      }
+      if (fur) for (let i = 0; i < L; i++) pos.set(pos.subarray(this.loop[i] * 3, this.loop[i] * 3 + 3), (n + i) * 3); // (the hull's own copy of the outline must stay on the face's edge, or the seam opens)
+    }
     // face rig: mouth and eyes cut open, eyeballs appended, mouth interior, morph targets (faceanim.js)
     const rig = perf.time('head.faceRig', () => buildFaceRig(al.P, al.uv, this.canon.index, pos));
     // what masks are built on: the head's surface (uncut), and its morphs for those vertices
@@ -467,17 +556,74 @@ export class HeadRig {
         const before = eyePos.slice(a * 3, b * 3); keepInside(eyePos, a, b, pos, surf, C);
         let best = 0, bi = -1; for (let v = a; v < b; v++) { const d = Math.hypot(eyePos[v * 3] - before[(v - a) * 3], eyePos[v * 3 + 1] - before[(v - a) * 3 + 1], eyePos[v * 3 + 2] - before[(v - a) * 3 + 2]); if (d > best) { best = d; bi = v; } }
         if (bi < 0) continue;
-        const sh = [0, 1, 2].map((k) => eyePos[bi * 3 + k] - before[(bi - a) * 3 + k]); // the largest pull, applied to the whole ball
+        const pull = [0, 1, 2].map((k) => eyePos[bi * 3 + k] - before[(bi - a) * 3 + k]); // the largest pull, applied to the whole ball
+        const sh = [0, 0, -Math.hypot(...pull)]; // (straight back: along the ray from the head's centre it also slid the ball sideways and down in its opening, so the pupils looked past you)
         for (let v = a; v < b; v++) for (let k = 0; k < 3; k++) eyePos[v * 3 + k] = before[(v - a) * 3 + k] + sh[k];
+      }
+      // eyePop: the balls pushed forward out of the sockets (a fraction of their radius), so they bulge and catch the light
+      if (p.eyePop) for (const [a, b] of [[0, em], [em, em * 2]]) {
+        const c = [0, 0, 0]; for (let v = a; v < b; v++) for (let k = 0; k < 3; k++) c[k] += eyePos[v * 3 + k] / (b - a);
+        let r = 0; for (let v = a; v < b; v++) r = Math.max(r, Math.hypot(eyePos[v * 3] - c[0], eyePos[v * 3 + 1] - c[1], eyePos[v * 3 + 2] - c[2]));
+        for (let v = a; v < b; v++) eyePos[v * 3 + 2] += r * 0.55 * p.eyePop;
       }
       rig.eyes.pos = eyePos;
     });
     setMesh(this.geo, allPos, allUV, keep, rig.headMorphs);
+    if (fur) { // the skull's own copy of the outline and the face's outline are one edge: one normal each pair, or the light breaks along it (a hard line round the face, like a suit's hood)
+      const nr = this.geo.attributes.normal;
+      for (let i = 0; i < L; i++) {
+        const a = this.loop[i], b = n + i, x = nr.getX(a) + nr.getX(b), y = nr.getY(a) + nr.getY(b), z = nr.getZ(a) + nr.getZ(b), l = Math.hypot(x, y, z) || 1;
+        nr.setXYZ(a, x / l, y / l, z / l); nr.setXYZ(b, x / l, y / l, z / l);
+      }
+      nr.needsUpdate = true;
+    }
+    this.scalp.visible = false; this.scalpLayout = null;
+    if (fur && p.scalp === 'seamless' && !this.last?.uvBase) { // the skull moves to its own mesh (see paintScalp)
+      const hv = (v) => v >= 468 && v < n + dupN, start = Math.max(0, this.loop.indexOf(152));
+      const faceIdx = [], hullTris = [];
+      for (let t = 0; t < keep.length; t += 3) (hv(keep[t]) && hv(keep[t + 1]) && hv(keep[t + 2]) ? hullTris : faceIdx).push(keep[t], keep[t + 1], keep[t + 2]);
+      this.geo.setIndex(faceIdx);
+      // each skull vertex: its ring k and outline column c (from under the chin); the pole is its own
+      const ringCol = (v) => { if (v === n - 1) return null; if (v >= n) return [0, v - n]; const q = v - 468; return [Math.floor(q / L) + 1, q % L]; };
+      const map = new Map(), P2 = [], U2 = [], src = [];
+      const vert = (v, wrap) => {
+        const key = v * 2 + (wrap ? 1 : 0); if (map.has(key)) return map.get(key);
+        const rc = ringCol(v), id = src.length; src.push(v);
+        P2.push(allPos[v * 3], allPos[v * 3 + 1], allPos[v * 3 + 2]);
+        if (!rc) U2.push(0.5, 0); else { const c = (rc[1] - start + L) % L + (wrap ? L : 0); U2.push((c + 0.5) / (L + 1), 1 - rc[0] / (K - 1)); }
+        map.set(key, id); return id;
+      };
+      const sIdx = [];
+      for (let t = 0; t < hullTris.length; t += 3) {
+        const tri = [hullTris[t], hullTris[t + 1], hullTris[t + 2]], cols = tri.map((v) => { const rc = ringCol(v); return rc ? (rc[1] - start + L) % L : null; });
+        const wrap = cols.some((c) => c === L - 1) && cols.some((c) => c === 0); // (the column under the chin closes the loop: its far side reads one column past the end)
+        for (const [j, v] of tri.entries()) sIdx.push(vert(v, wrap && cols[j] === 0));
+      }
+      const morphs = Object.fromEntries(MORPHS.map((m) => { const a = new Float32Array(src.length * 3), h = rig.headMorphs[m]; src.forEach((v, j) => { a[j * 3] = h[v * 3]; a[j * 3 + 1] = h[v * 3 + 1]; a[j * 3 + 2] = h[v * 3 + 2]; }); return [m, a]; }));
+      setMesh(this.scalp.geometry, new Float32Array(P2), new Float32Array(U2), sIdx, morphs);
+      { // one normal across the seam: the face's outline and the skull's first ring
+        this.geo.computeVertexNormals();
+        const fn = this.geo.attributes.normal, sn = this.scalp.geometry.attributes.normal;
+        for (let i = 0; i < L; i++) for (const w of [false, true]) {
+          const id = map.get((n + i) * 2 + (w ? 1 : 0)); if (id == null) continue;
+          const a = this.loop[i], x = fn.getX(a) + sn.getX(id), y = fn.getY(a) + sn.getY(id), z = fn.getZ(a) + sn.getZ(id), l = Math.hypot(x, y, z) || 1;
+          fn.setXYZ(a, x / l, y / l, z / l); sn.setXYZ(id, x / l, y / l, z / l);
+        }
+        fn.needsUpdate = sn.needsUpdate = true;
+      }
+      // the paint's layout: how long the skull runs round and back (in head units), the outline's texture
+      // points in column order, and a clean patch of cheek for the skin's grain
+      let around = 0; for (let i = 0; i < L; i++) { const a = this.loop[i], b = this.loop[(i + 1) % L]; around += Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1], P[a][2] - P[b][2]); }
+      let back = 0; for (let i = 0; i < L; i++) back = Math.max(back, colArc[468 + (K - 2) * L + i] || 0);
+      const cc = [(A[50][0] + A[117][0] + A[187][0]) / 3, (A[50][1] + A[117][1] + A[187][1]) / 3], s2 = Math.min(0.09, Math.hypot(A[50][0] - A[187][0], A[50][1] - A[187][1]) * 0.9);
+      this.scalpLayout = { L, around: around * 1.4, back: Math.max(back, around * 0.3), uvPerUnit, rim: Array.from({ length: L }, (_, c) => uv0[this.loop[(start + c) % L]]), patch: { x0: cc[0] - s2 / 2, y1: cc[1] + s2 / 2, w: s2, h: s2 } };
+      this.scalp.visible = true; this.scalpPainted = null;
+    }
     setMesh(this.mouth.geometry, new Float32Array(rig.mouth.pos), new Float32Array(rig.mouth.uv), rig.mouth.idx, rig.mouthMorphs);
     setMesh(this.eyes.geometry, new Float32Array(rig.eyes.pos), new Float32Array(rig.eyes.uv), rig.eyes.idx, rig.eyeMorphs);
     // the eyeballs take the face's normal at each eye (lit like the skin around them, sunk in the socket),
     // not their own sphere normals (which lit each one as a glossy ball popping out of the face)
-    {
+    if (!p.eyePop) { // (popped eyes keep their own sphere normals: lit as balls bulging out of the face)
       const fn = this.geo.attributes.normal, en = this.eyes.geometry.attributes.normal, half = en.count / 2;
       rig.eyeRegions.forEach((reg, e) => {
         const n = [0, 0, 0];
@@ -523,7 +669,7 @@ export class HeadRig {
     }
     // the character's eye traits (Eyes sliders); Odd eye gives one eye (deterministically chosen) a
     // different iris, redness or pupil, the rest of the time both eyes are identical
-    const base = { sclera, iris: hueShift(iris, p.eyeHue || 0), pupil: p.eyePupil ?? 0.42, voidEye: p.eyeVoid, red: p.eyeRed || 0, veins: p.eyeVeins || 0, yellow: p.eyeYellow || 0, seed: (p.seed | 0) + 11 };
+    const base = { sclera, iris: hueShift(iris, p.eyeHue || 0), pupil: p.eyePupil ?? 0.42, voidEye: p.eyeVoid, stare: p.eyeStare || 0, red: p.eyeRed || 0, veins: p.eyeVeins || 0, yellow: p.eyeYellow || 0, seed: (p.seed | 0) + 11 };
     const odd = p.eyeOdd || 0, pickOdd = ((p.seed | 0) >>> 3) % 3, other = { ...base, seed: base.seed + 7 };
     if (odd > 0) {
       if (pickOdd === 0) other.iris = hueShift(base.iris, 60 + 120 * odd);
@@ -584,7 +730,71 @@ export class HeadRig {
       this.hatVisor.scale.set(f.R * 0.95, 1, f.R * (0.45 + 0.3 * k));
       this.hatVisor.position.set(0, f.frontY, f.crownFront - 0.01);
       this.hatVisor.rotation.set(f.tilt + 0.18, 0, 0);
+      // hatSize (< 1): a hat too small for the head, perched on top: the crown, brim and visor scaled about a
+      // point on the top of the skull, then sunk onto the dome by part of the height it lost
+      const hs = this.last?.p?.hatSize ?? 1;
+      this.hatCrown.scale.setScalar(1); this.hatCrown.position.set(0, 0, 0);
+      if (hs !== 1) {
+        const bb = g.boundingBox, pv = new THREE.Vector3(0, bb.max.y, (bb.min.z + bb.max.z) / 2), sink = (1 - hs) * (bb.max.y - f.line0) * 0.55;
+        for (const m of [this.hatCrown, this.hatBrim, this.hatVisor]) {
+          m.position.sub(pv).multiplyScalar(hs).add(pv); m.position.y -= sink;
+          m.scale.multiplyScalar(hs);
+        }
+      }
     }
+    this.buildWear(); // (the hat line is known now: a mask under it is trimmed to the brim)
+  }
+
+  // masks and gadgets, rebuilt when the head, the choice or the hat line changes (a mask stops under a hat's brim)
+  buildWear() {
+    const { mask, p } = this.wearArgs || {}; if (!p || !this.shell) return;
+    const hatY = p.hat && p.hat !== 'none' && this.hatFitLine != null ? this.hatFitLine : null;
+    const wearKey = `${this.headKey}|${mask}|${p.gadget}|${p.maskSize ?? 1}|${hatY?.toFixed(3)}|${p.hatSize ?? 1}`;
+    if (wearKey === this.wearKey) return;
+    this.wearKey = wearKey;
+    this.wear.traverse((o) => { o.geometry?.dispose(); o.material?.map?.dispose?.(); });
+    this.wear.clear();
+    if (mask) this.wear.add(buildMask(mask, this.shell, this.faceP, p.maskSize ?? 1, { hatY }));
+    if (p.gadget && p.gadget !== 'none') this.wear.add(buildGadget(p.gadget, this.faceP));
+  }
+
+  // the seamless scalp's texture, at the face texture's own density: each column is an outline point (from under
+  // the chin), the top row its exact colour in the face texture (so the skull meets the face with no step),
+  // softened across columns and settling to the outline's average further back; times the brightness of a
+  // clean cheek patch tiled over it at 1:1 (the face's own pores and grain), then the face's 5-bit dither
+  paintScalp(atlas, p) {
+    const S = this.scalpLayout, key = `${atlas.width}|${p.levels}|${this.headKey}|${atlas._v || 0}`;
+    const g0 = atlas.getContext('2d', { willReadFrequently: true }), N = atlas.width, px = g0.getImageData(0, 0, N, N).data;
+    let sig = 0; for (let i = 0; i < px.length; i += 4097) sig = (sig * 31 + px[i]) | 0; // (repaint only when the face texture changed)
+    if (this.scalpPainted === key + sig) return; this.scalpPainted = key + sig;
+    const at = (u, v) => { const x = Math.min(N - 1, Math.max(0, Math.floor(u * N))), y = Math.min(N - 1, Math.max(0, Math.floor((1 - v) * N))), o = (y * N + x) * 4; return [px[o], px[o + 1], px[o + 2]]; };
+    const rim = S.rim.map(([u, v]) => { const c = [0, 0, 0]; for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) { const q = at(u + dx / N, v + dy / N); for (let k = 0; k < 3; k++) c[k] += q[k] / 5; } return c; });
+    const L = S.L, mean = [0, 1, 2].map((k) => rim.reduce((a, c) => a + c[k], 0) / L);
+    const soft = rim.map((_, c) => { const o = [0, 0, 0]; let ws = 0; for (let j = 0; j < L; j++) { let d = Math.abs(j - c); d = Math.min(d, L - d); const w = Math.exp(-(d * d) / 6); ws += w; for (let k = 0; k < 3; k++) o[k] += rim[j][k] * w; } return o.map((x) => x / ws); });
+    const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    const P = S.patch; let pm = 0; for (let i = 0; i < 64; i++) pm += lum(at(P.x0 + ((i % 8) + 0.5) / 8 * P.w, P.y1 - (Math.floor(i / 8) + 0.5) / 8 * P.h)) / 64;
+    const W = Math.min(1024, Math.max(64, Math.round(S.around * S.uvPerUnit * N))), H = Math.min(512, Math.max(32, Math.round(S.back * S.uvPerUnit * N)));
+    const cv = this.scalpCanvas; if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    const g = cv.getContext('2d'), img = g.createImageData(W, H), d = img.data, lv = p.levels || 32;
+    const pp = (x, span) => { const f = ((x / span) % 2 + 2) % 2; return (f < 1 ? f : 2 - f) * span; };
+    const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const bayer = (x, y) => { const b2 = (a, c) => ((a / 2) % 1 + (c * c * 0.75) % 1) % 1; return b2(Math.floor(x / 2), Math.floor(y / 2)) * 0.25 + b2(Math.floor(x), Math.floor(y)); };
+    for (let y = 0; y < H; y++) {
+      const row = y / (H - 1); // (0 at the seam: the texture's top row, where v = 1)
+      for (let x = 0; x < W; x++) {
+        const col = (x + 0.5) / W * (L + 1) - 0.5, ci = ((Math.floor(col) % L) + L) % L, cj = (ci + 1) % L, fr = col - Math.floor(col);
+        const exact = [0, 1, 2].map((k) => rim[ci][k] + (rim[cj][k] - rim[ci][k]) * fr), sf = [0, 1, 2].map((k) => soft[ci][k] + (soft[cj][k] - soft[ci][k]) * fr);
+        const a = sm(0.15, 0.45, row), b = sm(0.25, 0.7, row);
+        const base = [0, 1, 2].map((k) => (exact[k] + (sf[k] - exact[k]) * a) * (1 - b) + mean[k] * b);
+        const pu = P.x0 + pp(x / N, P.w), pv = P.y1 - pp(y / N, P.h); let loc = 0;
+        for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [-2, -2], [2, 2], [-2, 2], [2, -2]]) loc += lum(at(pu + dx / N, pv + dy / N)) / 8;
+        const det = Math.min(1.25, Math.max(0.75, lum(at(pu, pv)) / (loc || pm || 1))); // (only the fine grain, against its own neighbourhood: the patch's broad shading repeated as rings)
+        const o = (y * W + x) * 4, dz = bayer(x, y);
+        for (let k = 0; k < 3; k++) d[o + k] = Math.min(255, Math.floor(Math.min(1, (base[k] * det) / 255) * lv + dz) / lv * 255);
+        d[o + 3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0); this.scalpTex.needsUpdate = true;
   }
 
   paint(hair, skin, p) {
@@ -640,8 +850,8 @@ export class HeadRig {
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i) - D.sideZ, nx = nrm.getX(i), nz = nrm.getZ(i);
       const a = Math.atan2(x, -z); // 0 at the back, +-pi/2 at the sides
-      if (Math.abs(a) > 1.75 || nrm.getY(i) > 0.5 || nx * x + nz * z <= 0) continue;
-      const b = Math.min(BINS - 1, Math.floor(((a + 1.75) / 3.5) * BINS));
+      if (Math.abs(a) > 1.4 || nrm.getY(i) > 0.5 || nx * x + nz * z <= 0) continue; // (behind the ear line: from further forward they hung in front of a short neck)
+      const b = Math.min(BINS - 1, Math.floor(((a + 1.4) / 2.8) * BINS));
       if (root[b] < 0 || y < pos.getY(root[b])) root[b] = i;
     }
     // the shell's painted color

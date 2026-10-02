@@ -8,3 +8,12 @@ public/wasm/
 .lupeignore
 .lupeshared
 .lupe-branch
+
+# Personal content: saved by the editor / slides / exports, kept local (never committed)
+scenes/*.json
+library/
+items/*.json
+!items/oil-lantern.json
+public/characters/
+public/decks/
+assets/*.wav

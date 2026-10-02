@@ -1,0 +1,1 @@
+{ "label": "Relaxed", "fingers": { "all": { "mode": "curl", "t": 0.22 }, "Index": { "mode": "curl", "t": 0.15 }, "Pinky": { "mode": "curl", "t": 0.3 } }, "thumb": { "mode": "curl", "t": 0.2, "opp": 0.35 }, "spread": 0.2 }

@@ -562,6 +562,183 @@ export const PROPS = {
       return { group: assemble([[oldMaterial({ map: t, alphaTest: 0.5 }), q]]), seats: [], radius: 0.3 };
     },
   },
+  voiceTrumpet: {
+    label: 'Voice trumpet (watching)', category: 'Meadow',
+    build(d = {}) {
+      // a silver speaking-trumpet on a thin pole, like the ones that rise out of a children's-TV hill. It turns its
+      // bell to the camera, a little late, and keeps it there. "height": the pole (m)
+      const H = d.height || 1.7, silver = lit('stem', [0.92, 0.94, 1.0]);
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, H, 8).translate(0, H / 2, 0), silver));
+      const head = new THREE.Group(); head.position.y = H; g.add(head);
+      head.add(new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 6), silver));
+      const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.035, 0.42, 16, 1, true).rotateX(Math.PI / 2).translate(0, 0, 0.24), oldMaterial({ map: tex().stem, color: [0.92, 0.94, 1.0], side: THREE.DoubleSide }));
+      head.add(bell);
+      head.add(new THREE.Mesh(new THREE.CircleGeometry(0.17, 16).translate(0, 0, 0.36), oldMaterial({ map: tex().dark, color: [0.3, 0.3, 0.32] })));
+      const v = new THREE.Vector3(), q = new THREE.Quaternion(), m4 = new THREE.Matrix4();
+      return {
+        group: g, seats: [], radius: 0.3,
+        update: (t, cam) => {
+          if (!cam) return;
+          head.updateWorldMatrix(true, false); v.copy(cam.position); head.parent.worldToLocal(v);
+          m4.lookAt(v, head.position, new THREE.Vector3(0, 1, 0)); q.setFromRotationMatrix(m4);
+          head.quaternion.slerp(q, 0.08);
+        },
+      };
+    },
+  },
+  sunHalo: {
+    label: 'Sun halo (rays)', category: 'Meadow',
+    build(d = {}) {
+      // a children's-TV sun: a golden disc with a ring of soft rays, unlit, always turned to the camera. Hang it
+      // high (its "y") behind a head-only actor to make a sun with a face. "size": the rays' diameter (m).
+      // "inner": the rays start this far out (m) and there's no disc: the face in front is the whole sun
+      const S = d.size || 30, c = document.createElement('canvas'); c.width = c.height = 512; const x = c.getContext('2d');
+      const r0 = d.inner ? Math.min(240, (256 * d.inner) / (S / 2)) : 110;
+      x.translate(256, 256);
+      const glowG = x.createRadialGradient(0, 0, d.inner ? r0 * 0.9 : 60, 0, 0, 256); glowG.addColorStop(0, 'rgba(255,236,120,1)'); glowG.addColorStop(0.45, 'rgba(255,214,70,.75)'); glowG.addColorStop(1, 'rgba(255,200,60,0)');
+      x.fillStyle = glowG; x.beginPath(); x.arc(0, 0, 256, 0, 7); x.fill();
+      for (let i = 0; i < 24; i++) { x.save(); x.rotate((i / 24) * Math.PI * 2); const rg = x.createLinearGradient(0, r0, 0, 250); rg.addColorStop(0, 'rgba(255,240,150,.95)'); rg.addColorStop(1, 'rgba(255,220,90,0)'); x.fillStyle = rg; x.beginPath(); x.moveTo(-r0 * 0.13, r0); x.lineTo(0, 250); x.lineTo(r0 * 0.13, r0); x.fill(); x.restore(); }
+      if (d.inner) { x.globalCompositeOperation = 'destination-out'; const hole = x.createRadialGradient(0, 0, r0 * 0.6, 0, 0, r0 * 0.95); hole.addColorStop(0, 'rgba(0,0,0,1)'); hole.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = hole; x.beginPath(); x.arc(0, 0, r0, 0, 7); x.fill(); x.globalCompositeOperation = 'source-over'; } // (empty in the middle: the face is the sun; from an angle a disc showed beside it)
+      if (!d.inner) { const core = x.createRadialGradient(0, 0, 40, 0, 0, 125); core.addColorStop(0, '#fff6c0'); core.addColorStop(0.8, '#ffd23a'); core.addColorStop(1, 'rgba(255,190,40,.9)'); x.fillStyle = core; x.beginPath(); x.arc(0, 0, 125, 0, 7); x.fill(); }
+      const t = new THREE.CanvasTexture(c); t.magFilter = t.minFilter = THREE.LinearFilter;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(S, S), new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false, fog: false }));
+      const g = new THREE.Group(); g.add(m);
+      // "hole": a face for a sun. A golden ring drawn over everything at the halo's middle, its hole (radius, m)
+      // showing only what's behind it: put the halo at a head-only actor's face and the face becomes the sun's
+      // disc. "back": how far behind (away from the camera) the rays sit
+      let ring = null;
+      if (d.hole) {
+        const rc = document.createElement('canvas'); rc.width = rc.height = 512; const y = rc.getContext('2d'), R0 = 256 * (d.hole / (S * 0.21));
+        const rg = y.createRadialGradient(256, 256, R0 * 0.9, 256, 256, 256); rg.addColorStop(0, 'rgba(255,214,60,0)'); rg.addColorStop(0.08, 'rgba(255,214,60,1)'); rg.addColorStop(0.55, 'rgba(255,200,40,1)'); rg.addColorStop(1, 'rgba(255,190,40,1)');
+        y.fillStyle = rg; y.beginPath(); y.arc(256, 256, 256, 0, 7); y.fill();
+        const rt = new THREE.CanvasTexture(rc); rt.magFilter = rt.minFilter = THREE.LinearFilter;
+        ring = new THREE.Mesh(new THREE.CircleGeometry(S * 0.21, 48), new THREE.MeshBasicMaterial({ map: rt, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+        ring.renderOrder = 5; g.add(ring);
+      }
+      const back = d.back || 0, v = new THREE.Vector3();
+      return { group: g, seats: [], radius: 1, update: (tt, cam) => {
+        if (!cam) return;
+        g.updateWorldMatrix(true, false); v.copy(cam.position); g.worldToLocal(v); const away = v.clone().normalize().multiplyScalar(-back);
+        m.position.copy(away); m.lookAt(cam.position); m.rotateZ(tt * 0.05); // (the rays turn slowly)
+        if (ring) ring.lookAt(cam.position);
+      } };
+    },
+  },
+  faceFlower: {
+    label: 'Flower (with a face)', category: 'Meadow',
+    build(d = {}) {
+      // a tall daisy-ish flower: a bending stem, two leaves, a ring of bright petals round an empty middle where a
+      // head-only actor's face goes (place the actor at the prop's "head" anchor: its y is d.height). "color": the
+      // petals [r, g, b] 0..255, "height" the stem (m), "petal" the ring's size
+      const H = d.height || 0.9, P = d.petal || 0.22, col = d.color || [250, 214, 40], lean = d.lean ?? 0.12;
+      const g = new THREE.Group(), green = oldMaterial({ map: tex().stem, color: [0.36, 0.62, 0.22] });
+      const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(lean * 0.3, H * 0.45, 0.02), new THREE.Vector3(lean, H, 0)]);
+      g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 10, 0.018, 5, false), green));
+      for (const sx of [-1, 1]) { const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 4).scale(1.6, 0.25, 0.6), green); leaf.position.set(sx * 0.1, H * (sx > 0 ? 0.3 : 0.45), 0); leaf.rotation.z = sx * -0.5; g.add(leaf); }
+      const head = new THREE.Group(); head.position.set(lean, H, 0); g.add(head);
+      const pc = col.map((v) => v / 255), petalMat = oldMaterial({ map: tex().stem, color: pc, side: THREE.DoubleSide });
+      const n = d.petals || 12;
+      for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2, pt = new THREE.Mesh(new THREE.SphereGeometry(P * 0.42, 8, 4).scale(1, 0.42, 0.12), petalMat); pt.position.set(Math.cos(a) * P * 0.95, Math.sin(a) * P * 0.95, -0.02); pt.rotation.z = a; head.add(pt); }
+      return { group: g, seats: [], radius: 0.3, anchors: { head }, update: (t, cam) => { if (!cam) return; head.updateWorldMatrix(true, false); head.lookAt(cam.position); head.rotateZ(Math.sin(t * 1.3 + H * 7) * 0.08); } }; // (lookAt takes the camera's world position: the ring faces you squarely)
+    },
+  },
+  lollipopSign: {
+    label: 'Lollipop sign (rule 4)', category: 'Meadow',
+    build(d = {}) {
+      // a lollipop lady's sign: a white pole and a round board. The board says what d.text says ("RULE 4" by default),
+      // scribbled over in black marker as if someone tried to hide it. "height": the pole (m), board 0.6 m across
+      const H = d.height || 1.9, c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'), r = rng(4444);
+      x.fillStyle = '#f4f1e6'; x.beginPath(); x.arc(128, 128, 126, 0, 7); x.fill();
+      x.strokeStyle = '#d82020'; x.lineWidth = 18; x.beginPath(); x.arc(128, 128, 112, 0, 7); x.stroke();
+      x.fillStyle = '#111'; x.font = 'bold 64px Georgia, serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(d.text || 'RULE 4', 128, 128);
+      if (d.scribble !== false) { x.strokeStyle = 'rgba(10,10,10,.92)'; x.lineWidth = 9; x.lineCap = 'round'; x.beginPath(); x.moveTo(52, 128); for (let i = 0; i < 26; i++) x.lineTo(56 + i * 6 + r() * 6, 98 + (i % 2) * 52 + r() * 10); x.stroke(); }
+      const t = new THREE.CanvasTexture(c); t.magFilter = t.minFilter = THREE.LinearFilter;
+      const g = new THREE.Group(), white = oldMaterial({ map: tex().stem, color: [1, 1, 0.97] });
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, H, 8).translate(0, H / 2, 0), white));
+      const board = new THREE.Mesh(new THREE.CircleGeometry(0.3, 32), oldMaterial({ map: t, side: THREE.DoubleSide })); board.position.set(0, H + 0.28, 0.03); g.add(board);
+      return { group: g, seats: [], radius: 0.3 };
+    },
+  },
+  rockingHorse: {
+    label: 'Rocking horse (child-sized)', category: 'Playroom',
+    build(d = {}) {
+      // a painted wooden rocking horse on curved rockers, rocking a little by itself. Its head has a "head" anchor
+      // where a head-only actor's face can go (for a horse with a person's face). "color": the body [r, g, b] 0..255
+      const col = (d.color || [236, 230, 214]).map((v) => v / 255), red = oldMaterial({ map: tex().stem, color: [0.75, 0.12, 0.12] }), body = oldMaterial({ map: tex().stem, color: col }), dark = oldMaterial({ map: tex().dark });
+      const g = new THREE.Group(), rock = new THREE.Group(); g.add(rock);
+      for (const sx of [-1, 1]) { const arc = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.03, 5, 24, 1.1).rotateZ(Math.PI * 1.5 - 0.55).rotateY(Math.PI / 2).translate(sx * 0.18, 1.2, 0), red); rock.add(arc); }
+      rock.add(new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.12).translate(0, 0.06, 0.4), red), new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.12).translate(0, 0.06, -0.4), red));
+      for (const [x, z] of [[-0.12, 0.3], [0.12, 0.3], [-0.12, -0.3], [0.12, -0.3]]) rock.add(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.42, 6).translate(x, 0.3, z), body));
+      rock.add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8).scale(1, 0.85, 2.1).translate(0, 0.62, 0), body));
+      for (let i = 0; i < 9; i++) rock.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.05).translate(0, 0.92 + (i % 3) * 0.02, 0.3 - i * 0.03), dark)); // (a mane)
+      rock.add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.4, 8).rotateX(-0.6).translate(0, 0.85, 0.36), body));
+      const head = new THREE.Group(); head.position.set(0, 1.05, 0.5); rock.add(head);
+      return { group: g, seats: [], radius: 0.6, anchors: { head }, update: (t) => { rock.rotation.x = Math.sin(t * 1.6) * 0.12; } };
+    },
+  },
+  toyBlocks: {
+    label: 'Toy blocks (spelling a word)', category: 'Playroom',
+    build(d = {}) {
+      // painted wooden letter blocks in a wobbly row, spelling d.word ("COME IN"); a space leaves a gap
+      const word = d.word || 'COME IN', S = d.size || 0.22, r = rng(2121), g = new THREE.Group(), cols = ['#e83b3b', '#3b7be8', '#f2c230', '#3bb35a', '#b85ad8'];
+      let x = -((word.length - 1) * S * 1.08) / 2;
+      for (const ch of word) {
+        if (ch !== ' ') {
+          const c = document.createElement('canvas'); c.width = c.height = 64; const q = c.getContext('2d');
+          q.fillStyle = '#f3ead2'; q.fillRect(0, 0, 64, 64); q.strokeStyle = cols[(r() * 5) | 0]; q.lineWidth = 6; q.strokeRect(4, 4, 56, 56);
+          q.fillStyle = cols[(r() * 5) | 0]; q.font = 'bold 44px Georgia, serif'; q.textAlign = 'center'; q.textBaseline = 'middle'; q.fillText(ch, 32, 35);
+          const t = new THREE.CanvasTexture(c); t.magFilter = t.minFilter = THREE.NearestFilter;
+          const m = new THREE.Mesh(new THREE.BoxGeometry(S, S, S), oldMaterial({ map: t })); m.position.set(x, S / 2, (r() - 0.5) * 0.06); m.rotation.y = (r() - 0.5) * 0.4; g.add(m);
+        }
+        x += S * 1.08;
+      }
+      return { group: g, seats: [], radius: (word.length * S) / 2 };
+    },
+  },
+  teaParty: {
+    label: 'Tea party (little table)', category: 'Playroom',
+    build(d = {}) {
+      // a low round children's table with a cloth, a teapot and a cup and saucer at each of d.places (5) places, and a
+      // tiny chair at each. Guests: actors placed at the prop's "seatN" anchors (on the chairs, facing the table)
+      const n = d.places || 5, R = 0.42, g = new THREE.Group(), white = oldMaterial({ map: tex().stem, color: [1, 0.98, 0.94] }), pink = oldMaterial({ map: tex().stem, color: [0.98, 0.62, 0.72] }), wood = lit('wood');
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.03, 20).translate(0, 0.42, 0), white));
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(R * 1.04, R * 1.18, 0.12, 20, 1, true).translate(0, 0.36, 0), pink));
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 0.4, 6).translate(0, 0.2, 0), wood));
+      g.add(new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8).scale(1, 0.9, 1).translate(0, 0.51, 0), pink), new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.02, 0.1, 5).rotateZ(-1).translate(0.1, 0.53, 0), pink));
+      const anchors = {};
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2, cx = Math.sin(a), cz = Math.cos(a);
+        g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.02, 10).translate(cx * R * 0.7, 0.445, cz * R * 0.7), white));
+        g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.022, 0.045, 8).translate(cx * R * 0.7, 0.475, cz * R * 0.7), white));
+        const ch = new THREE.Group(); ch.position.set(cx * (R + 0.28), 0, cz * (R + 0.28)); ch.rotation.y = a + Math.PI; g.add(ch);
+        ch.add(new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.03, 0.26).translate(0, 0.26, 0), wood), new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.3, 0.03).translate(0, 0.42, -0.13), wood));
+        for (const [x, z] of [[-0.11, -0.11], [0.11, -0.11], [-0.11, 0.11], [0.11, 0.11]]) ch.add(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.26, 0.03).translate(x, 0.13, z), wood));
+        anchors[`seat${i}`] = ch;
+      }
+      return { group: g, seats: [], radius: R + 0.4, anchors };
+    },
+  },
+  eggCup: {
+    label: 'Egg cup (huge)', category: 'Meadow',
+    build(d = {}) {
+      // a glazed egg cup big enough for a head: a deep round bowl on a short waisted stem and a wide foot, cherry
+      // red with white dots (complementary to the meadow's green). "rim": the rim's height (m), "radius": the
+      // bowl's inner radius at the rim. Set a head-only actor (actor "only": "head") down into it with its "y".
+      const H = d.rim || 0.67, R = d.radius || 0.31, wall = R * 0.08;
+      const prof = [[0, 0], [R * 1.05, 0], [R * 1.08, H * 0.04], [R * 0.95, H * 0.1], [R * 0.42, H * 0.2], [R * 0.3, H * 0.3], [R * 0.36, H * 0.4], [R * 0.75, H * 0.5], [R * 0.98, H * 0.68], [R + wall, H * 0.9], [R + wall * 0.6, H], [R, H * 0.99], [R * 0.92, H * 0.85], [R * 0.6, H * 0.62], [0, H * 0.58]];
+      const geo = new THREE.LatheGeometry(prof.map(([x, y]) => new THREE.Vector2(x, y)), 28);
+      const c = document.createElement('canvas'); c.width = 128; c.height = 64; const x = c.getContext('2d'), r = rng(9090);
+      const col = d.color || [196, 22, 30];
+      x.fillStyle = css(col); x.fillRect(0, 0, 128, 64);
+      for (let i = 0; i < 70; i++) { x.fillStyle = css(col.map((v) => v * (0.85 + r() * 0.3)), 0.3); x.fillRect(r() * 128, r() * 64, 6 + r() * 20, 2 + r() * 6); }
+      for (let row = 0; row < 5; row++) for (let k = 0; k < 9; k++) { x.fillStyle = 'rgba(250,246,236,.97)'; x.beginPath(); x.ellipse(((k + (row % 2) * 0.5) / 9) * 128, 8 + row * 12, 3.2, 2.6, 0, 0, 7); x.fill(); }
+      const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.name = 'ceramic';
+      const m = new THREE.Mesh(geo, oldMaterial({ map: t, side: THREE.DoubleSide }));
+      const group = new THREE.Group(); group.add(m);
+      return { group, seats: [], radius: R * 1.1 };
+    },
+  },
   shoes: {
     label: 'Shoes (muddy)', category: 'Furniture',
     build(d = {}) {

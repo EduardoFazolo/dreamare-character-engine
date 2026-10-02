@@ -5,6 +5,8 @@
 //     plague   a leather plate with glass eyes and a long curved beak
 //     sack     a burlap sack over the whole head (painted ragged eye holes, a stitched mouth), hides the hair
 //     bandage  gauze strips wound round the whole head, gaps showing skin, eyes left open; hides the hair
+//     kiddie   a cheap glossy children's-character mask: pastel yellow, a huge fixed painted grin, round pink
+//              cheeks, cartoon brows, eye holes for the real eyes, an elastic band round the head, a little antenna
 // Plates and wraps are offset copies of the head's own surface and carry its morph targets, so they move
 // with the jaw and brows. Textures are painted procedurally (nothing to license).
 import * as THREE from 'three';
@@ -12,7 +14,7 @@ import { ps2Material } from './head.js';
 import { MORPHS } from './faceanim.js';
 
 export const GADGETS = ['none', 'monocle', 'glasses', 'cigar', 'cigarette', 'pipe'];
-export const MASKS = ['doll', 'plague', 'sack', 'bandage'];
+export const MASKS = ['doll', 'plague', 'sack', 'bandage', 'kiddie', 'pig'];
 export const MASK_HIDES_HAIR = new Set(['sack', 'bandage']);
 
 const EYE_R = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]; // subject's right (-x)
@@ -80,11 +82,11 @@ export function buildGadget(kind, P) {
 
 // ---------------- masks ----------------
 // shell: { pos: Float32Array (head verts), idx (face + hull triangles, uncut), faceTris (how many of idx are the face's), morphs, canonUV }
-export function buildMask(kind, shell, P) {
+export function buildMask(kind, shell, P, size = 1, { hatY = null } = {}) {
   const g = new THREE.Group();
   if (!kind || !shell) return g;
   const full = kind === 'sack' || kind === 'bandage';
-  const off = { doll: 0.022, plague: 0.03, sack: 0.075, bandage: 0.028 }[kind];
+  const off = { doll: 0.022, plague: 0.03, sack: 0.075, bandage: 0.028, kiddie: 0.03, pig: 0.035 }[kind];
   const { pos, idx, faceTris, canonUV } = shell;
   // normals of the head surface, then the offset copy
   const tmp = new THREE.BufferGeometry(); tmp.setAttribute('position', new THREE.BufferAttribute(pos, 3)); tmp.setIndex(idx); tmp.computeVertexNormals();
@@ -93,9 +95,21 @@ export function buildMask(kind, shell, P) {
   // which triangles: the face alone (plates) or everything (wraps); plates get eye holes
   const eyeEll = [EYE_R, EYE_L].map((ids) => { const us = ids.map((i) => canonUV[i]); const cx = us.reduce((s, u) => s + u[0], 0) / us.length, cy = us.reduce((s, u) => s + u[1], 0) / us.length; const rx = Math.max(...us.map((u) => Math.abs(u[0] - cx))) * 1.25, ry = Math.max(...us.map((u) => Math.abs(u[1] - cy))) * 1.6; return [cx, cy, rx, ry]; });
   const inEye = (i) => { const u = canonUV[i]; return u && eyeEll.some(([cx, cy, rx, ry]) => ((u[0] - cx) / rx) ** 2 + ((u[1] - cy) / ry) ** 2 < 1); };
+  // the kiddie mask: bigger eye holes and a mouth hole (his real eyes and lips show through, lined up), and when
+  // smaller than the face (size < 1) the plate is cut down round its middle instead of scaled, so the holes stay on
+  // the real features: a child's mask on a big head, the real face all round it
+  const kid = kind === 'kiddie' || kind === 'pig', KID_EYE = kind === 'pig' ? [1.15, 1.6] : [1.4, 2.3]; // (the eye holes' size against the eyes: wide, tall, still two holes)
+  const mouthEll = (() => { const ids = [61, 291, 0, 17, 13, 14, 39, 269, 181, 405], us = ids.map((i) => canonUV[i]); const cx = us.reduce((s, u) => s + u[0], 0) / us.length, cy = us.reduce((s, u) => s + u[1], 0) / us.length; return [cx, cy, Math.max(...us.map((u) => Math.abs(u[0] - cx))) * 1.05, Math.max(...us.map((u) => Math.abs(u[1] - cy))) * 1.15]; })();
+  const inEll = (u, [cx, cy, rx, ry], k = 1) => ((u[0] - cx) / (rx * k)) ** 2 + ((u[1] - cy) / (ry * k)) ** 2 < 1;
+  const eyeMid = [(eyeEll[0][0] + eyeEll[1][0]) / 2, (eyeEll[0][1] + eyeEll[1][1]) / 2], midU = [eyeMid[0], (eyeMid[1] * 0.6 + mouthEll[1] * 0.4)];
+  const spanX = Math.abs(eyeEll[1][0] - eyeEll[0][0]), spanY = Math.abs(eyeMid[1] - mouthEll[1]); // (the plate's reach: from the eyes' spacing and the eyes-to-mouth height, so any face fits)
+  // wide open round the eyes: his real eyes and the skin round them show through
+  const keepK = (i) => { const u = canonUV[i]; if (!u) return true; if (eyeEll.some(([cx, cy, rx, ry]) => inEll(u, [cx, cy, rx * KID_EYE[0], ry * KID_EYE[1]]))) return false; return size >= 1 || Math.hypot((u[0] - midU[0]) / (spanX * 1.15), (u[1] - midU[1]) / (spanY * 1.55)) < size * 1.35; };
   const tris = [];
   for (let t = 0; t < (full ? idx.length : faceTris * 3); t += 3) {
     const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    if (kid && hatY != null && Math.max(out[a * 3 + 1], out[b * 3 + 1], out[c * 3 + 1]) > hatY - 0.03) continue; // (under a hat: the mask ends below its brim instead of running up through it)
+    if (kid && a < 468 && b < 468 && c < 468) { if (!keepK(a) || !keepK(b) || !keepK(c)) continue; tris.push(a, b, c); continue; }
     if (!full && a < 468 && b < 468 && c < 468 && (inEye(a) + inEye(b) + inEye(c)) >= 2) continue;
     tris.push(a, b, c);
   }
@@ -118,9 +132,48 @@ export function buildMask(kind, shell, P) {
   const m = ps2Material({ map: tex, alphaTest: kind === 'bandage' ? 0.5 : 0, side: THREE.DoubleSide }); m.name = 'mask';
   g.add(new THREE.Mesh(geo, m));
   if (kind === 'plague') g.add(...plagueParts(P));
+  // size: the plate scaled about the nose (a child's mask strapped on a big head: the real face shows round it),
+  // held just off the skin so it doesn't sink in; the kiddie mask's band still runs round the full-size head
+  const c = V(P[4]).add(new THREE.Vector3(0, 0.05, 0)), lift = (1 - size) * 0.12;
+  const sp = (v) => (size === 1 || full || kid ? v.clone() : c.clone().add(v.clone().sub(c).multiplyScalar(size)).add(new THREE.Vector3(0, 0, lift)));
+  if (size !== 1 && !full && !kid) { const pl = g.children[0]; pl.position.set(c.x * (1 - size), c.y * (1 - size), c.z * (1 - size) + lift); pl.scale.setScalar(size); }
+  if (kind === 'pig') g.add(...pigParts(P));
+  if (kid) { // the band from the plate's own edges at the eyes' height (measured from what's kept)
+    const ey = (avg(P, EYE_R).y + avg(P, EYE_L).y) / 2; let lo = null, hi = null;
+    for (const v of new Set(tris)) { const x = out[v * 3], y = out[v * 3 + 1]; if (Math.abs(y - ey) > 0.07) continue; if (!lo || x < lo.x) lo = new THREE.Vector3(x, y, out[v * 3 + 2]); if (!hi || x > hi.x) hi = new THREE.Vector3(x, y, out[v * 3 + 2]); }
+    g.add(...kiddieParts(P, sp, lo, hi, hatY != null || kind === 'pig')); // (under a hat, no antenna: it would poke through the cap)
+  }
   return g;
 }
 
+// the kiddie mask's elastic band (round the back of the head at the eyes' height) and its little antenna
+function kiddieParts(P, sp = (v) => v, edgeA = null, edgeB = null, noAntenna = false) {
+  const band = mat([0.08, 0.08, 0.08], 'mask'), wire = mat([0.95, 0.85, 0.35], 'mask'), out = [];
+  const eR = avg(P, EYE_R), eL = avg(P, EYE_L), y = (eR.y + eL.y) / 2, hw = V(P[234]).distanceTo(V(P[454])) / 2;
+  const a = edgeA ? edgeA.clone().setY(y) : sp(V(P[234]).setY(y)), b = edgeB ? edgeB.clone().setY(y) : sp(V(P[454]).setY(y)); // (from the mask's own edges, however small, round the back of the real head)
+  const curve = new THREE.CatmullRomCurve3([a, new THREE.Vector3(-hw * 1.05, y, -hw * 0.2), new THREE.Vector3(-hw * 0.9, y, -hw * 0.8), new THREE.Vector3(0, y + 0.02, -hw * 1.25), new THREE.Vector3(hw * 0.9, y, -hw * 0.8), new THREE.Vector3(hw * 1.05, y, -hw * 0.2), b]);
+  out.push(new THREE.Mesh(new THREE.TubeGeometry(curve, 32, 0.012, 4, false), band));
+  if (noAntenna) return out;
+  const top = sp(V(P[10]).add(new THREE.Vector3(0, 0.02, 0.03)));
+  const stem = new THREE.CatmullRomCurve3([top, top.clone().add(new THREE.Vector3(0.01, 0.12, 0.02)), top.clone().add(new THREE.Vector3(-0.02, 0.24, 0.04))]);
+  out.push(new THREE.Mesh(new THREE.TubeGeometry(stem, 10, 0.012, 5, false), wire));
+  out.push(new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.012, 5, 14).translate(-0.02, 0.29, 0.04).translate(top.x, top.y, top.z), wire)); // (a ring, like a children's-TV antenna)
+  return out;
+}
+// the pig mask's snout (a fat pink disc on a short cone, two dark nostrils) and floppy ears at the temples
+function pigParts(P) {
+  const pink = mat([1.15, 0.78, 0.82], 'mask'), dark = mat([0.25, 0.08, 0.1], 'mask'), out = [];
+  const nose = V(P[4]), hw = V(P[234]).distanceTo(V(P[454])) / 2;
+  const base = nose.clone().add(new THREE.Vector3(0, -0.02, -0.02)), r = hw * 0.36, len = hw * 0.32;
+  const sn = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.12, len, 20).rotateX(Math.PI / 2).translate(base.x, base.y, base.z + len / 2), pink); out.push(sn);
+  out.push(new THREE.Mesh(new THREE.CircleGeometry(r * 0.98, 20).translate(base.x, base.y, base.z + len + 0.003), pink));
+  for (const sx of [-1, 1]) out.push(new THREE.Mesh(new THREE.CircleGeometry(r * 0.24, 10).scale(0.7, 1.15, 1).translate(base.x + sx * r * 0.38, base.y, base.z + len + 0.006), dark));
+  for (const sx of [-1, 1]) { // ears: flat triangles, flopped forward
+    const t = V(P[sx < 0 ? 103 : 332]).add(new THREE.Vector3(sx * 0.04, 0.06, -0.05)), sh = new THREE.Shape(); sh.moveTo(-0.11, 0); sh.lineTo(0.11, 0); sh.lineTo(0, 0.24); sh.lineTo(-0.11, 0);
+    const e = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat([0.88, 0.52, 0.58], 'mask')); e.material.side = THREE.DoubleSide; e.position.copy(t); e.rotation.set(-0.5, sx * 0.35, sx * -0.55); out.push(e);
+  }
+  return out;
+}
 function plagueParts(P) {
   const leather = mat([0.24, 0.17, 0.12], 'mask'), glass = mat([0.12, 0.14, 0.13], 'mask'), brass = mat([0.6, 0.48, 0.25], 'mask');
   const eR = avg(P, EYE_R), eL = avg(P, EYE_L), fwd = new THREE.Vector3(0, 0, 1), out = [];
@@ -159,6 +212,27 @@ function paintMask(kind, { eyes, eyeEll, mouth }) {
     g.beginPath(); g.moveTo(mx - 14, my); g.quadraticCurveTo(mx - 7, my - 8, mx, my - 3); g.quadraticCurveTo(mx + 7, my - 8, mx + 14, my); g.quadraticCurveTo(mx, my + 9, mx - 14, my); g.fill();
     // a crack down one side
     g.strokeStyle = 'rgba(60,50,45,0.85)'; g.lineWidth = 1.2; g.beginPath(); let x = X(0.62), y = Y(0.95); g.moveTo(x, y); for (let k = 0; k < 14; k++) { x += (r() - 0.35) * 10; y += 10; g.lineTo(x, y); } g.stroke();
+  } else if (kind === 'pig') { // a cheap rubber pig mask: pink latex, darker in the creases, grubby, painted eyelids, a mouth slit
+    noise([246, 200, 204], 12, 2);
+    const gr = g.createRadialGradient(X(0.5), Y(0.55), 20, X(0.5), Y(0.5), N * 0.62); gr.addColorStop(0, 'rgba(255,235,238,.3)'); gr.addColorStop(1, 'rgba(150,80,90,.3)'); g.fillStyle = gr; g.fillRect(0, 0, N, N);
+    g.fillStyle = 'rgba(90,60,40,.18)'; for (let k = 0; k < 60; k++) { g.beginPath(); g.ellipse(r() * N, r() * N, 2 + r() * 7, 1 + r() * 4, r() * 3, 0, 7); g.fill(); } // grime
+    g.strokeStyle = 'rgba(120,50,60,.6)'; g.lineWidth = 2; for (const [cx, cy, rx, ry] of eyeEll) { for (let k = 0; k < 3; k++) { g.beginPath(); g.arc(X(cx), Y(cy) - ry * N * (1.9 + k * 0.35), rx * N * (1.3 + k * 0.2), Math.PI * 1.15, Math.PI * 1.85); g.stroke(); } } // wrinkled brow
+    g.fillStyle = 'rgba(60,20,30,.55)'; for (const [cx, cy, rx, ry] of eyeEll) { g.beginPath(); g.ellipse(X(cx), Y(cy), rx * N * 1.25, ry * N * 1.75, 0, 0, 7); g.fill(); } // dark latex round the holes
+    const mx = X(mouth[0]), my = Y(mouth[1]); g.strokeStyle = 'rgb(70,20,30)'; g.lineWidth = 4; g.beginPath(); g.moveTo(mx - 40, my - 6); g.quadraticCurveTo(mx, my + 14, mx + 40, my - 6); g.stroke(); // a thin smiling slit
+  } else if (kind === 'kiddie') {
+    noise([246, 222, 92], 8, 2); // pastel yellow moulded plastic
+    const gr = g.createRadialGradient(X(0.5), Y(0.62), 10, X(0.5), Y(0.5), N * 0.7); gr.addColorStop(0, 'rgba(255,255,230,.35)'); gr.addColorStop(1, 'rgba(160,120,20,.25)'); g.fillStyle = gr; g.fillRect(0, 0, N, N);
+    g.fillStyle = 'rgba(255,120,150,0.75)'; for (const u of [[0.26, 0.4], [0.74, 0.4]]) { g.beginPath(); g.arc(X(u[0]), Y(u[1]), 22, 0, 7); g.fill(); } // round pink cheeks
+    g.strokeStyle = 'rgb(40,24,20)'; g.lineWidth = 5; g.lineCap = 'round';
+    for (const [cx, cy, rx, ry] of eyeEll) { g.beginPath(); g.arc(X(cx), Y(cy) + ry * N * 0.9, rx * N * 1.6, Math.PI * 1.2, Math.PI * 1.8); g.stroke(); } // high cartoon brows (above the wide holes)
+    for (const [cx, cy, rx, ry] of eyeEll) { g.lineWidth = 3; g.beginPath(); g.ellipse(X(cx), Y(cy), rx * N * 1.45, ry * N * 2.35, 0, 0, 7); g.stroke(); } // painted rims round the (wide) holes
+    const mx = X(mouth[0]), my = Y(mouth[1]); // the grin: far too wide, fixed, a dark mouth with a tongue
+    g.fillStyle = 'rgb(70,14,24)'; g.beginPath(); g.moveTo(mx - 62, my - 14); g.quadraticCurveTo(mx, my + 70, mx + 62, my - 14); g.quadraticCurveTo(mx, my + 8, mx - 62, my - 14); g.fill();
+    g.fillStyle = 'rgb(232,90,110)'; g.beginPath(); g.ellipse(mx, my + 26, 22, 10, 0, 0, 7); g.fill();
+    g.fillStyle = 'rgb(250,248,236)'; g.beginPath(); g.moveTo(mx - 52, my - 8); g.quadraticCurveTo(mx, my + 10, mx + 52, my - 8); g.lineTo(mx + 46, my - 2); g.quadraticCurveTo(mx, my + 16, mx - 46, my - 2); g.fill(); // a row of top teeth
+    g.strokeStyle = 'rgb(40,24,20)'; g.lineWidth = 4; g.beginPath(); g.moveTo(mx - 62, my - 14); g.quadraticCurveTo(mx, my + 70, mx + 62, my - 14); g.stroke();
+    for (const sx of [-1, 1]) { g.beginPath(); g.arc(mx + sx * 66, my - 18, 6, 0, 7); g.stroke(); } // dimples
+    g.fillStyle = 'rgba(120,90,40,.35)'; for (let k = 0; k < 40; k++) g.fillRect(r() * N, r() * N, 1 + r() * 3, 1); // scuffs
   } else if (kind === 'plague') {
     noise([62, 44, 32], 22, 3);
     g.strokeStyle = 'rgba(20,14,10,0.8)'; g.lineWidth = 1.5; g.setLineDash([4, 4]);

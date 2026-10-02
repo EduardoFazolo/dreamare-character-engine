@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { LANDMARKS as L, centerOf } from './mutate.js';
+import { boundaryLoop } from './outline.js';
 
 // Photo -> canonical-UV face texture, then grade + makeup + posterize at game resolution.
 export class AtlasBaker {
@@ -30,7 +31,7 @@ export class AtlasBaker {
     this.gradeMat = new THREE.ShaderMaterial({
       uniforms: {
         src: { value: this.rtA.texture }, outRes: { value: 128 },
-        hue: { value: 0 }, sat: { value: 1 }, contrast: { value: 1 }, bright: { value: 0 }, pale: { value: 0 },
+        hue: { value: 0 }, sat: { value: 1 }, contrast: { value: 1 }, bright: { value: 0 }, pale: { value: 0 }, evenSkin: { value: 0 }, evenEdge: { value: 0 }, stripOn: { value: 0 }, cleanEdge: { value: 0 }, strip: { value: new THREE.Vector4() }, rimN: { value: 1 }, rimUV: { value: Array.from({ length: 64 }, () => new THREE.Vector2()) }, skinTone: { value: new THREE.Vector3(0.8, 0.6, 0.5) },
         shadowTint: { value: new THREE.Vector3(1, 1, 1) }, highTint: { value: new THREE.Vector3(1, 1, 1) },
         sharpen: { value: 0 }, grime: { value: 0 }, levels: { value: 32 },
         eyeL: { value: new THREE.Vector2() }, eyeR: { value: new THREE.Vector2() }, mouthC: { value: new THREE.Vector2() },
@@ -72,6 +73,14 @@ export class AtlasBaker {
     const u = this.gradeMat.uniforms;
     u.outRes.value = res;
     for (const k of ['hue', 'sat', 'contrast', 'bright', 'pale', 'sharpen', 'grime', 'levels', 'socket', 'eyeVoid', 'lips', 'noseRed', 'flush', 'teeth']) u[k].value = p[k];
+    u.evenSkin.value = p.evenSkin || 0; u.evenEdge.value = p.evenEdge || 0;
+    u.stripOn.value = p.scalp === 'seamless' ? 1 : 0; u.cleanEdge.value = p.scalp === 'seamless' ? 1 : (p.cleanEdge || 0);
+    if (u.stripOn.value) { // the skull's colours, from the face's own outline (head.js reads the same loop, from under the chin)
+      this.loop ||= boundaryLoop(this.canon.index);
+      const lp = this.loop, st = Math.max(0, lp.indexOf(152)), sr = scalpStrip(uvW);
+      u.strip.value.set(sr.x0, sr.y0, sr.w, sr.h); u.rimN.value = lp.length;
+      for (let i = 0; i < lp.length && i < 64; i++) u.rimUV.value[i].fromArray(this.canon.uv[lp[(st + i) % lp.length]]); // (the canonical UVs: the face mesh's outline keeps them (faceanim.js alignToTexture), so this is the colour its edge shows)
+    } u.skinTone.value.fromArray(face.skin);
     u.shadowTint.value.copy(tint(p.shadowHue, p.shadowAmt));
     u.highTint.value.copy(tint(p.highHue, p.highAmt));
     const set = (name, idx) => u[name].value.fromArray(centerOf(uvW, idx));
@@ -206,8 +215,9 @@ function tint(hueDeg, amt) {
 
 const GRADE_FRAG = /* glsl */`
 uniform sampler2D src; uniform float outRes;
-uniform float hue, sat, contrast, bright, pale, sharpen, grime, levels;
-uniform vec3 shadowTint, highTint;
+uniform float hue, sat, contrast, bright, pale, sharpen, grime, levels, evenSkin, evenEdge;
+uniform float stripOn, rimN, cleanEdge; uniform vec4 strip; uniform vec2 rimUV[64];
+uniform vec3 shadowTint, highTint, skinTone;
 uniform vec2 eyeL, eyeR, mouthC, noseC, cheekL, cheekR;
 uniform float faceW, socket, eyeVoid, lips, noseRed, flush, teeth;
 uniform vec2 cornerL, cornerR, upLip, loLip;
@@ -228,12 +238,54 @@ vec3 hueRotate(vec3 c, float deg){
   return toRGB * vec3(y.x, ch * cos(h), ch * sin(h));
 }
 
+// cleanEdge: out toward the face's edge, whatever is far from skin (an ear inside the outline, background,
+// a lock of hair) is painted over with the skin tone, its own brightness kept a little: it showed from the
+// side as a pale smear on the cheek
+vec3 cleanAt(vec3 col, vec2 uv){
+  if (cleanEdge <= 0.) return col;
+  float band = smoothstep(.26, .4, length(uv - noseC) / faceW);
+  float dev = smoothstep(.08, .18, length(col - skinTone));
+  float l = dot(col, vec3(.299, .587, .114)), ls = dot(skinTone, vec3(.299, .587, .114));
+  vec3 skin = skinTone * clamp(mix(1., l / max(ls, .05), .25), .85, 1.15);
+  return mix(col, skin, band * dev * cleanEdge);
+}
 void main(){
   float px = 1. / outRes;
   vec3 c = texture2D(src, vUv).rgb;
   vec3 blur = (texture2D(src, vUv + vec2(px, 0)).rgb + texture2D(src, vUv - vec2(px, 0)).rgb
              + texture2D(src, vUv + vec2(0, px)).rgb + texture2D(src, vUv - vec2(0, px)).rgb) * .25;
   c = c + sharpen * (c - blur);
+  c = cleanAt(c, vUv);
+  // evenSkin: the broad tone across the face (a paler forehead, flushed cheeks, a shadowed jaw) divided out
+  // against the face's own skin tone, the fine detail kept: one even skin, so a head that is mostly skull (a
+  // ball, a sun) doesn't read as a red mask on a pale head
+  // evenEdge: the same, but only out toward the face's edge (jaw, temples, top of the forehead), where it meets
+  // the skull's skin: no seam (no 'pink suit'), while the eyes, nose and mouth keep their own shading
+  // the seamless scalp's strip: column i is outline point i (from under the chin round), row 0 the face's own
+  // colour right at the outline, fading down the strip to the outline's average: the skull wears it, so it
+  // meets the face with no step
+  bool inStrip = stripOn > 0. && vUv.x >= strip.x && vUv.x <= strip.x + strip.z && vUv.y >= strip.y && vUv.y <= strip.y + strip.w;
+  if (inStrip) {
+    float col = (vUv.x - strip.x) / strip.z * rimN - .5, row = (vUv.y - strip.y) / strip.w;
+    vec3 a = vec3(0.), b = vec3(0.), mean = vec3(0.), soft = vec3(0.); float ws = 0.;
+    for (int i = 0; i < 64; i++) {
+      if (float(i) >= rimN) break;
+      vec3 ci = cleanAt(texture2D(src, rimUV[i]).rgb, rimUV[i]); mean += ci;
+      if (float(i) == floor(clamp(col, 0., rimN - 1.))) a = ci;
+      if (float(i) == min(floor(clamp(col, 0., rimN - 1.)) + 1., rimN - 1.)) b = ci;
+      float dd = abs(float(i) - col); dd = min(dd, rimN - dd); float w = exp(-dd * dd / 6.); soft += ci * w; ws += w; // (round the loop: neighbours across the wrap count too)
+    }
+    mean /= rimN; soft /= ws;
+    vec3 rimC = mix(mix(a, b, fract(clamp(col, 0., rimN - 1.))), soft, smoothstep(.15, .45, row)); // (exact at the seam, then softened across columns: no stripes running back over the skull)
+    c = mix(rimC, mean, smoothstep(.25, .7, row)); // (the top fifth is the outline's colour itself: the skull's first ring samples there, clear of the strip's edge; past .7 one even tone, so the strip's wrap column can't show)
+  }
+  float evenK = inStrip ? 0. : max(evenSkin, evenEdge * smoothstep(.3, .52, length(vUv - noseC) / faceW));
+  if (evenK > 0.) {
+    vec3 wide = vec3(0.);
+    for (int i = 0; i < 12; i++) { float a = float(i) * .5236; wide += texture2D(src, vUv + vec2(cos(a), sin(a)) * .07).rgb + texture2D(src, vUv + vec2(cos(a + .26), sin(a + .26)) * .035).rgb; }
+    wide = (wide / 24. + c) * .5;
+    c = mix(c, c * skinTone / max(wide, vec3(.05)), evenK);
+  }
 
   float l = dot(c, vec3(.299, .587, .114));
   c = mix(c, vec3(l * 1.15 + .12), pale);
@@ -273,6 +325,17 @@ void main(){
   float n = vnoise(vUv * 48.) * .6 + vnoise(vUv * 150.) * .4;
   c *= 1. - grime * (n * .6);
 
-  c = floor(clamp(c, 0., 1.) * levels + bayer4(gl_FragCoord.xy)) / levels;
-  gl_FragColor = vec4(c, 1.);
+  if (!inStrip) c = floor(clamp(c, 0., 1.) * levels + bayer4(gl_FragCoord.xy)) / levels; // (the scalp strip stays smooth: it's stretched over a whole skull, where the dither's pattern blew up into squares)
+  gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
 }`;
+
+// The seamless scalp's strip: a corner of the face texture well clear of the face (uvW: the warped face UVs),
+// where bake() paints the skull's colours. Shared with head.js, which points the skull's UVs into it.
+export const SCALP_STRIP = { w: 0.16, h: 0.07 };
+export function scalpStrip(uvW) {
+  const { w, h } = SCALP_STRIP, m = 0.025;
+  for (const [x0, y0] of [[0.005, 0.005], [1 - w - 0.005, 0.005], [0.005, 1 - h - 0.005], [1 - w - 0.005, 1 - h - 0.005]]) {
+    if (uvW.every(([u, v]) => u < x0 - m || u > x0 + w + m || v < y0 - m || v > y0 + h + m)) return { x0, y0, w, h };
+  }
+  return { x0: 0.005, y0: 0.005, w, h };
+}

@@ -157,8 +157,10 @@ function rebuild() {
   // head shape: canonical (the generic face), photo (MediaPipe's per-photo 3D: right proportions, weak
   // depth) or fitted (the person's proportions from the photo on the canonical face's sculpted depth)
   const base = params.geoSource === 'photo' ? face.geo : params.geoSource === 'fitted' ? fittedFace(face) : canon.pos;
+  // hairFrom: another photo's name: its hair, cut from that photo, on this face (photo hair sits by the landmarks, so it fits any head)
+  const hairFace = (params.hairFrom && !face.animal && faces.find((f) => f.name === params.hairFrom)) || face;
   const headPending = perf.time('head.update', () => rig.update(face.animal ? animalShape(deform(base, params, params.geoWarp, canon.index), face.animal, params) : deform(base, params, params.geoWarp, canon.index), texture, face.animal ? { ...params, headDepth: params.headDepth + 0.6 } : params, // (an animal's flat face plate: the depth goes to the skull)
-     { animal: face.animal ? face : null, uvBase: face.uv || null, hair: analyzeHair(face), hairUV: baker.hairMask(face, analyzeHair(face)), skin, uvW, atlas: $('#atlas') }));
+     { animal: face.animal ? face : null, uvBase: face.uv || null, hair: analyzeHair(hairFace), hairUV: baker.hairMask(face, analyzeHair(face)), skin, uvW, atlas: $('#atlas') }));
   perf.time('driver.update', () => body.update(params, skin, rig.group));
   if (lowRT?.height !== params.renderH) setRes(params.renderH);
   PS2.snapRes.value.set(lowRT.width / 2, lowRT.height / 2).multiplyScalar(1 - 0.8 * params.jitter);

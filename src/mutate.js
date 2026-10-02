@@ -27,6 +27,9 @@ export const SCHEMA = [
     ['cranium', 'Cranium', -0.8, 2.5, 0],
     ['headDepth', 'Head depth', -0.6, 1.5, 0],
     ['earSize', 'Ear size', 0, 3, 1],
+    ['faceShapeAmt', 'Face shape amount', 0, 1, 0],
+    ['sphere', 'Sphere head', 0, 1, 0],
+    ['sphereTop', 'Sphere head: bald top', 0, 0.8, 0],
   ]},
   { group: 'Hair', items: [
     ['hairVolume', 'Hair volume', 0.3, 2.5, 1],
@@ -34,6 +37,7 @@ export const SCHEMA = [
     ['hairHue', 'Hair hue', -180, 180, 0],
     ['hairBright', 'Hair brightness', 0.3, 1.8, 1],
     ['hatHue', 'Hat hue', -180, 180, 0],
+    ['hatSize', 'Hat size', 0.4, 1.2, 1],
   ]},
   { group: 'Body', items: [
     ['headScale', 'Head size', 0.6, 2.2, 1.1],
@@ -42,8 +46,11 @@ export const SCHEMA = [
     ['torsoLen', 'Torso length', 1.5, 5.5, 3],
     ['girth', 'Girth', 0.45, 2.2, 1],
     ['belly', 'Belly', -0.3, 2.2, 0],
+    ['gut', 'Beer gut (shirt over the belt)', 0, 1, 0],
     ['hunch', 'Hunch', -0.3, 1.5, 0.1],
     ['armLen', 'Arm length', 0.5, 2.2, 1],
+    ['armThick', 'Arm thickness', 0.6, 2.2, 1],
+    ['legThick', 'Leg thickness', 0.6, 2.2, 1],
     ['handSize', 'Hand size', 0.5, 2.8, 1],
     ['fingerLen', 'Finger length', 0.4, 3.5, 1],
     ['legLen', 'Leg length', 0.35, 1.9, 1],
@@ -84,6 +91,10 @@ export const SCHEMA = [
     ['contrast', 'Contrast', 0.5, 2.5, 1.25],
     ['bright', 'Brightness', -0.3, 0.3, 0],
     ['pale', 'Pale / clown', 0, 1, 0],
+    ['maskSize', 'Mask size', 0.35, 1.3, 1],
+    ['evenSkin', 'Even skin tone', 0, 1, 0],
+    ['evenEdge', 'Even skin at the edges', 0, 1, 0],
+    ['rimInset', 'Face edge inset', 0, 0.15, 0],
     ['shadowHue', 'Shadow tint hue', 0, 360, 270],
     ['shadowAmt', 'Shadow tint', 0, 1, 0.35],
     ['highHue', 'Highlight tint hue', 0, 360, 50],
@@ -103,6 +114,10 @@ export const SCHEMA = [
   { group: 'Makeup (painted in UV space)', items: [
     ['socket', 'Sunken eyes', 0, 1.5, 0.4],
     ['eyeVoid', 'Void eyes', 0, 1, 0],
+    ['eyeStare', 'Stare eyes (pale, pinpoint)', 0, 1, 0],
+    ['eyeRound', 'Round eyes (lids pulled open)', 0, 1.5, 0],
+    ['eyePop', 'Eye pop (bulging out of the sockets)', 0, 1, 0],
+    ['socketDeep', 'Socket depth (hollow round the eyes, 3D)', 0, 6, 0],
     ['teeth', 'Painted teeth', 0, 1.5, 0],
     ['lips', 'Lip color', 0, 1.5, 0.3],
     ['noseRed', 'Red nose', 0, 1.5, 0],
@@ -142,6 +157,8 @@ export const CHOICES = {
   hat: { label: 'Hat', options: HAT_TYPES, def: 'none' },
   hairStyle: { label: 'Hairstyle', options: HAIR_STYLES, def: 'photo' },
   hair: { label: 'Extra strands', options: ['none', 'stringy'], def: 'none' },
+  faceShape: { label: 'Face shape', options: ['natural', 'circle', 'square', 'diamond', 'triangle', 'pyramid', 'heart', 'pear', 'egg'], def: 'natural' }, // (a liquify of the outline: see head.js; how far: faceShapeAmt)
+  scalp: { label: 'Scalp', options: ['mirror', 'skin', 'forehead', 'seamless'], def: 'mirror' }, // seamless: the skull coloured from the face's own outline (atlas.js scalp strip), so no line where they meet; // skin: the skull tiled with a patch of clean cheek skin (no stretching on a tall dome); forehead: tiled from the forehead instead (for a bald face whose cheeks are flushed)
 };
 
 export function defaults() {
@@ -183,6 +200,7 @@ export function deform(P, p, k, tris = null, opLimit = Infinity) { // opLimit: d
   const ops = [];
   const T = (c, r, v) => ops.push({ c, r: r * W, v: mul(v, k * W) });
   const S = (c, r, f) => ops.push({ c, r: r * W, f: 1 + (f - 1) * k });
+  const A = (c, r, ax, f) => ops.push({ c, r: r * W, ax, f: 1 + (f - 1) * k }); // (a stretch along one axis only)
 
   const mouthC = centerOf(P, L.mouth);
   for (const [corner, cheek] of [[L.mouthL, L.cheekL], [L.mouthR, L.cheekR]]) {
@@ -194,6 +212,15 @@ export function deform(P, p, k, tris = null, opLimit = Infinity) { // opLimit: d
   const eyeL = centerOf(P, L.eyeL), eyeR = centerOf(P, L.eyeR);
   S(eyeL, 0.13, 1 + 0.6 * p.eyes);
   S(eyeR, 0.13, 1 + 0.6 * p.eyes);
+  // round eyes: each eye stretched open vertically about its centre, the middle most, the corners hardly at all
+  // (the falloff), so the almond opens into a circle; twice over, since one stretch is capped at x2
+  if (p.eyeRound) for (const e of [eyeL, eyeR]) { const f = 1 + 0.6 * p.eyeRound; A(e, 0.09, up, f); A(e, 0.09, up, f); }
+  // socket depth (3D only): the face around each eye pushed back into the head, a wide shallow bowl: the eyes sit
+  // at the bottom of a hollow and its rim shades them (fwd points out of the face; the eyeballs follow the lids)
+  if (fwd && p.socketDeep) { // (in passes of at most 1: each push is capped so the mesh can't fold, so a deep socket is carved in several)
+    const out = fwd[2] >= 0 ? fwd : mul(fwd, -1), n = Math.ceil(p.socketDeep), d = p.socketDeep / n;
+    for (let k = 0; k < n; k++) for (const e of [eyeL, eyeR]) { T(e, 0.17, mul(out, -d * 0.045)); T(e, 0.1, mul(out, -d * 0.03)); }
+  }
   T(eyeL, 0.15, mul(right, -p.eyeSpread * 0.07));
   T(eyeR, 0.15, mul(right, p.eyeSpread * 0.07));
   T(P[33], 0.07, mul(up, p.tilt * 0.05));
@@ -226,6 +253,7 @@ export function deform(P, p, k, tris = null, opLimit = Infinity) { // opLimit: d
     const R = 2 * o.r, rel = sub(v, o.c), d2 = dot(rel, rel);
     if (d2 >= R * R) return v;
     const u2 = d2 / (R * R), w = (1 - u2) * (1 - u2) * (1 - u2);
+    if (o.ax) { const f = Math.min(2.0, Math.max(0.2, o.f)); return add(v, mul(o.ax, dot(rel, o.ax) * (f - 1) * s * w)); }
     if (o.v) {
       const vl = len(o.v), vmax = 0.378 * R;
       return add(v, mul(o.v, s * w * (vl > vmax ? vmax / vl : 1)));

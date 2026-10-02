@@ -1,0 +1,1 @@
+{ "label": "Grab (wraps round what it holds)", "fingers": { "all": { "mode": "target", "fallback": 0.7 } }, "thumb": { "mode": "target", "opp": 0.7, "fallback": 0.4 }, "spread": 0.15 }

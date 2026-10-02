@@ -8,6 +8,8 @@ export const AMBIENCES = [
   { id: 'tonal-wind', name: 'Soft tonal wind', file: '/ambience/tonal-wind.mp3', volume: 0.55 },
   { id: 'power-lines', name: 'Power lines humming', file: '/ambience/power-lines.mp3', volume: 0.35 },
   { id: 'foghorn-sea', name: 'Foghorn at sea', file: '/ambience/foghorn-sea.mp3', volume: 0.5 },
+  { id: 'howling-wind', name: 'Howling wind', file: '/ambience/howling-wind.mp3', volume: 0.5 },
+  { id: 'spook-wind', name: 'Spooky wind', file: '/ambience/spook-wind.mp3', volume: 0.5 },
   { id: 'radio-static', name: 'Radio static, garbled', file: '/ambience/radio-static.mp3', volume: 0.25 },
 ];
 const FADE = 2;

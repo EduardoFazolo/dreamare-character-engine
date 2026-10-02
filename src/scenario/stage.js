@@ -12,13 +12,18 @@ export function createStage(canvas) {
 
   let lowRT;
   const post = new THREE.ShaderMaterial({
-    uniforms: { tex: { value: null }, lowRes: { value: new THREE.Vector2() }, vhs: { value: 0.6 }, time: { value: 0 }, sat: { value: 0.7 } },
+    uniforms: { tex: { value: null }, lowRes: { value: new THREE.Vector2() }, vhs: { value: 0.6 }, time: { value: 0 }, sat: { value: 0.7 }, tape: { value: 0 }, punch: { value: 0 } },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D tex; uniform vec2 lowRes; uniform float vhs, time, sat; varying vec2 vUv;
+      uniform sampler2D tex; uniform vec2 lowRes; uniform float vhs, time, sat, tape, punch; varying vec2 vUv;
       float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
       void main(){
         vec2 uv = vUv; uv.x += vhs * .0015 * sin(uv.y * 30. + time * 2.);
+        // tape: a camcorder dub (0 = off): every line wobbling on its own, a tracking band rolling up the frame
+        float line = floor(vUv.y * lowRes.y * 2.);
+        uv.x += tape * (hash(vec2(line, floor(time * 30.))) - .5) * .0025;
+        float band = smoothstep(.06, 0., abs(fract(vUv.y * .5 - time * .045) - .5) - .44);
+        uv.x += tape * band * (hash(vec2(line, time)) - .5) * .02;
         vec2 px = 1. / lowRes;
         vec3 c = texture2D(tex, uv).rgb;
         vec3 blur = (texture2D(tex, uv - vec2(px.x, 0)).rgb + 2. * c + texture2D(tex, uv + vec2(px.x, 0)).rgb) * .25;
@@ -34,6 +39,30 @@ export function createStage(canvas) {
         // old-console grade: drained colour, lifted blacks, a touch less contrast
         col = mix(vec3(dot(col, vec3(.299, .587, .114))), col, sat);
         col = col * .92 + .035;
+        if (punch > 0.) {
+          // punch (terrain.punch, 0 = off): the oversaturated, oversharpened look of a dubbed kids' tape. Edges
+          // ring (unsharp mask), the midtones get an S-curve, strong colours push past natural, the corners sink
+          vec3 soft = (texture2D(tex, uv + vec2(px.x, 0)).rgb + texture2D(tex, uv - vec2(px.x, 0)).rgb + texture2D(tex, uv + vec2(0, px.y)).rgb + texture2D(tex, uv - vec2(0, px.y)).rgb) * .25;
+          vec3 hard = col + (c - soft) * 1.6;
+          float Yh = clamp(dot(hard, vec3(.299, .587, .114)), .001, 1.); hard *= mix(Yh, Yh * Yh * (3. - 2. * Yh), .55) / Yh; // (the S-curve on brightness only, so hues don't shift)
+          float mx = max(hard.r, max(hard.g, hard.b)), mn = min(hard.r, min(hard.g, hard.b)), chroma0 = (mx - mn) / max(mx, .001);
+          hard = mix(vec3(dot(hard, vec3(.299, .587, .114))), hard, 1. + .6 * smoothstep(.3, .65, chroma0)); // (only colours already strong: sky, grass, paint; skin keeps its tone)
+          vec2 qp = vUv - .5; hard *= 1. - dot(qp, qp) * .8;
+          col = mix(col, clamp(hard, 0., 1.), punch);
+        }
+        if (tape > 0.) {
+          // chroma smeared sideways (tape colour is a fraction of the luma's bandwidth), soft luma, grain, a warm
+          // faded cast, crushed blacks lifted, the band's static, and the corners darker
+          vec3 s1 = texture2D(tex, uv + vec2(px.x * 3., 0)).rgb, s2 = texture2D(tex, uv - vec2(px.x * 3., 0)).rgb, s3 = texture2D(tex, uv + vec2(px.x * 6., 0)).rgb;
+          float Y = dot(col, vec3(.299, .587, .114));
+          vec3 chroma = (s1 + s2 + s3 + col) * .25 - dot((s1 + s2 + s3 + col) * .25, vec3(.299, .587, .114));
+          vec3 taped = vec3(Y) + chroma * 1.1;
+          taped = mix(taped, taped * vec3(1.06, 1.0, .9), .6) * .95 + .03;
+          taped += (hash(vUv * vec2(lowRes.x * 3., lowRes.y * 3.) + fract(time * 7.)) - .5) * .09;
+          taped += band * (hash(vec2(vUv.x * 300., line + time * 60.)) - .5) * .35;
+          vec2 q2 = vUv - .5; taped *= 1. - dot(q2, q2) * .9;
+          col = mix(col, taped, tape);
+        }
         gl_FragColor = vec4(col, 1.);
       }`,
     depthTest: false,
@@ -86,7 +115,7 @@ export function createStage(canvas) {
     renderer.setRenderTarget(lowRT); renderer.render(scene, camera);
     renderer.setRenderTarget(null); renderer.render(postScene, postCam);
   }
-  return { renderer, scene, camera, post, setRes, render, drawCard, set vhs(v) { post.uniforms.vhs.value = v; }, set sat(v) { post.uniforms.sat.value = v; } };
+  return { renderer, scene, camera, post, setRes, render, drawCard, set vhs(v) { post.uniforms.vhs.value = v; }, set tape(v) { post.uniforms.tape.value = v; }, set punch(v) { post.uniforms.punch.value = v; }, set sat(v) { post.uniforms.sat.value = v; } };
 }
 
 // scenario materials don't survive glTF: bake them to plain unlit textured materials (fog / snap are the host

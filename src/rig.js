@@ -386,9 +386,9 @@ export class SkinnedCharacter {
     // texture: rebake only when an input changed (outfit textures/tints, skin tone, grime, resolution)
     const inputs = ['top', 'bottom', 'shoes', 'skin'].map((slot) => {
       const u = body.mats[slot].uniforms;
-      return { map: u.map.value, hue: u.hueShift.value, sat: u.satMul.value, bright: u.color.value.r, garment: body.mats[slot].userData.garment || null };
+      return { map: u.map.value, hue: u.hueShift.value, sat: u.satMul.value, bright: u.color.value.r, garment: body.mats[slot].userData.garment || null, dye: body.mats[slot].userData.dye || null };
     });
-    const tkey = JSON.stringify([inputs.map((i) => [i.map?.uuid, i.hue, i.sat, i.bright, i.garment?.name]), body.skinKey, p.bodyRes, p.bodyGrime, key]);
+    const tkey = JSON.stringify([inputs.map((i) => [i.map?.uuid, i.hue, i.sat, i.bright, i.garment?.name, i.dye]), body.skinKey, p.bodyRes, p.bodyGrime, key]);
     if (c.tkey !== tkey) {
       this.bodyTexture = perf.time('bodyBake(gpu)', () => this.bodyBaker.bake(c.bakeGeo, c.R, inputs, p.bodyRes, p.bodyGrime));
       this.bodyCanvas = perf.time('bodyReadback', () => this.bodyBaker.toCanvas(this.bodyCanvas));

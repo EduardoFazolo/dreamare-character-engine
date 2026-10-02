@@ -163,12 +163,13 @@ export class BodyBaker {
       side: THREE.DoubleSide, depthTest: false, transparent: false,
       uniforms: {
         tex0: { value: null }, tex1: { value: null }, tex2: { value: null }, tex3: { value: null },
+        dye0: { value: new THREE.Vector4() }, dye1: { value: new THREE.Vector4() }, dye2: { value: new THREE.Vector4() }, dye3: { value: new THREE.Vector4() },
         tint0: { value: new THREE.Vector3(0, 1, 1) }, tint1: { value: new THREE.Vector3(0, 1, 1) },
         tint2: { value: new THREE.Vector3(0, 1, 1) }, tint3: { value: new THREE.Vector3(0, 1, 1) },
-        waistY: { value: 0 }, topHem: { value: 0 }, tailHem: { value: 0 }, tailZ: { value: -9 }, collarY: { value: 0 }, shoulderX: { value: 1 }, wristX: { value: 2 },
+        waistY: { value: 0 }, gutDrop: { value: 0 }, gutZ: { value: 0.35 }, hipZ: { value: 0 }, topHem: { value: 0 }, tailHem: { value: 0 }, tailZ: { value: -9 }, collarY: { value: 0 }, shoulderX: { value: 1 }, wristX: { value: 2 },
         ankleY: { value: 0 }, crotchY: { value: 0 }, sleeve: { value: 1 }, pants: { value: 1 },
         skirt: { value: 0 }, hemY: { value: 0 }, neckZ: { value: 0 }, neckHole: { value: 0.4 }, hemRound: { value: 0.1 }, pantsFloor: { value: 0 }, shoeTop: { value: 0 }, shoulderY: { value: 0 }, armBand: { value: 1 }, toeZ: { value: 0 },
-        belt: { value: 0 }, buttons: { value: 0 }, grime: { value: 0 }, tile: { value: 1 / 0.9 },
+        belt: { value: 0 }, bands: { value: 0 }, buttons: { value: 0 }, grime: { value: 0 }, tile: { value: 1 / 0.9 },
         // layers painted over the top's front (outfit details): a V opening showing a shirt, a tie or bow tie,
         // lapels along the V, the shirt's collar points, a breast pocket
         vDepth: { value: 0 }, shirtCol: { value: new THREE.Vector3(0.86, 0.84, 0.78) }, tieCol: { value: new THREE.Vector3() }, tieCol2: { value: new THREE.Vector3() },
@@ -218,12 +219,12 @@ export class BodyBaker {
       this.rt2 = new THREE.WebGLRenderTarget(res, res, o);
     }
     const u = this.mat.uniforms;
-    inputs.forEach((inp, i) => { u['tex' + i].value = inp.map; u['tint' + i].value.set(inp.hue, inp.sat, inp.bright); });
+    inputs.forEach((inp, i) => { u['tex' + i].value = inp.map; u['tint' + i].value.set(inp.hue, inp.sat, inp.bright); u['dye' + i].value.set(...(inp.dye || [0, 0, 0]), inp.dye ? 1 : 0); });
     u.bare.value.set(...inputs.map((inp, i) => (i === 3 || inp.map === inputs[3].map ? 1 : 0)));
     u.topHem.value = R.topHem ?? R.waistY - 0.15; u.tailHem.value = R.tailHem ?? u.topHem.value; u.tailZ.value = R.tailZ ?? -9;
-    for (const k of ['waistY', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'hemRound', 'pantsFloor', 'shoeTop', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k === 'hemRound' ? 'round' : k];
+    for (const k of ['waistY', 'gutDrop', 'gutZ', 'hipZ', 'collarY', 'shoulderX', 'wristX', 'ankleY', 'crotchY', 'sleeve', 'pants', 'hemY', 'neckZ', 'neckHole', 'hemRound', 'pantsFloor', 'shoeTop', 'shoulderY', 'armBand', 'toeZ']) u[k].value = R[k === 'hemRound' ? 'round' : k];
     u.skirt.value = R.skirt ? 1 : 0;
-    u.belt.value = R.details.belt ? 1 : 0;
+    u.belt.value = R.details.belt ? 1 : 0; u.bands.value = R.details.bands ? 1 : 0;
     u.buttons.value = R.details.buttons ? 1 : 0;
     const d = R.details;
     u.vDepth.value = d.vneck || 0;
@@ -281,8 +282,9 @@ export class BodyBaker {
 
 const BAKE_FRAG = /* glsl */`
 uniform sampler2D tex0, tex1, tex2, tex3;
+uniform vec4 dye0, dye1, dye2, dye3; // (rgb, on)
 uniform vec3 tint0, tint1, tint2, tint3; // hue degrees, saturation, brightness
-uniform float waistY, topHem, tailHem, tailZ, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, hemRound, pantsFloor, shoeTop, shoulderY, armBand, toeZ;
+uniform float bands, waistY, gutDrop, gutZ, hipZ, topHem, tailHem, tailZ, collarY, shoulderX, wristX, ankleY, crotchY, sleeve, pants, belt, buttons, grime, tile, skirt, hemY, neckZ, neckHole, hemRound, pantsFloor, shoeTop, shoulderY, armBand, toeZ;
 uniform float vDepth, tieKind, lapels, pocket, collarPts; uniform vec3 shirtCol, tieCol, tieCol2;
 uniform sampler2D garmentTex; uniform vec4 garment; uniform float useGarment, useSleeveCol, shoulderV; uniform vec3 sleeveCol;
 uniform vec4 bare;
@@ -307,17 +309,19 @@ vec3 tri(sampler2D t, vec3 p, vec3 n){
 // garment masks (negative inside), must match masks in sculpt.js; -mask = distance to the hem
 float smin_(float a, float b, float k){ float h = max(k - abs(a - b), 0.) / k; return min(a, b) - h * h * k * .25; }
 float smax_(float a, float b, float k){ return -smin_(-a, -b, k); }
+float gutFront(float z){ float t = clamp((z - hipZ) / gutZ, 0., 1.); return gutDrop * t * t * (3. - 2. * t); } // (a beer gut: the waistline drops under it in front, as in sculpt.js)
 float maskTop(vec3 p){
   float ax = abs(p.x), len = wristX - shoulderX;
   if (ax > shoulderX * .95 && abs(p.y - shoulderY) < armBand) return ((ax - shoulderX) / len - min(sleeve, 1.)) * len;
   float hole = neckHole - length(vec2(p.x, p.z - neckZ));
-  float hem = p.z < tailZ ? tailHem : topHem; // (a tailcoat's tails behind)
+  float hem = (p.z < tailZ ? tailHem : topHem) - gutFront(p.z); // (a tailcoat's tails behind)
   return smax_(hem - p.y, smin_(hole, p.y - (collarY - .12), hemRound), hemRound);
 }
 float maskBottom(vec3 p){
-  if (skirt > .5) return smax_(p.y - (waistY + .05), hemY - p.y, hemRound);
+  float w = waistY - gutFront(p.z);
+  if (skirt > .5) return smax_(p.y - (w + .05), hemY - p.y, hemRound);
   float span = crotchY - ankleY;
-  float m = smax_(p.y - waistY, (max(0., crotchY - p.y) / span - pants) * span, hemRound);
+  float m = smax_(p.y - w, (max(0., crotchY - p.y) / span - pants) * span, hemRound);
   return smax_(m, pantsFloor - p.y, hemRound);
 }
 float maskShoes(vec3 p){ return p.y - shoeTop; }
@@ -331,6 +335,8 @@ void main(){
   else if (r == 1) c = tintc(tri(tex1, p, n), tint1);
   else if (r == 2) c = tintc(tri(tex2, p, n), tint2);
   else c = tintc(tri(tex3, p, n), tint3);
+  vec4 dye = r == 0 ? dye0 : r == 1 ? dye1 : r == 2 ? dye2 : dye3;
+  if (dye.a > .5) c = dye.rgb * clamp(dot(c, vec3(.299, .587, .114)) * 2.6, 0., 1.3); // (the fabric's light and shade, in the dye's colour)
 
   float isBare = r == 0 ? bare.x : r == 1 ? bare.y : r == 2 ? bare.z : 1.;
   // a real garment: its photo on the torso's front (neckline -> hem, shoulder -> shoulder), fading out toward
@@ -353,8 +359,16 @@ void main(){
     float along = p.x * 7. + p.z * 7. + p.y * 3.;
     if (abs(edge - .1) < .012 && fract(along) < .5) c *= 1.25;
   }
+  // bands: a crossing warden's coat, silver reflective tape round the chest, round the hem and round each sleeve near the cuff
+  if (bands > .5 && r == 0 && isBare < .5) {
+    float ax = abs(p.x), onArm = step(shoulderX * .95, ax) * step(abs(p.y - shoulderY), armBand);
+    float chest = 1. - step(.06, abs(p.y - (collarY - (collarY - waistY) * .45)));
+    float hem = 1. - step(.06, abs(p.y - (topHem + .22)));
+    float cuff = onArm * (1. - step(.06, abs(ax - (wristX - (wristX - shoulderX) * .18))));
+    if ((chest + hem) * (1. - onArm) + cuff > .5) c = vec3(.86, .88, .9) * (.85 + .3 * vnoise(p * 60.));
+  }
   // belt with a buckle at the front
-  if (belt > .5 && r == 1 && isBare < .5 && waistY - p.y < .17) {
+  if (belt > .5 && r == 1 && isBare < .5 && waistY - gutFront(p.z) - p.y < .17) {
     c = vec3(.2, .12, .07) * (.8 + .4 * vnoise(p * 30.));
     if (p.z > 0. && abs(p.x) < .1) c = vec3(.72, .64, .42);
   }

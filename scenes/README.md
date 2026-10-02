@@ -23,7 +23,7 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
       "voice": { "src": "asset:/assets/remember2.wav", "name": "remember2.wav", "loop": false, "autoplay": true } }
   ],
   "directives": [ { "id": "roads", "kind": "converge", "toward": "rocking-chair", "count": 5 } ],
-  "shots": [ { "name": "close on the chair", "pos": { "at": "rocking-chair", "offset": [2.2, 1.2, 2.4] }, "look": "rocking-chair" } ]
+  "shots": [ { "name": "close on the chair", "pos": { "at": "rocking-chair", "offset": [2.2, 1.2, 2.4] }, "look": "rocking-chair", "hide": ["skyline"] } ]  // hide: things this shot leaves out (the player / slides only); "move": { "pos", "look", "roll", "secs" } glides the camera from the shot to there over secs (eased, from when the shot is shown); "roll": a tilted horizon (radians)
 }
 ```
 
@@ -44,6 +44,30 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
   - `"alive"`: `{ "blink": true, "mutter": 0..1, "sway": 0..1 }` means blinking every few seconds, lips working over words nobody hears, and the head drifting and tilting.
 
   Both are driven by time alone, so a snapped slide freezes the exact moment.
+- **Unhealthy breathing:** `"alive": { "wheeze": 0..1 }` gives breaths that go wrong, one kind per breath:
+  - shallow and quick;
+  - a catch: the inhale stalls halfway, then a jerky gasp finishes it;
+  - a double sniff;
+  - a rattle: the exhale shivers out;
+  - held too long at the top, then collapsing.
+
+  The chest lifts, the shoulders shrug on the gasps, and the jaw parts a little on them. The neck takes the motion back, so the head stays still. It's seeded from time, so every showing plays the same.
+- **Mouthing a phrase:** `"alive": { "chant": seconds }` mouths a slow phrase on a loop ("re-meee-mber the duunes").
+- **Twitching:** `"alive": { "twitch": 0..1 }` makes it something wearing a body and not quite knowing how, like the possessed walk in *Obsession*. It's subtle:
+  - **Posture:** all the time, a wrong way of holding itself is laid over the walk. The arms are held a little off the sides and hardly swing, the elbows are soft, the wrists cocked, the fingers half-curled and splayed, the knees bent, with a slight hunch and the head low and tilted.
+  - **Slips:** now and then, small and fast:
+    - `head`: the head jerks.
+    - `shoulder`: a shoulder hitches.
+    - `fingers`: the fingers flex.
+    - `stall`: the walk stops for a split second.
+    - `knee`: a knee gives and it catches itself too fast.
+    - `repeat`: it takes the same step twice, like a skipping loop.
+    - `deadstop`: it stops dead for a second or so, then walks on.
+    - `shiver`: a tremor runs down one arm to the fingertips.
+
+    `"twitchKinds": [...]` picks which ones (all by default). They're dealt like a shuffled deck, so every chosen kind comes round before any repeats.
+  - It's seeded from the moment the shot starts, so every showing plays the same. Joints stay within the elbow and knee hinges.
+- **Walking toward you:** `"approach": { "speed": m/s (0.12), "stop": m (1.5), "backwards": true }`. `backwards` gives the *Obsession* walk: its back to you, walking backwards toward you with `"anim": "Walk"` walks it from where it was placed toward the camera, in a walk slowed to that pace, stopping that far away. In a slide, it starts from its spot each time the shot is shown. `"pose": { "look": "camera", "face": …, "alive": … }` rides on the walk.
 - **Reaching and leaning:** `"rightHand": "camera"` (or left) holds the hand out toward the camera, low, like an offering; it follows the camera. `"lean": 0..1` bends the spine toward it. `"bow": radians` (about 1 = deeply stooped) curls the back forward down the spine; the head cranes up further to keep looking at the camera, and a camera hand reaches from the bowed shoulder.
 - **Arms and hands:**
   - `"rightElbow"` / `"leftElbow"` (a point) bends the elbow toward it before the hand reaches.
@@ -66,6 +90,39 @@ World: metres, y up. The spawn is at the origin; "forward" from the spawn is the
 - **`"source"`**: Source-engine realism, like Garry's Mod or Half-Life 2. Every surface becomes a lit material, using 512 px photos with normal maps. The scene's sun or moon casts shadows, its ambient becomes sky fill, and fog is ordinary distance fog. The frame is sharper (at least 640 lines) with the tape wear nearly off. Characters are lit the same way.
 
 The photos are CC0 (ambientCG), in `public/textures/photo` and `public/textures/source` (sources in their READMEs). `src/scenario/photolook.js` swaps them in by texture kind and re-maps UVs so each photo tiles at its real size. Things without a photo of their own (mushroom caps, lanterns, cloth) keep their drawn texture.
+
+## Film
+
+`"film"` makes a scene play itself: its shots on a timeline, with 3D sound. In the editor, **🎬 Play film** previews it live and **Export film** renders a 1080×1920 MP4 frame by frame, with the sound mixed offline from the same positions.
+
+```jsonc
+"film": {
+  "secs": 34.6,
+  "shots": [ { "shot": "f1 across the dunes", "from": 0, "to": 9.5 }, … ],   // a shot's "move" runs from its "from"
+  "sounds": [
+    { "src": "/assets/remember_the_dunes.wav", "lips": true, "ref": 2,        // lips: the mouth follows its loudness
+      "at": [ { "t": 0, "actor": "him" }, { "t": 17.5, "actor": "him-near" } ] },
+    { "src": "/assets/creepy_breathing.wav", "near": true, "loop": true, "loopEnd": 16.3, "at": [ … ] },
+    { "src": "…", "start": 30.6, "offset": 2.6, "at": [ { "t": 0, "actor": "camera", "offset": [0.3, -0.05, 0.35] } ] }
+  ],
+  "beds": [ { "id": "tonal-wind", "gain": 0.5 } ]                            // ambience, not placed
+}
+```
+
+- **Sounds come from a character's head,** or from a spot around the camera (`"actor": "camera"`, offset in the camera's own frame).
+- **They're HRTF-panned** and lose level with distance. `ref` is the distance at full level.
+- **Far away they get duller and wetter:** a lowpass closes and a reverb send opens, so a voice across the dunes sounds across the dunes.
+- **`near`:** a sound that only exists up close, like breathing.
+- **`start`** is when a sound begins in the film; **`offset`** is where in its file it starts.
+
+## Mist
+
+Moving mist is added to any scene with fog: soft banks standing on the ground around the view, drifting and churning (two layers of noise at different speeds), tinted the fog's colour.
+- **How thick** it is follows the scene's fog (`terrain.haze`). `terrain.mist` (0..1) sets it outright, and 0 turns it off, as for an indoor scene.
+- **It's driven by time,** so it moves in live slides and exports, and a snapped slide holds it.
+- Seen from high up, half the banks float at mid-height between the rooftops.
+- **Clouds:** `terrain.clouds` (0..1) adds big cloud banks drifting across the sky and across the moon, dark with moonlit edges.
+- The code for both is in `src/scenario/mist.js`.
 
 ## Kinds
 

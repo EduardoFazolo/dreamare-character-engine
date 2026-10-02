@@ -197,12 +197,12 @@ export const HANDLES = { LeftHand: ['LeftArm', 'LeftForeArm'], RightHand: ['Righ
 export const handlePos = (rig, name) => rootPos(rig, rig.bones[name], new THREE.Vector3());
 
 // two-bone IK: upper -> lower -> end reaches target T (Root space); the elbow/knee stays in its current bend plane
-function twoBone(rig, upper, lower, end, T) {
+function twoBone(rig, upper, lower, end, T, poleHint = null) { // poleHint: a Root-space direction the elbow / knee bends toward
   const A = rootPos(rig, rig.bones[upper]), B = rootPos(rig, rig.bones[lower]), C = rootPos(rig, rig.bones[end]);
   const l1 = A.distanceTo(B), l2 = B.distanceTo(C), toT = T.clone().sub(A);
   const d = Math.min(Math.max(toT.length(), Math.abs(l1 - l2) + 1e-4), (l1 + l2) * 0.999);
   const dir = toT.normalize();
-  let pole = B.clone().sub(A).addScaledVector(dir, -B.clone().sub(A).dot(dir)); // current bend direction
+  let pole = (poleHint ? poleHint.clone() : B.clone().sub(A)); pole.addScaledVector(dir, -pole.dot(dir)); // current bend direction (or the hint)
   if (pole.lengthSq() < 1e-8) pole = new THREE.Vector3(0, 0, upper.includes('Leg') ? 1 : -1).addScaledVector(dir, -dir.z); // straight limb: knees forward, elbows back
   pole.normalize();
   const a = Math.acos(Math.min(1, Math.max(-1, (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d))));
@@ -215,7 +215,7 @@ export function dragHandle(rig, name, T, ctx) {
   rig.root.updateMatrixWorld(true);
   const endQ = rig.bones[name] && rootQ(rig, rig.bones[name]);
   if (HANDLES[name]) {
-    twoBone(rig, ...HANDLES[name], name, T);
+    twoBone(rig, ...HANDLES[name], name, T, ctx?.poles?.[name]);
     if (name.endsWith('Foot')) setRootQ(rig, name, ctx.footQ?.[name] || endQ); // feet keep their angle to the ground
   } else if (name === 'Head') { // look toward the target: the neck takes a third
     const head = rig.bones.Head, P = rootPos(rig, head), chest = rootQ(rig, rig.bones.Spine2);
@@ -348,7 +348,7 @@ function restRootQ(rig, bone) {
 // The left hand curls about each finger's local z (measured, see GRIP_SIGN). The right hand's fingers curl about
 // the mirror image of that axis (reflected through the body's middle plane; an axis flips y and z), brought into
 // the right finger's own frame: the right hand is always the exact mirror of the left, whatever the bones' axes.
-function curlAxis(rig, side, name) {
+export function curlAxis(rig, side, name) {
   const z = new THREE.Vector3(0, 0, 1);
   if (side === 'Left') return z;
   const L = rig.bones[name.replace('Right', 'Left')], R = rig.bones[name]; if (!L) return z;
@@ -409,4 +409,13 @@ export function compilePose(rig, spec) {
   }
   rig.root.updateMatrixWorld(true);
   return snapshot(rig);
+}
+
+// curl one hand's fingers on top of what they're doing: amounts per joint ([base, mid, tip] radians, toward
+// the palm; negative splays), the right hand mirrored exactly like the grips
+export function curlFingers(rig, side, fingers) {
+  for (const [f, c] of Object.entries(fingers)) c.forEach((a, i) => {
+    const b = rig.bones[`${side}Hand${f}${i + 1}`]; if (!b || !a) return;
+    b.quaternion.multiply(_q.setFromAxisAngle(curlAxis(rig, side, b.name), a * GRIP_SIGN.Left)).normalize();
+  });
 }

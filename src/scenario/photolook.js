@@ -73,8 +73,14 @@ function sourceMat(src) {
   const opts = { color: u.color.value.clone(), side: src.side, vertexColors: src.vertexColors, alphaTest: u.alphaTest?.value || 0 };
   if (op < 1) Object.assign(opts, { transparent: true, opacity: op, depthWrite: false });
   const m = glow ? new THREE.MeshBasicMaterial({ ...opts, map: u.map.value })
-    : new THREE.MeshStandardMaterial({ ...opts, map: hd ? hd.map : u.map.value, normalMap: hd?.normal || null, roughnessMap: hd?.rough || null, roughness: GLASS.has(kind) ? 0.15 : kind === 'metal' ? 0.55 : kind === 'leather' ? 0.6 : hd?.rough ? 1 : 0.9, metalness: GLASS.has(kind) ? 0.4 : kind === 'metal' ? 0.35 : 0 });
+    : new THREE.MeshStandardMaterial({ ...opts, map: hd ? hd.map : u.map.value, normalMap: hd?.normal || null, roughnessMap: hd?.rough || null, roughness: GLASS.has(kind) ? 0.15 : kind === 'ceramic' ? 0.22 : kind === 'metal' ? 0.55 : kind === 'leather' ? 0.6 : hd?.rough ? 1 : 0.9, metalness: GLASS.has(kind) ? 0.4 : kind === 'metal' ? 0.35 : 0 });
   if (hd?.normal) m.normalScale.set(1.4, 1.4); // (a little deeper: the bricks' mortar should catch the light)
+  if (src.name === 'eye') { // eyes: wet, glossy spheres with a real highlight; eyeGlow: a faint light of their own
+    m.roughness = 0.12; m.metalness = 0; m.normalMap = null;
+    if (src.userData.eyeGlow) { m.emissiveMap = u.map.value; m.emissive = new THREE.Color(1, 1, 1); m.emissiveIntensity = src.userData.eyeGlow; }
+  }
+  if (src.userData.faceGlow) { m.emissiveMap = u.map.value; m.emissive = new THREE.Color(...(src.userData.glowColor || [1, 0.96, 0.86])); m.emissiveIntensity = src.userData.faceGlow; if (src.userData.glowColor) m.color.setRGB(...src.userData.glowColor); m.color.multiplyScalar(Math.max(0.1, 1 - src.userData.faceGlow * 0.85)); } // (mostly its own light: the scene's sun only shapes it a little, or the top of a ball reads as a pale cap) // (a face that shines: the sun in a children's-TV sky)
+  if (src.userData.shade) { m.color.multiplyScalar(1 - src.userData.shade); if (src.name === 'eye') m.color.setScalar(Math.max(0.35, 1 - src.userData.shade)); }
   m.userData = { src, kind, glow, hd: !!hd };
   converted.set(src, m);
   return m;
@@ -100,7 +106,7 @@ export function applyLook(root, look) {
     }
     // source
     const sm = sourceMat(mat); o.userData.drawnMaterial = mat; o.material = sm;
-    o.castShadow = !sm.userData.glow && !sm.transparent && o.name !== 'terrain'; o.receiveShadow = !sm.userData.glow;
+    o.castShadow = !sm.userData.glow && !sm.transparent && !(sm.alphaTest > 0) && o.name !== 'terrain'; // (not thin alpha-cut cards: hair strands threw striped shadows onto the neck) o.receiveShadow = !sm.userData.glow;
     if (sm.userData.hd) tiled(); else drawnUV(o.geometry);
   });
 }

@@ -1,0 +1,1 @@
+{ "label": "Ghost hands (limp, dangling)", "wrist": { "flex": 1.05 }, "fingers": { "all": { "mode": "curl", "t": 0.2 }, "Index": { "mode": "curl", "t": 0.14 } }, "thumb": { "mode": "curl", "t": 0.15, "opp": 0.3 }, "spread": 0.12 }

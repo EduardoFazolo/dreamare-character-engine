@@ -1,0 +1,1 @@
+{ "label": "Pointing", "fingers": { "all": { "mode": "palm", "tight": 1 }, "Index": { "mode": "curl", "t": 0.02 } }, "thumb": { "mode": "tuck", "opp": 0.9 }, "spread": 0 }

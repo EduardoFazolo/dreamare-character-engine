@@ -1,0 +1,1 @@
+{ "label": "Claw", "fingers": { "all": { "mode": "curl", "t": 0.75, "joints": [0.05, 1, 0.9] } }, "thumb": { "mode": "curl", "t": 0.5, "opp": 0.6 }, "spread": 0.6 }

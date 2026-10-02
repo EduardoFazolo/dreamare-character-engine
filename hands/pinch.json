@@ -1,0 +1,1 @@
+{ "label": "Pinch", "fingers": { "Index": { "mode": "pinch" }, "Middle": { "mode": "curl", "t": 0.5 }, "Ring": { "mode": "curl", "t": 0.6 }, "Pinky": { "mode": "curl", "t": 0.65 } }, "thumb": { "mode": "pinch" }, "spread": 0.1 }

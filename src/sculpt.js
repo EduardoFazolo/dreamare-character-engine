@@ -55,6 +55,8 @@ export function regionSpec(body, p, model, outfit) {
     details: outfit.details || {},
     hipX: Math.abs(pos('hipB').x), ankleX: Math.abs(pos('ankleB').x), kneeY: pos('kneeB').y,
   };
+  // gut: a beer gut, the shirt over it and the trousers' waistline (and belt) dropped under it in front only
+  R.gutDrop = Math.max(0, p.gut || 0) * (0.3 + 0.25 * Math.max(0, p.belly || 0)); R.gutZ = 0.35;
   R.hemY = R.crotchY - R.pants * (R.crotchY - R.ankleY) - 0.05;
   // fitted clothes (Clothes: fitted): the outfit's cut (OUTFITS[..].cut) with this character's recipe; see cutShapes
   // (Victorian cuts are always worn: they are the outfit)
@@ -75,20 +77,21 @@ export function regionSpec(body, p, model, outfit) {
 
 // Creases between cuts are rounded by R.round (1.5 grid cells, see fitRegions): the mesher can't
 // resolve a knife edge, it turns into teeth. Pants floor and shoe top: see fitRegions.
+const gutFront = (R, z) => { if (!R.gutDrop) return 0; const t = Math.min(1, Math.max(0, (z - R.hipZ) / R.gutZ)); return R.gutDrop * t * t * (3 - 2 * t); }; // (0 at the sides and back, the full drop at the front of the belly)
 export const masks = {
   top(R, x, y, z) {
     const ax = Math.abs(x), len = R.wristX - R.shoulderX, k = R.round;
     if (ax > R.shoulderX * 0.95 && Math.abs(y - R.shoulderY) < R.armBand) return ((ax - R.shoulderX) / len - Math.min(R.sleeve, 1)) * len;
     // collar = a round hole around the neck (a flat cut would slice off the shoulder tops)
     const hole = R.neckHole - Math.hypot(x, z - R.neckZ);
-    const hem = R.tailHem != null && z < R.tailZ ? R.tailHem : R.topHem ?? R.waistY - 0.15; // (tails behind)
+    const hem = (R.tailHem != null && z < R.tailZ ? R.tailHem : R.topHem ?? R.waistY - 0.15) - gutFront(R, z); // (tails behind; a beer gut drops the front hem under it)
     return smax(hem - y, smin(hole, y - (R.collarY - 0.12), k), k);
   },
-  bottom(R, x, y) {
-    const k = R.round;
-    if (R.skirt) return smax(y - (R.waistY + 0.05), R.hemY - y, k);
+  bottom(R, x, y, z = R.hipZ) {
+    const k = R.round, w = R.waistY - gutFront(R, z);
+    if (R.skirt) return smax(y - (w + 0.05), R.hemY - y, k);
     const span = R.crotchY - R.ankleY;
-    const m = smax(y - R.waistY, (Math.max(0, R.crotchY - y) / span - R.pants) * span, k);
+    const m = smax(y - w, (Math.max(0, R.crotchY - y) / span - R.pants) * span, k);
     return smax(m, R.pantsFloor - y, k);
   },
   shoes(R, x, y) { return y - R.shoeTop; },
@@ -211,7 +214,7 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
     const gown = R.cut?.gown, r1 = dims.waistR + thick, r2 = dims.hipR * (gown ? 1.7 + 0.7 * Math.max(0, R.cut.flare) : 1.25 + 0.6 * p.looseness) + thick;
     // a gown: a bell to the floor, and a bustle standing out behind the hips
     const bustle = gown ? (x, y, z) => sdEllipsoidAt(x, y, z, [0, R.waistY - 0.35, R.hipZ - dims.hipR * 0.95], [dims.hipR * 0.95, 0.42, 0.42]) : null;
-    skirtCone = (x, y, z) => { let v = sdRoundCone(x, y, R.hipZ + (z - R.hipZ) * 1.3, top, bot, r1, r2); if (bustle) v = smin(v, bustle(x, y, z), 0.25); return smax(v, masks.bottom(R, x, y), R.round); }; // clipped at waist and hem
+    skirtCone = (x, y, z) => { let v = sdRoundCone(x, y, R.hipZ + (z - R.hipZ) * 1.3, top, bot, r1, r2); if (bustle) v = smin(v, bustle(x, y, z), 0.25); return smax(v, masks.bottom(R, x, y, z), R.round); }; // clipped at waist and hem
     // ghost prim: no body volume, only makes sure the grid covers the flared hem
     prims.push({ type: 'cone', ghost: true, matrix: new THREE.Matrix4(), a: top, b: bot, r1, r2, k: 0 });
   }
@@ -229,7 +232,7 @@ export function sculptSetup({ prims: rawPrims, hands, dims, R, outfit, p }) {
     extra: shapes.jacket ? (x, y, z) => smax(shapes.jacket(x, y, z), masks.top(R, x, y, z), R.round) : null });
   // pants over shoes (see fitRegions): the cuff thickens over the shoe, the shoe thins inside the pants
   const over = !R.skirt && outfit.shoes !== 'skin' && outfit.bottom !== 'skin';
-  const trouserShape = shapes.trousers ? (x, y, z) => smax(shapes.trousers(x, y, z), masks.bottom(R, x, y), R.round) : null;
+  const trouserShape = shapes.trousers ? (x, y, z) => smax(shapes.trousers(x, y, z), masks.bottom(R, x, y, z), R.round) : null;
   if (outfit.bottom !== 'skin') layers.push({ layer: REGION.bottom, mask: masks.bottom, thickness: C?.trousers ? fitThick(thick) : thick, fuzz, extra: skirtCone || trouserShape, share: 0.18,
     profile: over ? { y: R.shoeTop, w: 0.12, below: Math.max(thick, CUFF), above: thick } : null });
   if (outfit.shoes !== 'skin') layers.push({ layer: REGION.shoes, mask: masks.shoes, thickness: 0.06, share: 0.06,

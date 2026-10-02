@@ -1,0 +1,1 @@
+{ "label": "Open hand", "fingers": { "all": { "mode": "curl", "t": 0.04 } }, "thumb": { "mode": "curl", "t": 0.05, "opp": 0 }, "spread": 0.7 }

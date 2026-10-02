@@ -1,0 +1,1 @@
+{ "label": "Rubbing hands together", "rub": true, "fingers": { "all": { "mode": "curl", "t": 0.08 } }, "thumb": { "mode": "curl", "t": 0.1, "opp": 0.2 }, "spread": 0.05 }

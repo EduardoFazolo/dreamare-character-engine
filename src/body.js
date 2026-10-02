@@ -34,6 +34,15 @@ export const OUTFITS = {
   // real garments: a photo on the front of the torso, its own fabric on the back and sleeves (GARMENTS)
   mourner: { top: 'garment:suit-tie', bottom: 'Fabric042', shoes: 'Leather026', cut: { top: 'jacket', bottom: 'trousers' } },
   waistcoat: { top: 'garment:waistcoat', bottom: 'Fabric042', shoes: 'Leather026', cut: { bottom: 'trousers' } },
+  // a crossing warden (lollipop lady): a long mustard knit coat that takes a hi-vis tint, silver reflective bands, buttons
+  lollipop: { top: 'Fabric039', bottom: 'Fabric039', dye: { top: [1, 0.86, 0.08] }, shoes: 'Leather026', sat: 1.6, details: { buttons: true, bands: true, collar: true, shirt: [0.95, 0.95, 0.92] }, cut: { top: 'frockcoat', bottom: 'trousers', always: true } }, // (a knee-length coat flaring over dark trousers)
+  // a grubby white undershirt (dyed plain cloth, stained) over jeans: the redneck in the field
+  vest: { top: 'Fabric039', bottom: 'Fabric023', shoes: 'Leather033C', dye: { top: [0.93, 0.9, 0.8] }, details: { belt: true }, cut: { bottom: 'trousers' } },
+  // dark, rough cloth: coarse black-brown weave, worn felt, stained sackcloth, cracked black leather
+  coarse: { top: 'Fabric029', bottom: 'Fabric029', shoes: 'Leather027', cut: { top: 'jacket', bottom: 'trousers' } },
+  felt: { top: 'Fabric063', bottom: 'Fabric029', shoes: 'Leather027', details: { buttons: true }, cut: { top: 'frockcoat', bottom: 'trousers', always: true } },
+  sackcloth: { top: 'Fabric044', bottom: 'Fabric044', shoes: 'Leather027', cut: { top: 'jacket', bottom: 'trousers' } },
+  leather: { top: 'Leather027', bottom: 'Fabric029', shoes: 'Leather027', cut: { top: 'frockcoat', bottom: 'trousers', always: true } },
 };
 
 // Garment photos (public/garments, public domain / CC0 only: credits there), worn on the front of the torso: where the neckline's
@@ -162,6 +171,7 @@ export class BodyRig {
         m.uniforms.hueShift.value = (outfit.hue || 0) + (slot === 'shoes' ? 0 : p.outfitHue);
         m.uniforms.satMul.value = (outfit.sat || 1) * (slot === 'shoes' ? 1 : p.outfitSat);
       }
+      m.userData.dye = id !== 'skin' && !m.userData.garment ? outfit.dye?.[slot] || null : null; // (dye: [r, g, b] 0..1 laid over a plain fabric's own light and shade: a colour hue shifts can't reach)
       m.uniforms.color.value.setScalar(slot === 'shoes' || id === 'skin' ? 1 : p.outfitBright);
     }
 
@@ -237,40 +247,41 @@ export class BodyRig {
     neck.add(this.headAnchor);
 
     const armLen = p.armLen, ua = 1.7 * armLen, fa = 1.55 * armLen;
+    const ga = g * (p.armThick ?? 1), gl = g * (p.legThick ?? 1); // (arm / leg thickness on their own: a heavy build's arms and legs are thick too, not just its torso)
     // stance width: wide enough that thighs (with fat and clothing) and feet (with shoes) never overlap
     const fs0 = p.footSize * (outfit.feet || 1);
-    const thighInner = Math.max(0.3 * g * L, 0.29 * g * L * (0.9 + 0.18 * m) - 0.06 * g);
+    const thighInner = Math.max(0.3 * gl * L, 0.29 * gl * L * (0.9 + 0.18 * m) - 0.06 * gl); // (thicker legs stand wider apart)
     const pantsT = outfit.bottom !== 'skin' && p.bottomType !== 'skirt' ? 0.035 + 0.15 * p.looseness + 0.5 * (outfit.fuzz || 0) : 0;
     const hipX = Math.max(hipR * 0.56,
       thighInner + 0.4 * 0.28 * Math.max(0, p.fat) + pantsT + 0.05,
       0.18 * fs0 * Math.sqrt(g) + (outfit.shoes !== 'skin' ? 0.06 : 0) + 0.05);
     for (const [side, sx] of [['A', -1], ['B', 1]]) {
       const shoulder = joint('shoulder' + side, waist, sx * sh * 0.8, chestH * 0.8, 0);
-      mesh(new THREE.SphereGeometry(0.27 * g, 7, 5), 'top', shoulder);
-      mesh(limb(0.26 * g, 0.2 * g, ua), 'top', shoulder);
+      mesh(new THREE.SphereGeometry(0.27 * ga, 7, 5), 'top', shoulder);
+      mesh(limb(0.26 * ga, 0.2 * ga, ua), 'top', shoulder);
       grp = 'arm' + side;
-      C(shoulder, [0, 0.05, 0], [0, -ua, 0], 0.26 * g * L, 0.2 * g * L, 0.18);
-      E(shoulder, [0, -0.1, 0], [0.3 * g, 0.35, 0.3 * g].map((v) => v * L * (0.85 + 0.35 * m)), 0.2);
-      E(shoulder, [0, -ua * 0.45, 0.05], [0.2 * g, ua * 0.28, 0.2 * g].map((v) => v * L * (0.8 + 0.55 * m)), 0.15);
+      C(shoulder, [0, 0.05, 0], [0, -ua, 0], 0.26 * ga * L, 0.2 * ga * L, 0.18);
+      E(shoulder, [0, -0.1, 0], [0.3 * ga, 0.35, 0.3 * ga].map((v) => v * L * (0.85 + 0.35 * m)), 0.2);
+      E(shoulder, [0, -ua * 0.45, 0.05], [0.2 * ga, ua * 0.28, 0.2 * ga].map((v) => v * L * (0.8 + 0.55 * m)), 0.15);
       const elbow = joint('elbow' + side, shoulder, 0, -ua, 0);
-      mesh(new THREE.SphereGeometry(0.2 * g, 7, 5), 'top', elbow);
-      mesh(limb(0.2 * g, 0.15 * g, fa), 'top', elbow);
-      C(elbow, [0, 0, 0], [0, -fa - 0.02, 0], 0.2 * g * L, 0.15 * g * L, 0.12);
-      E(elbow, [0, -fa * 0.3, 0], [0.2 * g, fa * 0.3, 0.18 * g].map((v) => v * L * (0.85 + 0.35 * m)), 0.1);
+      mesh(new THREE.SphereGeometry(0.2 * ga, 7, 5), 'top', elbow);
+      mesh(limb(0.2 * ga, 0.15 * ga, fa), 'top', elbow);
+      C(elbow, [0, 0, 0], [0, -fa - 0.02, 0], 0.2 * ga * L, 0.15 * ga * L, 0.12);
+      E(elbow, [0, -fa * 0.3, 0], [0.2 * ga, fa * 0.3, 0.18 * ga].map((v) => v * L * (0.85 + 0.35 * m)), 0.1);
       const wrist = joint('wrist' + side, elbow, 0, -fa, 0);
       this.hand(wrist, p, sx, mesh, side);
 
       const hip = joint('hip' + side, pelvis, sx * hipX, -0.1, 0);
       const th = 2.1 * p.legLen, shin = 2.0 * p.legLen;
-      mesh(limb(0.36 * g, 0.26 * g, th), 'bottom', hip);
+      mesh(limb(0.36 * gl, 0.26 * gl, th), 'bottom', hip);
       grp = 'leg' + side;
-      C(hip, [0, 0.1, 0], [0, -th, 0], 0.3 * g * L, 0.25 * g * L, 0.2);
-      E(hip, [sx * 0.06 * g, -th * 0.35, 0.03], [0.29 * g, th * 0.35, 0.33 * g].map((v) => v * L * (0.9 + 0.18 * m)), 0.15);
+      C(hip, [0, 0.1, 0], [0, -th, 0], 0.3 * gl * L, 0.25 * gl * L, 0.2);
+      E(hip, [sx * 0.06 * gl, -th * 0.35, 0.03], [0.29 * gl, th * 0.35, 0.33 * gl].map((v) => v * L * (0.9 + 0.18 * m)), 0.15);
       const knee = joint('knee' + side, hip, 0, -th, 0);
-      mesh(new THREE.SphereGeometry(0.26 * g, 7, 5), 'bottom', knee);
-      mesh(limb(0.26 * g, 0.18 * g, shin), 'bottom', knee);
-      C(knee, [0, 0, 0], [0, -shin, 0], 0.26 * g * L, 0.18 * g * L, 0.1);
-      E(knee, [0, -shin * 0.28, -0.07], [0.24 * g, shin * 0.28, 0.22 * g].map((v) => v * L * (0.8 + 0.5 * m)), 0.12);
+      mesh(new THREE.SphereGeometry(0.26 * gl, 7, 5), 'bottom', knee);
+      mesh(limb(0.26 * gl, 0.18 * gl, shin), 'bottom', knee);
+      C(knee, [0, 0, 0], [0, -shin, 0], 0.26 * gl * L, 0.18 * gl * L, 0.1);
+      E(knee, [0, -shin * 0.28, -0.07], [0.24 * gl, shin * 0.28, 0.22 * gl].map((v) => v * L * (0.8 + 0.5 * m)), 0.12);
       const ankle = joint('ankle' + side, knee, 0, -shin, 0);
       const fs = p.footSize * (outfit.feet || 1);
       mesh(new THREE.BoxGeometry(0.36 * fs * Math.sqrt(g), 0.26, 0.85 * fs).translate(0, -0.1, 0.22 * fs), 'shoes', ankle, false);

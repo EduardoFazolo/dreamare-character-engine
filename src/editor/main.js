@@ -5,15 +5,20 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { ps2Material } from '../head.js';
+import { ps2Material, PS2 } from '../head.js';
 import { generatePlace } from '../scenario/kinds.js';
 import { createStage, bakeForExport } from '../scenario/stage.js';
 import { VILLAGE } from '../scenario/biomes.js';
 import { menubar } from '../menubar.js';
-import { makeRig, detect, retarget, applyPose, snapshot, lerpPose, breathe, HANDLES, handlePos, dragHandle, dragStart, toRoot, toWorld, sitPose, hipsAt, compilePose, PRESETS } from './pose.js';
+import { makeRig, curlFingers, detect, retarget, applyPose, snapshot, lerpPose, breathe, HANDLES, handlePos, dragHandle, dragStart, toRoot, toWorld, sitPose, hipsAt, compilePose, PRESETS } from './pose.js';
 import { PROPS, CATEGORIES, buildProp } from '../scenario/props.js';
 import { loadPhotos, applyLook, syncLook, sourceRig } from '../scenario/photolook.js';
-import { assetList, importedList, importFile, loadVoice, playVoice, setListener, audioCtx, rawBytes, voiceStream } from './voice.js';
+import { createMist, createClouds } from '../scenario/mist.js';
+import { loadFilm, buildGraph, schedule, mouths, shotAt, kf } from './film.js';
+import { humanLife } from './life.js';
+import { applyHand, HAND_PRESETS } from './hands.js';
+import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
+import { assetList, importedList, importFile, loadVoice, playVoice, setListener, audioCtx, rawBytes, voiceStream, outputBus } from './voice.js';
 import { align, segments as speechSegments, loadCaptions, saveCaptions, cueAt } from './captions.js';
 import { AMBIENCES, startBed, stopBed, setVolume as bedVolume, playing as bedPlaying, stopAll as stopBeds } from './ambience.js';
 import { currentScene, setCurrentScene, emptyScene, onSceneChange, get, put, del, all, uid, newActor, listScenes, removeScene, freeSceneId, openScene, writtenText, sceneFiles } from '../store.js';
@@ -143,9 +148,14 @@ const look = () => rec?.terrain?.look || undefined;
 const rig = sourceRig(scene, stage.renderer);
 function applyFrame(p = terrainParams()) { // (the Source look renders sharper, with the tape wear nearly off)
   const src = look() === 'source', res = src ? Math.max(p.res, 640) : p.res;
-  if (PLAYER) stage.setRes(res, true, P.outW); else stage.setRes(res); stage.vhs = src ? Math.min(p.vhs, 0.15) : p.vhs; stage.sat = src ? Math.max(p.sat, 0.85) : p.sat;
+  if (PLAYER) stage.setRes(res, true, P.outW); else stage.setRes(res); stage.vhs = src ? Math.min(p.vhs, 0.15) : p.vhs; stage.sat = src ? Math.max(p.sat, 0.85) : p.sat; stage.punch = p.punch || 0;
 }
 function refreshLook() { applyLook(world?.group, look()); for (const pr of props.values()) applyLook(pr.built.group, look()); for (const o of actors.values()) applyLook(o.root, look()); applyFrame(); }
+// moving mist (mist.js): as thick as the scene's fog, or terrain.mist (0..1) to set it outright
+const mist = createMist(scene);
+const mistAmount = () => { const tr = rec?.terrain; if (tr?.mist != null) return tr.mist; const h = terrainParams().haze; return Math.max(0, Math.min(1, (h - 0.2) / 0.5)); };
+const clouds = createClouds(scene); // (terrain.clouds 0..1: banks drifting across the sky and the moon)
+const mistStep = (t) => { mist.update(t, camera, P.mist ?? mistAmount(), world?.floor?.bind(world)); clouds.update(t, camera, rec?.terrain?.clouds || 0); };
 const collectLights = () => [...props.values()].flatMap((pr) => pr.built.lights || []); // (the lamps' real light, in the Source look)
 
 // ---------------- characters ----------------
@@ -174,6 +184,11 @@ async function spawnActor(a) {
   if (!c) return null;
   const root = SkeletonUtils.clone(c.gltf.scene);
   ps2ify(root);
+  // only: 'head' shows the head alone (face, mouth, eyes, hair), the body hidden: a face on something else, like an egg in a cup
+  if (a.only === 'head' || a.only === 'face') root.traverse((m) => { if (m.isMesh && ['top', 'bottom', 'shoes', 'skin', ...(a.only === 'face' ? ['hair', 'hairStrands', 'hat', 'animalEar'] : [])].includes(m.material?.name)) m.visible = false; }); // (face: the hair and hat hidden too, only the face and its skull: a face in a flower)
+  if (a.shade) root.traverse((m) => { if (m.isMesh && m.material) m.material.userData.shade = +a.shade; }); // (shade 0..1: the figure sunk in gloom in the lit looks, only the glossy eyes catching the light)
+  if (a.glowFace) root.traverse((m) => { if (m.isMesh && ['face', 'scalp', 'mouth', 'eye', 'mask'].includes(m.material?.name)) { m.material.userData.faceGlow = +a.glowFace; m.material.userData.glowColor = a.glowColor; } }); // (glowFace: the face lights itself (0..1), as a sun with a face does, in glowColor [r, g, b] 0..1 if given; the lit looks only)
+  if (a.glowEyes) root.traverse((m) => { if (m.isMesh && m.material?.name === 'eye') m.material.userData.eyeGlow = a.glowEyes === true ? 0.5 : +a.glowEyes; }); // (glowEyes: a faint light of the eyes' own (0..1), so they read in a dark socket; in the lit looks they stay shaded, glossy spheres)
   if (look()) applyLook(root, look());
   const mixer = new THREE.AnimationMixer(root), clips = c.gltf.animations;
   const o = { root, mixer, clips, data: a, action: null, rig: makeRig(root), tween: null };
@@ -349,7 +364,7 @@ const props = new Map(); // propId -> { data, built }
 let selectedProp = null, picking = null; // picking: { propId } while choosing who sits
 function placeProp(pr) {
   const d = pr.data, g = pr.built.group;
-  const ground = d.float ? Math.max(world.height(d.x, d.z), -1.6) : world.height(d.x, d.z) - 0.02; // (float: sits on the water, -1.6 = the scenario sea level)
+  const ground = d.indoor ? world.floor(d.x, d.z) : d.float ? Math.max(world.height(d.x, d.z), -1.6) : world.height(d.x, d.z) - 0.02; // (float: sits on the water, -1.6 = the scenario sea level; indoor: on a room's floor, not the roof over it)
   g.position.set(d.x, ground + (d.y || 0), d.z); g.rotation.set(0, d.rotY || 0, 0); g.scale.setScalar(d.scale || 1); // (y: lifted off the ground, e.g. a lantern held up)
 }
 function syncProps() {
@@ -425,6 +440,7 @@ function compileDirected() { for (const o of actors.values()) compileOne(o); }
 function compileOne(o) {
   {
     const spec = o.data.pose;
+    if (o.data.approach || spec?.clip) { o.compiled = null; o.lookCamera = spec?.look === 'camera'; return; } // (walking toward you, or pose.clip: the clip plays (idle, walk), the look / face / life / twitch ride on it)
     if (!spec || spec.bones || !(spec.preset || spec.look || spec.leftHand || spec.rightHand)) { o.compiled = null; o.lookCamera = false; return; }
     const camHands = ['leftHand', 'rightHand'].filter((k) => spec[k] === 'camera');
     const key = JSON.stringify([spec, o.data.x, o.data.z, o.data.rotY, o.data.seat, camHands.length ? camera.position.toArray().map((v) => Math.round(v * 3)) : 0]);
@@ -453,6 +469,126 @@ function compileOne(o) {
 }
 const rawPose = (o) => o.compiled || (o.data.pose?.bones ? o.data.pose : null);
 // hands held out to the camera follow it (re-aimed when it has moved ~30 cm; the IK is cheap)
+// holdCamera: the character holds the camera in both hands, as if it were an object (pose.holdCamera: true or
+// { spread, low, ahead, squeeze }): the hands at the sides of the frame, just in front of the lens, fingers
+// clawed round it, the grip tightening and trembling; as the camera comes in, the elbows fold. Per frame, after
+// the pose and life, before the look: wherever the camera goes, the hands are on it.
+function holdCam(t) {
+  for (const o of actors.values()) {
+    const hc = o.data.pose?.holdCamera; if (!hc || !o.root.visible) continue;
+    const c = typeof hc === "object" ? hc : {}, spread = c.spread ?? 0.085, low = c.low ?? 0.05, ahead = c.ahead ?? 0.2, sq = c.squeeze ?? 1; // (metres in the camera frame: at 20 cm ahead, the frame edge is ~7 cm out: the hands sit on it)
+    const ctx = dragStart(o.rig); ctx.poles = { LeftHand: new THREE.Vector3(0.8, -1, -0.3), RightHand: new THREE.Vector3(-0.8, -1, -0.3) }; // (elbows down and out: the arms come up from below, never across the face)
+    for (const [name, sx] of [['LeftHand', 1], ['RightHand', -1]]) {
+      // steady, no tremble (that read as jiggling): the grip only tightens slowly
+      const off = new THREE.Vector3(-sx * spread, -low, -ahead);
+      dragHandle(o.rig, name, toRoot(o.rig, off.applyQuaternion(camera.quaternion).add(camera.position)), ctx);
+      // the hand turned so its fingers point at the lens (wrapping round it), not bent back at the wrist
+      const side = name.startsWith('Left') ? 'Left' : 'Right', hand = o.rig.bones[name], mid = o.rig.bones[`${side}HandMiddle1`];
+      if (mid) {
+        o.rig.root.updateMatrixWorld(true);
+        const H = hand.getWorldPosition(new THREE.Vector3()), d = mid.getWorldPosition(new THREE.Vector3()).sub(H).normalize();
+        const want = camera.position.clone().addScaledVector(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion), -0.06).sub(H).normalize();
+        const q = new THREE.Quaternion().setFromUnitVectors(d, want).multiply(hand.getWorldQuaternion(new THREE.Quaternion()));
+        hand.quaternion.copy(hand.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(q)); hand.updateMatrixWorld(true);
+      }
+      const g = 0.8 + 0.2 * sq * Math.min(1, (t % 1000) * 0 + 1);
+      curlFingers(o.rig, side, { Index: [0.6 * g, 1.1 * g, 0.8 * g], Middle: [0.7 * g, 1.1 * g, 0.8 * g], Ring: [0.8 * g, 1.1 * g, 0.8 * g], Pinky: [0.9 * g, 1.0 * g, 0.7 * g], Thumb: [0.4 * g, 0.6 * g, 0.4 * g] });
+    }
+    o.rig.root.updateMatrixWorld(true);
+  }
+}
+// Hands (hands.js presets, editable in hands/*.json):
+//   pose.hands = { left / right: "fist" | "point" | ... }: a hand shape, nothing reached for
+//   pose.grip = { leftHand / rightHand: { at, toward, palm, preset, around, elbow } }: a hand holding on to
+//     something. The wrist goes to `at` (two-bone IK, the elbow bending toward `elbow`, a direction [x, y, z],
+//     default out and down, so arms never lock straight), the hand turns so its fingers point at `toward` and
+//     its palm faces `palm` (a grip needs both), then the preset shapes the fingers ("grab" curls each round
+//     `around`, the held shape: { ring | rail | sphere | plane }, stopping where it touches)
+//   a "rub" preset (either hand) brings both hands together in front of the chest, palms rubbing
+// Applied every frame after the pose and life, like holdCamera.
+function orientHand(o, side, toward, palm) {
+  const hand = o.rig.bones[`${side}Hand`], mid = o.rig.bones[`${side}HandMiddle1`]; if (!mid || !toward) return;
+  o.rig.root.updateMatrixWorld(true);
+  const H = hand.getWorldPosition(new THREE.Vector3()), d = mid.getWorldPosition(new THREE.Vector3()).sub(H).normalize(), want = toward.clone().sub(H).normalize();
+  let q = new THREE.Quaternion().setFromUnitVectors(d, want);
+  const ix = o.rig.bones[`${side}HandIndex1`], pk = o.rig.bones[`${side}HandPinky1`];
+  if (palm && ix && pk) { // rolled about the fingers so the palm faces `palm`
+    const across = ix.getWorldPosition(new THREE.Vector3()).sub(pk.getWorldPosition(new THREE.Vector3())).applyQuaternion(q);
+    const palmNow = new THREE.Vector3().crossVectors(want, across).multiplyScalar(side === 'Left' ? 1 : -1).projectOnPlane(want).normalize(); // (measured: the side the fingers fold to)
+    const palmWant = palm.clone().projectOnPlane(want).normalize();
+    const roll = Math.atan2(new THREE.Vector3().crossVectors(palmNow, palmWant).dot(want), palmNow.dot(palmWant));
+    q = new THREE.Quaternion().setFromAxisAngle(want, roll).multiply(q);
+  }
+  q.multiply(hand.getWorldQuaternion(new THREE.Quaternion()));
+  hand.quaternion.copy(hand.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(q)); hand.updateMatrixWorld(true);
+}
+const presetOf = (n) => (n && HAND_PRESETS[n]) || null;
+function gripHands(t = 0) {
+  for (const o of actors.values()) {
+    const sp = o.data.pose, gp = sp?.grip, hs = sp?.hands; if ((!gp && !hs) || !o.root.visible) continue;
+    const spec = { LeftHand: gp?.leftHand, RightHand: gp?.rightHand };
+    const rub = [gp?.leftHand?.preset, gp?.rightHand?.preset, hs?.left, hs?.right].map(presetOf).find((p) => p?.rub);
+    if (rub) { // both hands together in front of the chest, palms rubbing, a slow back and forth
+      o.root.updateMatrixWorld(true);
+      const rq = o.root.getWorldQuaternion(new THREE.Quaternion()), fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(rq), left = new THREE.Vector3(1, 0, 0).applyQuaternion(rq), up = new THREE.Vector3(0, 1, 0);
+      const k = o.data.scale || 1, chest = o.rig.bones.Spine2.getWorldPosition(new THREE.Vector3()), base = chest.addScaledVector(fwd, 0.32 * k).addScaledVector(up, -0.12 * k), sl = Math.sin(t * 7) * 0.035 * k;
+      for (const [name, sx] of [['LeftHand', 1], ['RightHand', -1]]) {
+        const at = base.clone().addScaledVector(left, sx * 0.03 * k).addScaledVector(up, sx * sl);
+        spec[name] = { at: at.toArray(), toward: at.clone().addScaledVector(fwd, 0.2).addScaledVector(up, 0.15).toArray(), palm: left.clone().multiplyScalar(-sx).toArray(), preset: Object.keys(HAND_PRESETS).find((n) => HAND_PRESETS[n] === rub), elbow: [sx * 0.7, -1, -0.3] };
+      }
+    }
+    const ctx = dragStart(o.rig); ctx.poles = {};
+    for (const name of ['LeftHand', 'RightHand']) { const g = spec[name]; if (g) ctx.poles[name] = new THREE.Vector3(...(g.elbow || [name === 'LeftHand' ? 0.7 : -0.7, -1, -0.2])); }
+    for (const name of ['LeftHand', 'RightHand']) {
+      const side = name.startsWith('Left') ? 'Left' : 'Right', g = spec[name];
+      if (g) {
+        const at = resolvePoint(g.at); if (!at) continue;
+        dragHandle(o.rig, name, toRoot(o.rig, at.clone()), ctx);
+        orientHand(o, side, g.toward ? resolvePoint(g.toward) : null, g.palm ? new THREE.Vector3(...g.palm) : null);
+        if (g.preset) applyHand(o.rig, side, g.preset, { around: g.around });
+        else { const c = g.curl ?? 0.9; curlFingers(o.rig, side, { Index: [0.7 * c, 1.1 * c, 0.8 * c], Middle: [0.75 * c, 1.15 * c, 0.8 * c], Ring: [0.8 * c, 1.15 * c, 0.8 * c], Pinky: [0.85 * c, 1.05 * c, 0.7 * c], Thumb: [0.5 * c, 0.6 * c, 0.4 * c] }); }
+      } else if (hs?.[side.toLowerCase()]) applyHand(o.rig, side, hs[side.toLowerCase()]);
+    }
+    o.rig.root.updateMatrixWorld(true);
+  }
+}
+// follow (a prop's "follow": an actor id): the prop sits at that actor's face, every frame (a sun's rays round its
+// face, wherever the head is put or turns). The face's middle is measured once on its mesh, kept in the head bone's
+// frame, so it moves with the head
+function followFace(pr) {
+  const id = pr.data.follow; if (!id) return;
+  const o = actors.get(id); if (!o) return;
+  const head = o.rig.bones.Head; if (!head) return;
+  if (!o.faceOffset) {
+    let face = null; o.root.traverse((m) => { if (m.isSkinnedMesh && (m.userData.drawnMaterial || m.material)?.name === 'face') face = m; });
+    if (!face) return;
+    o.root.updateMatrixWorld(true);
+    const bb = new THREE.Box3(), v = new THREE.Vector3();
+    for (const i of new Set(face.geometry.index.array)) { face.getVertexPosition(i, v); bb.expandByPoint(v.applyMatrix4(face.matrixWorld)); }
+    o.faceOffset = head.worldToLocal(bb.getCenter(new THREE.Vector3()));
+  }
+  o.root.updateMatrixWorld(true);
+  const w = head.localToWorld(o.faceOffset.clone());
+  pr.built.group.parent?.worldToLocal(w); pr.built.group.position.copy(w);
+}
+// onProp (an actor's "onProp": { prop, anchor, offset }): its face held at that prop anchor every frame (a person's
+// face on a rocking horse's head, at a pinwheel's hub, on a tea-party chair), after the heads have turned
+function faceOnProp(o) {
+  const op = o.data.onProp; if (!op) return;
+  const pr = props.get(op.prop), a = pr?.built.anchors?.[op.anchor]; if (!a) return;
+  const head = o.rig.bones.Head; if (!head) return;
+  if (!o.faceOffset) {
+    let face = null; o.root.traverse((m) => { if (m.isSkinnedMesh && (m.userData.drawnMaterial || m.material)?.name === 'face') face = m; });
+    if (!face) return;
+    o.root.updateMatrixWorld(true);
+    const bb = new THREE.Box3(), v = new THREE.Vector3();
+    for (const i of new Set(face.geometry.index.array)) { face.getVertexPosition(i, v); bb.expandByPoint(v.applyMatrix4(face.matrixWorld)); }
+    o.faceOffset = head.worldToLocal(bb.getCenter(new THREE.Vector3()));
+  }
+  o.root.updateMatrixWorld(true); a.updateWorldMatrix(true, false);
+  const want = a.localToWorld(new THREE.Vector3(...(op.offset || [0, 0, 0]))), now = head.localToWorld(o.faceOffset.clone());
+  o.root.position.add(want.sub(now)); o.root.updateMatrixWorld(true);
+}
 function reachCamera() {
   for (const o of actors.values()) {
     const sp = o.data.pose; if (!sp || (sp.leftHand !== 'camera' && sp.rightHand !== 'camera' && sp.turn !== 'camera')) continue;
@@ -654,7 +790,9 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 0) { const h = pickHandle(); if (h) { startHandleDrag(h, e); return; } }
   const hit = e.button === 0 ? pickActor() : null, phit = e.button === 0 && !hit ? pickProp() : null;
   if (e.button === 2) rmb = true;
-  const grab = (hit && hit === selected) || (phit && phit === selectedProp);
+  const isLocked = (hit && actors.get(hit)?.data.locked) || (phit && props.get(phit)?.data.locked); // (locked: it can't be dragged, turned or deleted by accident)
+  const grab = !isLocked && ((hit && hit === selected) || (phit && phit === selectedProp));
+  if (isLocked && ((hit && hit === selected) || (phit && phit === selectedProp))) status('locked: unlock it in the panel to move it');
   drag = { kind: grab ? 'move' : 'look', x: e.clientX, y: e.clientY, moved: false, hit, phit, button: e.button };
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -729,11 +867,12 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF' && selected) frameActor(selected);
   const pr = selectedProp && props.get(selectedProp);
   if (pr) {
+    if (pr.data.locked) return; // (locked: no turning or deleting from the keyboard)
     if ((e.code === 'KeyQ' || e.code === 'KeyE') && !rmb) { pr.data.rotY += (e.code === 'KeyQ' ? 1 : -1) * (Math.PI / 12); placeProp(pr); autosave(); renderActorBox(); }
     if (e.code === 'Delete' || e.code === 'Backspace') { removeProp(selectedProp); e.preventDefault(); }
     return;
   }
-  const o = selected && actors.get(selected); if (!o) return;
+  const o = selected && actors.get(selected); if (!o || o.data.locked) return;
   if ((e.code === 'KeyQ' || e.code === 'KeyE') && !rmb) { const k = o.data.seat ? 'seatRot' : 'rotY'; o.data[k] = (o.data[k] || 0) + (e.code === 'KeyQ' ? 1 : -1) * (Math.PI / 12); place(o); autosave(); renderActorBox(); }
   if (e.code === 'Delete' || e.code === 'Backspace') { removeActor(selected); e.preventDefault(); }
 });
@@ -743,7 +882,7 @@ addEventListener('blur', () => { keys.clear(); endLook(); });
 // ---------------- pose handles: drag hands, feet, head, chest, hips (IK does the rest) ----------------
 let editPose = false, hdrag = null;
 const HANDLE_COL = { LeftHand: 0x7fd6ff, RightHand: 0x7fd6ff, LeftFoot: 0x9dff9d, RightFoot: 0x9dff9d, Head: 0xffe07f, Spine2: 0xff9f7f, Hips: 0xff7fd0 };
-const handles = new THREE.Group(); scene.add(handles);
+const handles = new THREE.Group(); handles.visible = false; scene.add(handles); // (hidden until a pose is edited: the player never shows them)
 for (const n of Object.keys(HANDLES)) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(n === 'Hips' || n === 'Spine2' ? 0.075 : 0.06, 10, 6), new THREE.MeshBasicMaterial({ color: HANDLE_COL[n], depthTest: false, transparent: true, opacity: 0.9, fog: false }));
   m.name = n; m.renderOrder = 10; handles.add(m);
@@ -826,7 +965,7 @@ function eyeMid(o) {
 // (the original look, restored: it worked; every later change to it made it worse)
 function updateLook(o, dt) {
   const a = o.data; o.lookW = THREE.MathUtils.clamp((o.lookW || 0) + (a.lookAtMe || o.lookCamera ? dt : -dt) / 0.35, 0, 1);
-  if (o.lookW <= 0) { if (o.eyesTouched) { for (const m of eyeMeshes(o)) for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = 0; o.eyesTouched = false; } return; }
+  if (o.lookW <= 0) { if (o.eyesTouched) { for (const m of eyeMeshes(o)) { for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = 0; const A = m.userData.eyeAim; if (A) { m.geometry.attributes.position.array.set(A.rest); m.geometry.attributes.position.needsUpdate = true; if (A.restN) { m.geometry.attributes.normal.array.set(A.restN); m.geometry.attributes.normal.needsUpdate = true; } } } o.eyesTouched = false; } return; }
   const w = o.lookW * o.lookW * (3 - 2 * o.lookW), neck = o.rig.bones.Neck, head = o.rig.bones.Head;
   o.root.updateWorldMatrix(true, true);
   const eye = camera.position;
@@ -839,24 +978,79 @@ function updateLook(o, dt) {
       head.quaternion.copy(head.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(cur)).normalize(); head.updateMatrixWorld(true);
     }
   } else {
-    turnToward(neck, eye, w * 0.35, 0.45); // neck: a third of the turn, up to ~26°
-    turnToward(head, eye, w, 1.0); // head: the rest, up to ~57° more
+    // aimed as if from the eyes (the target shifted by the head pivot's offset from them): from the pivot, low in
+    // the neck, a camera close to the face is well above it, the head tipped back and the eyes couldn't look down enough
+    const em = eyeMid(o), tgt = em ? eye.clone().add(head.getWorldPosition(new THREE.Vector3()).sub(em)) : eye;
+    turnToward(neck, tgt, w * 0.35, 0.45); // neck: a third of the turn, up to ~26°
+    turnToward(head, tgt, w, 1.0); // head: the rest, up to ~57° more
+  }
+  // strain (pose.alive.strain 0..1): the head holding the stare with effort: a fine tremor (6-11 Hz, smooth) and a
+  // slow strained drift, the neck fighting it; the eyes (aimed after this) stay locked on you
+  const st = a.pose?.alive?.strain;
+  if (st) {
+    const T = P.curT ?? performance.now() / 1000, n = (f, k) => Math.sin(T * f + k) * 0.55 + Math.sin(T * f * 1.37 + k * 2.3) * 0.3 + Math.sin(T * f * 2.11 + k * 4.1) * 0.15;
+    const ax = (bone, x, y, z) => { bone.rotateX(x); bone.rotateY(y); bone.rotateZ(z); bone.updateMatrixWorld(true); };
+    ax(head, n(41, 1) * 0.018 * st + n(1.3, 7) * 0.05 * st, n(53, 2) * 0.016 * st + n(0.9, 8) * 0.06 * st, n(47, 3) * 0.02 * st + n(1.1, 9) * 0.07 * st); // (tremor + strained drift)
+    ax(neck, n(37, 4) * 0.008 * st, n(1.7, 5) * 0.02 * st, n(43, 6) * 0.01 * st);
   }
   // eyes: what's left, measured in the head's own frame (+Z forward, +X the character's left, +Y up)
   head.getWorldQuaternion(_lq);
-  _lv.copy(eye).sub(head.getWorldPosition(_lf)).applyQuaternion(_lq.invert()).normalize();
+  _lv.copy(eye).sub(eyeMid(o) || head.getWorldPosition(_lf)).applyQuaternion(_lq.invert()).normalize(); // (from between the eyes, not the head's pivot low in the neck: up close that aimed the pupils past the camera)
   // the look morphs turn the eyeballs 0.40 rad sideways and 0.32 rad up / down at full weight (faceanim.js)
   const yaw = Math.atan2(_lv.x, _lv.z), pitch = Math.atan2(_lv.y, Math.hypot(_lv.x, _lv.z));
   const look = { eyeLookLeft: Math.max(0, yaw) / 0.4, eyeLookRight: Math.max(0, -yaw) / 0.4, eyeLookUp: Math.max(0, pitch) / 0.32, eyeLookDown: Math.max(0, -pitch) / 0.32 };
+  if (aimEyes(o, eye, w)) { for (const m of eyeMeshes(o)) for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = 0; o.eyesTouched = true; return; }
   for (const m of eyeMeshes(o)) for (const k of EYES) m.morphTargetInfluences[m.morphTargetDictionary[k]] = Math.min(1, look[k]) * w;
   o.eyesTouched = true;
+}
+// Each eyeball turned on its own centre to point exactly at the target (the eyes converge on it). The look morphs
+// turn both balls together, parallel: up close (30 cm) each eye missed the lens by 8-14 degrees and the stare read
+// as looking past you. The balls are spheres built facing the mesh's +Z (faceanim.js eyeball), rigid on the head
+// bone; so the target is taken into the mesh's bind space and each ball's vertices (and normals) are rotated about
+// its centre there. Returns false when the eye mesh isn't one it understands (then the morphs do it).
+const _ab = new THREE.Matrix4(), _av = new THREE.Vector3(), _aq = new THREE.Quaternion(), _az = new THREE.Vector3(0, 0, 1);
+function aimEyes(o, target, w) {
+  let m = o.eyeBall; if (m === undefined) { m = null; o.root.traverse((x) => { if (x.isSkinnedMesh && (x.userData.drawnMaterial || x.material)?.name === 'eye') m = x; }); o.eyeBall = m; } // (the eyeball mesh itself: the look morphs live on more meshes than it)
+  if (!m) return false;
+  const g = m.geometry, pa = g.attributes.position, na = g.attributes.normal, uv = g.attributes.uv, sw = g.attributes.skinWeight, si = g.attributes.skinIndex;
+  if (!m.userData.eyeAim) { // once: the two balls (by texture half), their centres, the rest positions, the bone they ride
+    // (the exported mesh shares one vertex list across every part: the eye's own vertices are the ones its triangles use)
+    const own = g.index ? [...new Set(g.index.array)] : [...Array(pa.count).keys()];
+    const balls = [[0, 0.5], [0.5, 1]].map(([lo, hi]) => own.filter((i) => { const u = uv.getX(i); return u >= lo && u < hi; }));
+    if (balls.some((b) => b.length < 8)) return false;
+    const rest = pa.array.slice(), restN = na ? na.array.slice() : null;
+    const info = balls.map((ids) => { // apex: the frontmost point; radius from the widest ring around it (the cap spans 110 degrees)
+      let ap = ids[0]; for (const i of ids) if (pa.getZ(i) > pa.getZ(ap)) ap = i;
+      let rr = 0; for (const i of ids) rr = Math.max(rr, Math.hypot(pa.getX(i) - pa.getX(ap), pa.getY(i) - pa.getY(ap)));
+      const R = rr / Math.sin((110 * Math.PI) / 180) || rr;
+      return { ids, c: new THREE.Vector3(pa.getX(ap), pa.getY(ap), pa.getZ(ap) - R) };
+    });
+    m.userData.eyeAim = { info, rest, restN, bone: m.skeleton.bones[si.getX(0)], boneIdx: si.getX(0), rigid: sw.getX(0) > 0.99 };
+  }
+  const A = m.userData.eyeAim; if (!A.rigid) return false;
+  // world -> the mesh's bind space, through the bone it rides (skinned = bindMatrixInverse * boneMatrix * bindMatrix * v)
+  m.updateMatrixWorld(true); A.bone.updateMatrixWorld(true);
+  _ab.copy(m.matrixWorld).multiply(m.bindMatrixInverse).multiply(A.bone.matrixWorld).multiply(m.skeleton.boneInverses[A.boneIdx]).multiply(m.bindMatrix).invert();
+  const tb = _av.copy(target).applyMatrix4(_ab);
+  for (const { ids, c } of A.info) {
+    const dir = tb.clone().sub(c).normalize();
+    _aq.setFromUnitVectors(_az, dir); const ang = 2 * Math.acos(Math.min(1, Math.abs(_aq.w)));
+    if (ang > 0.6) _aq.slerp(new THREE.Quaternion(), 1 - 0.6 / ang); // (an eye turns ~35 degrees at most)
+    const q = new THREE.Quaternion().slerp(_aq, w), v = new THREE.Vector3();
+    for (const i of ids) {
+      v.set(A.rest[i * 3] - c.x, A.rest[i * 3 + 1] - c.y, A.rest[i * 3 + 2] - c.z).applyQuaternion(q).add(c); pa.setXYZ(i, v.x, v.y, v.z);
+      if (A.restN) { v.set(A.restN[i * 3], A.restN[i * 3 + 1], A.restN[i * 3 + 2]).applyQuaternion(q); na.setXYZ(i, v.x, v.y, v.z); }
+    }
+  }
+  pa.needsUpdate = true; if (na) na.needsUpdate = true;
+  return true;
 }
 
 // ---------------- a face that's alive: a held expression, blinking, muttering, a slow head tilt ----------------
 // pose.face: { mouthSmile, browInnerUp, browUp, browDown, mouthPucker, mouthWide, jawOpen, eyeBlinkLeft, … } (0..1)
-// pose.alive: { blink: true, mutter: 0..1 (lips moving on their own), sway: 0..1 (the head drifting, tilting) }
+// pose.alive: { blink: true, mutter: 0..1 (lips moving on their own), sway: 0..1 (the head drifting, tilting), chant: s (mouthing a slow phrase on a loop), wheeze: 0..1 (unhealthy breathing) }
 // Driven by time alone, so a snapped frame is exactly the moment it was snapped.
-const LIFE = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'browUp', 'browDown', 'browInnerUp'];
+const LIFE = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'browUp', 'browDown', 'browInnerUp', 'mouthClose', 'mouthFunnel'];
 function lifeMeshes(o) { if (!o.lifeM) { o.lifeM = []; o.root.traverse((m) => { if (m.morphTargetDictionary && 'mouthSmile' in m.morphTargetDictionary) o.lifeM.push(m); }); } return o.lifeM; }
 function faceLife(o, t) {
   const spec = o.data.pose, face = spec?.face, alive = spec?.alive;
@@ -873,8 +1067,147 @@ function faceLife(o, t) {
     w.jawOpen = (w.jawOpen || 0) + m * on * 0.22 * Math.max(0, Math.sin(t * 7.3 + ph) * Math.sin(t * 3.1));
     w.mouthPucker = (w.mouthPucker || 0) + m * on * 0.35 * Math.max(0, Math.sin(t * 5.2 + 1 + ph));
   }
+  if (alive?.chant) { // mouthing a phrase on a loop, slow: "re-meeee-mber the duuunes" (alive.chant: seconds per phrase)
+    const P = +alive.chant || 4, u = (((t + ph) % P) + P) % P / P;
+    const K = [[0, 0.1, 0, 0], [0.06, 0.45, 0.1, 0], [0.12, 0.3, 0.75, 0], [0.5, 0.35, 0.8, 0], [0.56, 0.05, 0, 0.3], [0.62, 0.05, 0, 0.2], [0.66, 0.35, 0.2, 0], [0.72, 0.4, 0, 0.9], [0.9, 0.55, 0, 0.8], [0.95, 0.1, 0, 0], [1, 0.1, 0, 0]]; // [at, jaw, wide, pucker]
+    let i = 0; while (K[i + 1][0] < u) i++;
+    const [a0, ...A] = K[i], [a1, ...B] = K[i + 1], f = (u - a0) / (a1 - a0 || 1), e = f * f * (3 - 2 * f), mix = (j) => A[j] + (B[j] - A[j]) * e;
+    w.jawOpen = Math.max(w.jawOpen || 0, mix(0)); w.mouthWide = Math.max(w.mouthWide || 0, mix(1)); w.mouthPucker = Math.max(w.mouthPucker || 0, mix(2));
+  }
+  if (o.filmMouth) for (const k of ['jawOpen', 'mouthWide', 'mouthPucker', 'mouthClose', 'mouthFunnel']) w[k] = Math.max(w[k] || 0, o.filmMouth[k] || 0); // (a film's voice: the mouth follows the sound)
+  if (alive?.life != null) { const lf = humanLife(o, t, +alive.life, curlFingers); if (lf.still > 0.5) w.eyeBlinkLeft = w.eyeBlinkRight = 0; } // (stopped: not even a blink)
+  if (alive?.wheeze) { const g = sickBreath(o, t, +alive.wheeze, ph); if (g.gasp) w.jawOpen = Math.max(w.jawOpen || 0, (w.jawOpen || 0) + g.gasp * 0.25); }
   for (const m of lifeMeshes(o)) for (const k of LIFE) if (k in m.morphTargetDictionary) m.morphTargetInfluences[m.morphTargetDictionary[k]] = Math.min(1, w[k] || 0);
   if (alive?.sway) { const hd = o.rig.bones.Head, a = alive.sway; hd.rotateZ(Math.sin(t * 0.31 + ph) * 0.12 * a); hd.rotateX(Math.sin(t * 0.23 + ph * 2) * 0.05 * a); hd.rotateY(Math.sin(t * 0.17 + ph) * 0.06 * a); }
+}
+
+// approach: { speed: m/s (0.12), stop: m (1.5), backwards: true (its back to you, walking backwards) }: walks toward the camera from where it was put, in a slowed
+// walk (the clip slowed to the pace), and stops that far from you. Time counts from when the shot was shown
+// (the player) so a slide starts it from its spot every time.
+function approach(o, t, ahead = 0) {
+  const ap = o.data.approach; if (!ap || o.data.x == null) return;
+  o.approachT0 ??= t; const T = Math.max(0, t - (PLAYER ? P.showT ?? t : o.approachT0)), speed = ap.speed ?? 0.12, stop = ap.stop ?? 1.5;
+  const dx = camera.position.x - o.data.x, dz = camera.position.z - o.data.z, D = Math.hypot(dx, dz) || 1, room = Math.max(0, D - stop), d = Math.min(room, speed * T + ahead);
+  o.root.position.x = o.data.x + (dx / D) * d; o.root.position.z = o.data.z + (dz / D) * d; o.root.rotation.y = Math.atan2(dx, dz) + (ap.backwards ? Math.PI : 0);
+  if (o.action) o.action.timeScale = (d < room ? speed / 0.67 : 0) * (ap.backwards ? -1 : 1); // (the walk clip covers 0.67 m/s; backwards: its back to you, the walk run in reverse)
+}
+// a playing clip's own pose, kept after the mixer applies it and put back before the next frame: what rides on
+// top (the look, a twitch) is wiped each frame instead of piling up. (The mixer only writes a bone when its
+// value changes, so resetting bones behind its back left them at rest wherever the clip held still: a
+// slowed walk's arm snapped to the T-pose for six frames at a time.)
+function clipBegin(o) { const c = o.clipPose; if (!c) return; c.bones.forEach((b, i) => { b.quaternion.fromArray(c.q, i * 4); b.scale.set(1, 1, 1); }); o.rig.bones.Hips.position.fromArray(c.hips); } // (and any stretch undone)
+function clipEnd(o) {
+  const c = (o.clipPose ||= { bones: Object.values(o.rig.bones), q: [], hips: [] });
+  c.bones.forEach((b, i) => b.quaternion.toArray(c.q, i * 4)); o.rig.bones.Hips.position.toArray(c.hips);
+}
+// Twitching (pose.alive.twitch 0..1): something wearing a body and not quite knowing how. Subtle, like the
+// possessed walk in Obsession: all the time, a wrong way of holding itself laid over the walk (arms held a
+// little off the sides and hardly swinging, elbows soft, wrists cocked, fingers half-curled and splayed, knees
+// bent, a slight hunch, the head low and tilted); and now and then, small and fast, it slips: the head jerks,
+// a shoulder hitches, the fingers flex, the walk stalls for a split second, a knee gives and it catches
+// itself, it takes the same step twice (a skipping loop), it stops dead for a second, a shiver runs down an arm. Seeded from the shot's start (the
+// player): every showing plays the same. Joints stay inside what a body can do (the elbow and knee hinges).
+const ease = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+const AXR = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) }, _eq = new THREE.Quaternion(), _eq2 = new THREE.Quaternion(), _ea = new THREE.Vector3(), _hold = new THREE.Quaternion();
+function rotRoot(o, bone, axis, angle) { // turn a bone about an axis in the character's own frame (+X its left, +Y up, +Z forward)
+  if (!bone || !angle) return;
+  o.root.getWorldQuaternion(_eq); bone.getWorldQuaternion(_eq2);
+  bone.rotateOnAxis(_ea.copy(axis).applyQuaternion(_eq).applyQuaternion(_eq2.invert()).normalize(), angle); bone.updateMatrixWorld(true);
+}
+const HX = new THREE.Vector3(1, 0, 0), HXN = new THREE.Vector3(-1, 0, 0);
+const hinge = (bone, axis, a) => { if (bone && a) { bone.rotateOnAxis(axis, Math.max(0, a)); bone.updateMatrixWorld(true); } }; // (elbows +X, knees -X: forward only)
+const TWITCH_KINDS = ['head', 'shoulder', 'fingers', 'stall', 'knee', 'repeat', 'deadstop', 'shiver'];
+function episodeState(o, t) {
+  const amt = o.data.pose?.alive?.twitch; if (!amt) return null;
+  const t0 = PLAYER ? P.showT ?? t : (o.approachT0 ??= t), rel = t - t0, sd = o.data.id.charCodeAt(0) * 7.7 + o.data.id.length;
+  const h = (n, k) => { const x = Math.sin(n * 127.1 + k * 311.7 + sd) * 43758.5453; return x - Math.floor(x); };
+  const S = 1.9 - 0.6 * amt, slips = [], kinds = o.data.pose?.alive?.twitchKinds || TWITCH_KINDS; let lost = 0;
+  for (let n = 0; n * S <= rel; n++) {
+    // dealt from a shuffled deck of the kinds (alive.twitchKinds, or all of them): every kind comes round before any
+    // comes again, so a short shot still shows them all
+    const K = kinds.length, c = Math.floor(n / K), deck = kinds.map((x, i) => [x, h(c * 13 + i, 40)]).sort((p, q) => p[1] - q[1]), type = deck[n % K][0], start = n * S + 0.3 + h(n, 2) * (S - 0.6);
+    const tin = type === 'knee' ? 0.12 : type === 'shiver' ? 0 : 0.14 + h(n, 3) * 0.08; // (in over 4-7 frames: a jerk, not a pop)
+    const hold = type === 'stall' ? 0.14 + h(n, 4) * 0.16 : type === 'deadstop' ? 0.9 + h(n, 4) * 0.5 : type === 'repeat' ? 0.45 + h(n, 4) * 0.3 : type === 'knee' ? 0.06 + h(n, 4) * 0.06 : type === 'shiver' ? 0.7 + h(n, 4) * 0.3 : 0.12 + h(n, 4) * 0.3;
+    const tout = type === 'knee' ? 0.35 : type === 'shiver' ? 0 : 0.45 + h(n, 6) * 0.3, u = rel - start; // (and eased back slowly, as if nothing happened)
+    if (u < 0) break;
+    if (type === 'stall' || type === 'deadstop') { lost += Math.max(0, Math.min(u, hold)); continue; } // (the walk and the approach stop: a split second, or a whole dead second)
+    if (type === 'repeat') { lost += hold; continue; } // (the clock jumps back: the last step plays again, then it walks on from there)
+    if (u >= tin + hold + tout) continue;
+    const k = u < tin ? ease(u / tin) : u < tin + hold ? 1 : 1 - ease((u - tin - hold) / tout);
+    slips.push({ type, k: k * (0.6 + 0.4 * amt), side: h(n, 7) < 0.5 ? 1 : -1, a: h(n, 8), b: h(n, 9), u });
+  }
+  return { te: t - lost, ahead: 0, cur: { amt, slips, rel } };
+}
+function episode(o, ep) {
+  if (!ep) return;
+  const B = o.rig.bones, a = ep.amt, rig = o.rig;
+  o.root.updateMatrixWorld(true);
+  // the posture: the arms taken most of the way off the walk's swing to a held hang, a little out from the body
+  for (const [side, L] of [['Left', 1], ['Right', -1]]) {
+    const arm = B[`${side}Arm`]; if (!arm) continue;
+    _hold.copy(arm.quaternion); arm.quaternion.copy(rig.rest[`${side}Arm`]); arm.updateMatrixWorld(true);
+    rotRoot(o, arm, AXR.z, -L * (Math.PI / 2 - 0.26 * a)); rotRoot(o, arm, AXR.x, -0.12 * a); // (hanging, held off the side, a touch forward)
+    arm.quaternion.copy(_hold.slerp(arm.quaternion, 0.8 * Math.min(1, a + 0.2))); arm.updateMatrixWorld(true);
+    hinge(B[`${side}ForeArm`], HX, 0.45 * a); // soft elbows
+    rotRoot(o, B[`${side}Hand`], AXR.x, 0.35 * a); // wrists cocked
+    curlFingers(rig, side, { Index: [-0.15 * a, 0.5 * a, 0.4 * a], Middle: [0.2 * a, 0.6 * a, 0.45 * a], Ring: [0.35 * a, 0.7 * a, 0.5 * a], Pinky: [-0.1 * a, 0.6 * a, 0.5 * a] });
+    hinge(B[`${side}Leg`], HXN, 0.18 * a); // knees a little bent
+  }
+  rotRoot(o, B.Spine1, AXR.x, 0.1 * a); rotRoot(o, B.Spine2, AXR.x, 0.06 * a); // a slight hunch
+  rotRoot(o, B.Head, AXR.x, 0.1 * a); rotRoot(o, B.Head, AXR.z, 0.08 * a); // the head low, tilted
+  // the slips: small and fast
+  for (const s of ep.slips) {
+    const k = s.k, L = s.side, side = L > 0 ? 'Left' : 'Right';
+    if (s.type === 'head') { rotRoot(o, B.Head, AXR.z, -L * (0.18 + 0.14 * s.a) * k); rotRoot(o, B.Head, AXR.y, L * 0.12 * s.b * k); rotRoot(o, B.Neck, AXR.z, -L * 0.06 * k); }
+    else if (s.type === 'shoulder') { rotRoot(o, B[`${side}Shoulder`], AXR.z, L * 0.16 * k); rotRoot(o, B.Head, AXR.z, L * 0.06 * k); }
+    else if (s.type === 'knee') { // a knee gives, it catches itself a little too fast
+      hinge(B[`${side}Leg`], HXN, 0.75 * k); rotRoot(o, B[`${side}UpLeg`], AXR.x, -0.35 * k); B.Hips.position.y -= 0.07 * k / (o.root.scale.y || 1);
+      rotRoot(o, B.Spine1, AXR.z, L * 0.08 * k); rotRoot(o, B.Head, AXR.z, -L * 0.1 * k);
+    } else if (s.type === 'shiver') { // a tremor rolling down one arm: shoulder, elbow, wrist, fingers, each a beat behind
+      const wob = (d, f, amp) => { const x = s.u - d; return x > 0 && x < 0.45 ? Math.sin(x * f) * amp * Math.sin((x / 0.45) * Math.PI) : 0; };
+      rotRoot(o, B[`${side}Shoulder`], AXR.z, L * wob(0, 48, 0.05)); rotRoot(o, B[`${side}Arm`], AXR.x, wob(0.07, 52, 0.07));
+      hinge(B[`${side}ForeArm`], HX, 0.08 + wob(0.15, 56, 0.08)); rotRoot(o, B[`${side}Hand`], AXR.x, wob(0.23, 60, 0.12));
+      const f = wob(0.3, 64, 0.35); curlFingers(rig, side, { Index: [f, f, f * 0.6], Middle: [-f * 0.5, f, f * 0.6], Ring: [f, f * 0.8, f * 0.5], Pinky: [-f, f * 0.7, f * 0.5] });
+    } else if (s.type === 'fingers') curlFingers(rig, side, { Index: [0.9 * k, 0.8 * k, 0.5 * k], Middle: [-0.3 * k, 0.9 * k, 0.6 * k], Ring: [0.8 * k, 0.9 * k, 0.6 * k], Pinky: [-0.4 * k, 0.5 * k, 0.4 * k], Thumb: [0.3 * k, 0.4 * k, 0.2 * k] });
+  }
+  rig.root.updateMatrixWorld(true);
+}
+
+// Unhealthy breathing (pose.alive.wheeze 0..1): not a steady rhythm but breaths that go wrong, one type per
+// breath, seeded (every showing the same): shallow and quick, a catch (the inhale stalls halfway, then a
+// jerky gasp finishes it), a double sniff, a rattle (the exhale shivers out), or held too long at the top and
+// collapsing out. The chest lifts, the shoulders hitch on the gasps, the neck takes the chest's motion back
+// so the head stays where it was. Returns { gasp } for the jaw (0..1).
+function sickBreath(o, t, amt, ph) {
+  const S = 3.1, n = Math.floor((t + ph) / S), u = ((t + ph) - n * S) / S, B = o.rig.bones;
+  const h = (k) => { const x = Math.sin(n * 91.7 + k * 47.3 + ph * 13.1) * 43758.5453; return x - Math.floor(x); };
+  const type = ['shallow', 'catch', 'double', 'rattle', 'held', 'catch', 'shallow'][Math.floor(h(1) * 7)], depth = 0.55 + h(2) * 0.6;
+  const sm = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+  let f = 0, gasp = 0, shiver = 0; // f: how full, 0..1
+  if (type === 'shallow') f = u < 0.3 ? sm(u / 0.3) * 0.55 : 0.55 * (1 - sm((u - 0.3) / 0.35));
+  else if (type === 'catch') { if (u < 0.18) f = sm(u / 0.18) * 0.45; else if (u < 0.36) f = 0.45 + Math.sin((u - 0.18) * 90) * 0.015; else if (u < 0.42) { f = 0.45 + sm((u - 0.36) / 0.06) * 0.55; gasp = 1; } else f = 1 - sm((u - 0.42) / 0.4); }
+  else if (type === 'double') { f = u < 0.08 ? sm(u / 0.08) * 0.4 : u < 0.16 ? 0.4 : u < 0.24 ? 0.4 + sm((u - 0.16) / 0.08) * 0.45 : 0.85 * (1 - sm((u - 0.24) / 0.5)); gasp = (u > 0.02 && u < 0.08) || (u > 0.16 && u < 0.24) ? 0.6 : 0; }
+  else if (type === 'rattle') { f = u < 0.3 ? sm(u / 0.3) : 1 - sm((u - 0.3) / 0.6); shiver = u > 0.3 && u < 0.9 ? 1 : 0; }
+  else { f = u < 0.2 ? sm(u / 0.2) : u < 0.75 ? 1 : 1 - sm((u - 0.75) / 0.12); gasp = u < 0.2 ? 0.5 : 0; } // held
+  f *= depth * amt; if (shiver) f += Math.sin(t * 38) * 0.035 * amt;
+  o.root.updateMatrixWorld(true);
+  const headQ = B.Head.getWorldQuaternion(new THREE.Quaternion()); // (the head keeps its angle through all of it: the stare stays)
+  const g = gasp * amt, lift = 0.2 * f + g * 0.06, sh = 0.3 * f + g * 0.2;
+  // the ribcage heaves (Spine2 widening and deepening) while the belly sucks in (Spine flattening front to back):
+  // paradoxical breathing, what a body in distress does; the bones above take the scale back so nothing else grows
+  const rib = 1 + 0.07 * f + g * 0.03, bel = 1 - 0.06 * f;
+  const sc = (bone, x, y, z) => { if (bone) { bone.scale.set(x, y, z); bone.updateMatrixWorld(true); } };
+  sc(B.Spine, 1, 1, bel); sc(B.Spine1, 1, 1, 1 / bel);
+  sc(B.Spine2, rib, 1, rib); sc(B.Neck, 1 / rib, 1, 1 / rib); sc(B.LeftShoulder, 1, 1 / rib, 1 / rib); sc(B.RightShoulder, 1, 1 / rib, 1 / rib);
+  rotRoot(o, B.Spine1, AXR.x, -lift); rotRoot(o, B.Spine2, AXR.x, -lift * 0.8); // (the chest rising: the upper back arching)
+  rotRoot(o, B.LeftShoulder, AXR.z, sh); rotRoot(o, B.RightShoulder, AXR.z, -sh); // (the shoulders climbing)
+  rotRoot(o, B.LeftArm, AXR.z, -0.08 * f); rotRoot(o, B.RightArm, AXR.z, 0.08 * f); // (the arms floating out a little with it)
+  // the body never quite still: a slow uneven sway, the weight shifting
+  const sw = Math.sin(t * 0.43 + ph) * 0.03 + Math.sin(t * 0.17 + ph * 2) * 0.025;
+  rotRoot(o, B.Spine, AXR.z, sw * amt); rotRoot(o, B.Spine1, AXR.y, Math.sin(t * 0.29 + ph) * 0.03 * amt);
+  if (g > 0.05) for (const side of ['Left', 'Right']) curlFingers(o.rig, side, { Index: [0.5 * g, 0.6 * g, 0.3 * g], Middle: [0.55 * g, 0.6 * g, 0.3 * g], Ring: [0.6 * g, 0.6 * g, 0.3 * g], Pinky: [0.7 * g, 0.6 * g, 0.3 * g] }); // (the fingers clutch on a gasp)
+  B.Head.quaternion.copy(B.Head.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(headQ)); B.Head.updateMatrixWorld(true);
+  return { gasp: gasp * amt };
 }
 
 // ---------------- voices: 3D audio from the head + lip sync ----------------
@@ -1144,7 +1477,8 @@ function renderPropBox(box, pr) {
     <div class="row"><span>scale</span><input type="range" min="0.5" max="2" step="0.01" value="${d.scale || 1}"><output>${(d.scale || 1).toFixed(2)}</output></div>
     <div class="buttons">
       ${seats ? `<button data-a="seat" class="primary" style="grid-column: span 2" ${freeSeat(d.id) < 0 ? 'disabled' : ''}>Seat a character ▸</button>` : ''}
-      ${sitters.length ? '<button data-a="unseat">Everyone stands</button>' : ''}<button data-a="rm">Remove</button>
+      ${sitters.length ? '<button data-a="unseat">Everyone stands</button>' : ''}<button data-a="rm" ${d.locked ? 'disabled' : ''}>Remove</button>
+      <button data-a="lock" class="${d.locked ? 'on' : ''}" style="grid-column: span 2" title="locked: it can't be dragged, turned, scaled or removed by accident">${d.locked ? '🔒 Position locked' : 'Lock position'}</button>
     </div>`;
   const [turnI, scaleI] = box.querySelectorAll('input[type=range]'), outs = box.querySelectorAll('output');
   turnI.oninput = () => { d.rotY = +turnI.value; outs[0].textContent = `${Math.round((d.rotY * 180) / Math.PI)}°`; placeProp(pr); autosave(); };
@@ -1152,6 +1486,8 @@ function renderPropBox(box, pr) {
   box.querySelector('[data-a=seat]')?.addEventListener('click', () => startPicking(d.id));
   box.querySelector('[data-a=unseat]')?.addEventListener('click', () => { for (const o of actors.values()) if (o.data.seat?.prop === d.id) standUp(o, true); autosave(); renderPanel(); });
   box.querySelector('[data-a=rm]').onclick = () => removeProp(d.id);
+  box.querySelector('[data-a=lock]').onclick = () => { if (d.locked) delete d.locked; else d.locked = true; autosave(); renderActorBox(); };
+  if (d.locked) { turnI.disabled = true; scaleI.disabled = true; }
 }
 function renderActorBox() {
   const box = $('#actorBox'), pr = selectedProp && props.get(selectedProp);
@@ -1164,6 +1500,7 @@ function renderActorBox() {
     <div class="row"><span>animation</span><select>${o.clips.map((c) => `<option ${c.name === a.anim ? 'selected' : ''}>${c.name}</option>`).join('')}</select></div>
     <div class="row"><span>${a.seat ? 'turn on seat' : 'turn'}</span><input type="range" min="-3.1416" max="3.1416" step="0.01" value="${(() => { const v = a.seat ? a.seatRot || 0 : a.rotY; return Math.atan2(Math.sin(v), Math.cos(v)); })()}"><output></output></div>
     <div class="row"><span>scale</span><input type="range" min="0.4" max="2" step="0.01" value="${a.scale}"><output>${a.scale.toFixed(2)}</output></div>
+    <div class="buttons"><button data-a="lock" class="${a.locked ? 'on' : ''}" style="grid-column: span 2" title="locked: it can't be dragged, turned, scaled or deleted by accident">${a.locked ? '🔒 Position locked' : 'Lock position'}</button></div>
     <div class="buttons"><button data-a="dup">Duplicate</button><button data-a="face">Face the camera</button><button data-a="look" class="${a.lookAtMe ? 'on' : ''}" style="grid-column: span 2" title="only the face turns to you; the eyes look straight into the camera">${a.lookAtMe ? '◉ Looking at you' : '◎ Look at me'}</button>${a.seat ? '<button data-a="stand" style="grid-column: span 2">Stand up</button>' : ''}</div>
     <p class="meta">pose ${o.compiled ? `<b>(directed: ${esc(a.pose.preset || 'stand')})</b>` : a.pose ? '<b>(custom, still)</b>' : '(playing the animation)'}</p>
     <div class="buttons">
@@ -1188,8 +1525,10 @@ function renderActorBox() {
   box.querySelector('select').onchange = (e) => { setAnim(o, e.target.value); autosave(); };
   turnI.oninput = () => { a[a.seat ? 'seatRot' : 'rotY'] = +turnI.value; outs[0].textContent = `${Math.round((+turnI.value * 180) / Math.PI)}°`; place(o); autosave(); };
   scaleI.oninput = () => { a.scale = +scaleI.value; outs[1].textContent = a.scale.toFixed(2); place(o); updateRing(); autosave(); };
+  box.querySelector('[data-a=lock]').onclick = () => { if (a.locked) delete a.locked; else a.locked = true; autosave(); renderActorBox(); };
+  if (a.locked) { turnI.disabled = true; scaleI.disabled = true; box.querySelector('[data-a=face]').disabled = true; }
   box.querySelector('[data-a=dup]').onclick = async () => {
-    const b = { ...structuredClone(a), id: uid(), x: a.x + 1.2, z: a.z + 0.6 };
+    const b = { ...structuredClone(a), id: uid(), x: a.x + 1.2, z: a.z + 0.6, locked: undefined }; // (a copy starts unlocked: it has to be moved off the original)
     rec.actors.push(b); await spawnActor(b); select(b.id); autosave(); renderMeta();
   };
   box.querySelector('[data-a=stand]')?.addEventListener('click', () => standUp(o));
@@ -1454,20 +1793,27 @@ $('#importInput').onchange = async (e) => {
 let last = performance.now();
 function frame(now) {
   if (PLAYER) { playerFrame(now); return; }
+  if (film) { if (!film.exporting) filmFrame(now); requestAnimationFrame(frame); return; } // (an export drives the frames itself)
   const t = now / 1000, dt = Math.min(0.1, (now - last) / 1000); last = now;
   placeCamera(dt);
-  for (const pr of props.values()) pr.built.update?.(t, camera); // (the camera: props that watch it, like the leaning lamps)
+  for (const pr of props.values()) { followFace(pr); pr.built.update?.(t, camera); } // (the camera: props that watch it, like the leaning lamps)
   for (const o of actors.values()) {
     const rp = rawPose(o);
-    if (!rp) { if (!o.action) setAnim(o, o.data.anim); o.mixer.update(dt); continue; } // (no pose: always an animation playing, it resets the bones every frame)
+    if (!rp) { // (no pose: always an animation playing)
+      if (!o.action) setAnim(o, o.data.anim);
+      const es = episodeState(o, t);
+      approach(o, es ? es.te : t, es?.ahead); clipBegin(o); if (es) o.mixer.setTime(es.te); else o.mixer.update(dt); clipEnd(o); episode(o, (o.ep = es?.cur)); faceLife(o, t); continue;
+    }
     if (o.tween) { o.tween.t = Math.min(1, o.tween.t + dt / 0.35); const k = o.tween.t * o.tween.t * (3 - 2 * o.tween.t); applyPose(o.rig, lerpPose(o.tween.from, rp, k)); if (o.tween.t >= 1) o.tween = null; }
     else applyPose(o.rig, rp);
     if (o.data.breathe && !(hdrag && hdrag.o === o)) breathe(o.rig, t, (o.data.id.charCodeAt(0) % 7) * 0.9); // each breathes on its own rhythm
     if (!(hdrag && hdrag.o === o)) { faceLife(o, t); leanIn(o); }
   }
-  reachCamera();
+  reachCamera(); holdCam(P.curT ?? performance.now() / 1000); gripHands(P.curT ?? performance.now() / 1000);
   followers();
   for (const o of actors.values()) updateLook(o, dt);
+  for (const o of actors.values()) faceOnProp(o);
+  for (const pr of props.values()) if (pr.data.follow) { followFace(pr); pr.built.update?.(P.curT ?? t, camera); } // (again, after the heads have turned: the rays stay on the face)
   updateVoices(dt);
   updateCaptions();
   $('#playScene').textContent = speaking.size ? '■ Stop' : '▶ Play scene';
@@ -1477,7 +1823,7 @@ function frame(now) {
   ring.visible = ringWanted && !performing;
   if (performing) handles.visible = false;
   world.update?.(t, camera.position);
-  rig.setLights(collectLights()); rig.update(camera, look() === 'source'); if (look() === 'source') syncLook(scene);
+  mistStep(t); rig.setLights(collectLights()); rig.update(camera, look() === 'source'); if (look() === 'source') syncLook(scene);
   stage.render(t);
   if (recorder) drawRecFrame();
   requestAnimationFrame(frame);
@@ -1576,25 +1922,45 @@ const P = { queue: Promise.resolve(), outW: 540, frozen: null, paused: true, loo
 function applyShot() {
   const sh = P.shot; if (!sh) return;
   const p = resolvePoint(sh.pos), t = resolvePoint(sh.look);
+  // move: { pos, look, secs, ease }: ease 'out' is a snatch (full speed at once, then settling); the camera glides from the shot to there over secs (eased), from when the shot was shown
+  if (p && t && sh.move) {
+    const u0 = Math.min(1, Math.max(0, (P.curT ?? 0) - (P.showT ?? P.curT ?? 0)) / (sh.move.secs || 10)), k = sh.move.ease === 'out' ? 1 - (1 - u0) ** 3 : ease(u0), p2 = resolvePoint(sh.move.pos || sh.pos), t2 = resolvePoint(sh.move.look || sh.look);
+    if (p2 && t2) { p.lerp(p2, k); t.lerp(t2, k); }
+  }
+  // shake: a handheld camera (the amplitude, ~0.01..0.05): slow drift and breathing, smooth noise of time
+  if (p && t && sh.shake) { const T = P.curT ?? 0, a = sh.shake, n = (f, k) => Math.sin(T * f + k) * 0.6 + Math.sin(T * f * 2.3 + k * 1.7) * 0.3 + Math.sin(T * f * 5.1 + k * 3.1) * 0.1;
+    p.x += n(0.7, 1) * a; p.y += n(0.9, 2) * a * 0.7; p.z += n(0.6, 3) * a; t.x += n(0.5, 4) * a * 6; t.y += n(0.8, 5) * a * 4; }
   if (p && t) { camera.position.copy(p); camera.lookAt(t); }
+  // roll: a tilted horizon (radians), eased toward move.roll during a move
+  const roll = (sh.roll || 0) + (sh.move?.roll != null ? (sh.move.roll - (sh.roll || 0)) * ease(Math.max(0, (P.curT ?? 0) - (P.showT ?? P.curT ?? 0)) / (sh.move.secs || 10)) : 0);
+  if (roll) camera.rotateZ(roll);
+  // hide: [prop / actor ids] this shot leaves out (a cinematic cheat: the far city gone from the lonely shot, still
+  // there in the wide one); only in the player, the editor always shows everything
+  const hide = [...(sh.hide || []), ...(P.filmHide || [])]; // (+ the film's timeline: film.hide [{ actor, from }])
+  for (const [id, pr] of props) pr.built.group.visible = !hide.includes(id);
+  for (const [id, o] of actors) o.root.visible = !hide.includes(id);
 }
 function playerStep(t, dt) {
+  if (P.showT == null) P.showT = t; // (the shot's own clock starts at its first frame drawn after show)
+  P.curT = t;
   applyShot(); // (first: props that watch the camera must see where it is in this frame)
-  for (const pr of props.values()) { pr.built.update?.(t, camera); pr.built.setLight?.(P.light); }
+  for (const pr of props.values()) { followFace(pr); pr.built.update?.(t, camera); pr.built.setLight?.(P.light); }
   for (const o of actors.values()) {
     const rp = rawPose(o);
-    if (!rp) { if (!o.action) setAnim(o, o.data.anim); o.mixer.setTime ? o.mixer.setTime(t) : o.mixer.update(dt); continue; }
+    if (!rp) { if (!o.action) setAnim(o, o.data.anim); const es = episodeState(o, t), te = es ? es.te : t; approach(o, te, es?.ahead); clipBegin(o); o.mixer.setTime(te); clipEnd(o); episode(o, (o.ep = es?.cur)); faceLife(o, t); continue; }
     applyPose(o.rig, rp);
     if (o.data.breathe) breathe(o.rig, t, (o.data.id.charCodeAt(0) % 7) * 0.9);
     faceLife(o, t);
   }
   applyShot();
   for (const o of actors.values()) leanIn(o);
-  reachCamera();
+  reachCamera(); holdCam(P.curT ?? performance.now() / 1000); gripHands(P.curT ?? performance.now() / 1000);
   followers();
   for (const o of actors.values()) updateLook(o, 1); // (a whole step: a frozen frame is fully settled)
+  for (const o of actors.values()) faceOnProp(o);
+  for (const pr of props.values()) if (pr.data.follow) { followFace(pr); pr.built.update?.(P.curT ?? t, camera); } // (again, after the heads have turned: the rays stay on the face)
   world.update?.(t, camera.position);
-  rig.setLights(collectLights()); rig.update(camera, look() === 'source'); if (look() === 'source') syncLook(scene);
+  mistStep(t); rig.setLights(collectLights()); rig.update(camera, look() === 'source'); if (look() === 'source') syncLook(scene);
   stage.render(t, { card: false });
   P.lastT = t;
   P.onFrame?.(t);
@@ -1624,7 +1990,7 @@ window.__player = {
     if (P.id !== id) await playerLoad(id);
     else if (terrainKey) { const p = terrainParams(); stage.setRes(p.res, true, P.outW); }
     P.shot = shotOf(shot); P.frozen = frozen; P.light = 1;
-    playerStep(frozen ?? performance.now() / 1000, 0.016);
+    playerStep(frozen ?? performance.now() / 1000, 0.016); P.showT = null; // (the clock restarts at the next frame: the live loop's, or an export's first)
     P.paused = false; kick();
   },
   pause(v = true) { P.paused = v; if (!v) kick(); },
@@ -1646,6 +2012,89 @@ window.__player = {
   get shots() { return rec ? rec.shots.map((s) => s.name) : []; },
 };
 P.reload = async () => { const id = P.id; P.id = null; if (id) await window.__player.show(id, P.shot?.name, { frozen: P.frozen, outW: P.outW }); };
+
+// ---------------- the scene's film (film.js): its shots on a timeline, 3D sound, played live or exported ----------------
+let film = null, camLamp = null;
+const FILM_T0 = 1000; // (the scene clock during a film: film time + this, so every run is the same)
+function filmStep(ft) {
+  const F = rec.film, e = shotAt(F, ft), sh = shotOf(e.shot);
+  P.shot = sh; P.showT = FILM_T0 + e.from; P.frozen = null;
+  // the fog thickening (film.fog: its distances times k) and the mist (film.mist), over time
+  film.fog0 ||= [PS2.fogNear.value, PS2.fogFar.value];
+  const fk = kf(F.fog, ft); PS2.fogNear.value = film.fog0[0] * fk; PS2.fogFar.value = Math.max(film.fog0[0] * fk + 0.5, film.fog0[1] * fk);
+  P.mist = F.mist ? kf(F.mist, ft) : null;
+  stage.tape = F.tape ?? 0; if (F.vhs != null) stage.vhs = F.vhs; // (the film's camcorder look)
+  // camLight: [[t, intensity]], a dim light on the camera (a camcorder lamp), so a face up close reads
+  if (F.camLight) { camLamp ||= new THREE.PointLight(0xfff1dc, 0, 3, 2); if (!camLamp.parent) scene.add(camLamp); camLamp.position.copy(camera.position); camLamp.intensity = kf(F.camLight, ft); }
+  P.filmHide = (F.hide || []).filter((h) => ft >= (h.from ?? 0) && ft < (h.to ?? Infinity)).map((h) => h.actor);
+  const mouth = film?.loaded ? mouths(F, film.loaded, ft) : new Map();
+  for (const [id, o] of actors) o.filmMouth = mouth.get(id) || null;
+  playerStep(FILM_T0 + ft, 1 / 30);
+}
+function filmEnd(msg) {
+  if (!film) return;
+  film.graph?.stop(); if (film.fog0) { PS2.fogNear.value = film.fog0[0]; PS2.fogFar.value = film.fog0[1]; } P.mist = null; P.filmHide = null; stage.tape = 0; camLamp?.removeFromParent(); film = null;
+  for (const o of actors.values()) { o.filmMouth = null; o.root.visible = true; }
+  for (const pr of props.values()) pr.built.group.visible = true;
+  P.shot = null; stage.setRes(terrainParams().res, false); applyFrame();
+  $('#playFilm').textContent = '🎬 Play film'; if (msg) status(msg);
+}
+async function playFilm() {
+  if (film) { filmEnd('film stopped'); return; }
+  if (!rec.film?.shots?.length) { status('this scene has no film yet (scene.film in its file: shots on a timeline, sounds)'); return; }
+  const ctx = audioCtx(); status('loading the film\'s sound…');
+  const loaded = await loadFilm(rec.film, ctx), t0 = ctx.currentTime + 0.15;
+  film = { loaded, graph: buildGraph(ctx, loaded, outputBus(), t0), ctx, t0 };
+  const p = terrainParams(); stage.setRes(look() === 'source' ? Math.max(p.res, 640) : p.res, true, 1080);
+  $('#playFilm').textContent = '■ Stop film'; status(`playing the film (${rec.film.secs} s)`);
+}
+function filmFrame() {
+  const ft = film.ctx.currentTime - film.t0;
+  if (ft >= rec.film.secs) { filmEnd('film finished'); return; }
+  filmStep(Math.max(0, ft));
+  schedule(film.ctx, film.graph, film.ctx.currentTime, Math.max(0, ft), actors, camera, true);
+}
+// export: every frame rendered at 30 fps (not in real time), the sound mixed offline from the same positions
+async function exportFilm() {
+  if (!rec.film?.shots?.length) { status('this scene has no film yet'); return; }
+  if (!window.VideoEncoder || !window.AudioEncoder) { status('exporting a film needs WebCodecs (Chrome, Edge)'); return; }
+  if (film) filmEnd();
+  const F = rec.film, FPS = 30, SR = 48000, n = Math.round(F.secs * FPS), W = 1080, H = 1920;
+  const off = new OfflineAudioContext(2, Math.ceil(F.secs * SR), SR), loaded = await loadFilm(F, off);
+  film = { loaded, graph: buildGraph(off, loaded, off.destination, 0), exporting: true };
+  const p = terrainParams(); stage.setRes(look() === 'source' ? Math.max(p.res, 640) : p.res, true, W);
+  const codec = (await Promise.all(['avc1.640033', 'avc1.4d0033', 'avc1.42E033'].map(async (c) => ((await VideoEncoder.isConfigSupported({ codec: c, width: W, height: H })).supported ? c : null)))).find(Boolean);
+  const acfg = { codec: 'mp4a.40.2', sampleRate: SR, numberOfChannels: 2, bitrate: 192000 };
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: W, height: H, frameRate: FPS }, audio: { codec: 'aac', sampleRate: SR, numberOfChannels: 2 }, fastStart: 'in-memory' });
+  let failed = null;
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => { failed = e; } });
+  enc.configure({ codec, width: W, height: H, bitrate: 10e6, framerate: FPS });
+  for (let i = 0; i < n && !failed; i++) {
+    const ft = i / FPS; filmStep(ft); schedule(off, film.graph, ft, ft, actors, camera, false);
+    const vf = new VideoFrame(canvas, { timestamp: Math.round((i * 1e6) / FPS), duration: Math.round(1e6 / FPS) });
+    enc.encode(vf, { keyFrame: i % (FPS * 2) === 0 }); vf.close();
+    if (enc.encodeQueueSize > 8) await new Promise((ok) => enc.addEventListener('dequeue', ok, { once: true }));
+    if (i % 15 === 0) { status(`rendering the film… ${ft.toFixed(1)} / ${F.secs} s`); await new Promise((ok) => setTimeout(ok)); }
+  }
+  await enc.flush(); enc.close();
+  status('mixing the 3D sound…');
+  const buf = await off.startRendering();
+  const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: (e) => { failed = e; } });
+  aenc.configure(acfg);
+  for (let at = 0, B = 8192; at < buf.length; at += B) {
+    const k = Math.min(B, buf.length - at), data = new Float32Array(k * 2);
+    for (let c = 0; c < 2; c++) data.set(buf.getChannelData(c).subarray(at, at + k), c * k);
+    const ad = new AudioData({ format: 'f32-planar', sampleRate: SR, numberOfFrames: k, numberOfChannels: 2, timestamp: Math.round((at / SR) * 1e6), data }); aenc.encode(ad); ad.close();
+  }
+  await aenc.flush(); aenc.close();
+  filmEnd();
+  if (failed) { status(`film export failed: ${failed.message}`); return; }
+  muxer.finalize();
+  const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' }), file = `${slug(rec.name)}-film.mp4`;
+  download(blob, file); status(`exported ${file} (${F.secs} s, 1080×1920, ${(blob.size / 1e6).toFixed(1)} MB, 3D sound)`);
+}
+if (!PLAYER) { $('#playFilm').onclick = playFilm; $('#exportFilm').onclick = exportFilm; }
+window.__film = { play: playFilm, export: exportFilm, step: (t) => { film ||= { probe: true }; filmStep(t); } }; // (scripts: step the film without its sound)
 
 await loadPhotos(); // (small: ~150 KB of CC0 photos, so the photo look is there on the first frame)
 if (!PLAYER) await load(true);

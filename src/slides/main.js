@@ -16,7 +16,7 @@ const $ = (s) => document.querySelector(s);
 const status = (t) => ($('#status').textContent = t);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const W = 1080, H = 1920;
-const LOOKS = { tiktok: 'TikTok box', outline: 'outlined', serif: 'dreamy serif' };
+const LOOKS = { tiktok: 'TikTok box', outline: 'outlined', serif: 'dreamy serif', caps: 'storybook caps' }; // (caps: white serif capitals laid on the picture, a dark edge and a soft shadow, like a children's storybook card)
 const POS = { top: 0.2, middle: 0.44, low: 0.64 }; // centre of the text block; "low" still clears TikTok's bottom fifth
 // time on screen: set by hand, or (null) from the text: ~2.4 s + 0.18 s a word, 3 s at least
 export const autoSecs = (text) => { const w = text.trim().split(/\s+/).filter(Boolean).length; return Math.min(15, Math.max(4.5, Math.round((1.9 + 0.14 * w) * 1.875 * 2) / 2)); }; // (fitted to the deck's hand-set times the user liked, then x1.25, then x1.5)
@@ -50,16 +50,20 @@ export async function drawSlide(g, slide, { frame = null, transparent = false } 
 }
 function drawText(g, slide) {
   const text = slide.text.trim(); if (!text) return;
-  const { look, pos, size } = slide.style, px = Math.round((look === 'serif' ? 54 : 48) * size);
-  g.font = look === 'serif' ? `italic ${px}px Georgia, "Times New Roman", serif` : `bold ${px}px "Helvetica Neue", Arial, sans-serif`;
+  const { look, pos, size } = slide.style, px = Math.round((look === 'serif' ? 54 : look === 'caps' ? 58 : 48) * size);
+  g.font = look === 'serif' ? `italic ${px}px Georgia, "Times New Roman", serif` : look === 'caps' ? `bold ${px}px Georgia, "Times New Roman", serif` : `bold ${px}px "Helvetica Neue", Arial, sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  const lines = wrap(g, text, W * 0.8), lh = px * (look === 'tiktok' ? 1.38 : 1.25), y0 = H * POS[pos] - ((lines.length - 1) * lh) / 2;
+  const lines = wrap(g, look === 'caps' ? text.toUpperCase() : text, W * (look === 'caps' ? 0.76 : 0.8)), lh = px * (look === 'tiktok' ? 1.38 : 1.25), y0 = H * POS[pos] - ((lines.length - 1) * lh) / 2;
   lines.forEach((line, k) => {
     const y = y0 + k * lh;
     if (look === 'tiktok') { // white text on a rounded black box per line
       const w = g.measureText(line).width + px * 0.7, h = px * 1.3, r = px * 0.28, x = W / 2 - w / 2;
       g.fillStyle = 'rgba(0,0,0,.92)'; g.beginPath(); g.roundRect(x, y - h / 2, w, h, r); g.fill();
       g.fillStyle = '#fff'; g.fillText(line, W / 2, y + px * 0.04);
+    } else if (look === 'caps') {
+      g.shadowColor = 'rgba(0,0,0,.7)'; g.shadowBlur = px * 0.25; g.shadowOffsetY = px * 0.08;
+      g.lineJoin = 'round'; g.lineWidth = px * 0.13; g.strokeStyle = '#1a1410'; g.strokeText(line, W / 2, y);
+      g.shadowBlur = 0; g.shadowOffsetY = 0; g.fillStyle = '#fbf7ec'; g.fillText(line, W / 2, y);
     } else if (look === 'outline') {
       g.lineJoin = 'round'; g.lineWidth = px * 0.16; g.strokeStyle = '#000'; g.strokeText(line, W / 2, y); g.fillStyle = '#fff'; g.fillText(line, W / 2, y);
     } else {
@@ -143,7 +147,7 @@ function renderSlideBox() {
     <div class="row"><span>look</span><select id="look">${Object.entries(LOOKS).map(([k, v]) => `<option value="${k}" ${k === s.style.look ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
     <div class="row"><span>position</span><select id="pos">${Object.keys(POS).map((k) => `<option ${k === s.style.pos ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
     <div class="row"><span>text size</span><input id="size" type="range" min="0.6" max="1.6" step="0.01" value="${s.style.size}"><output>${s.style.size.toFixed(2)}</output></div>
-    <div class="row"><span>on screen</span><input id="secs" type="range" min="1" max="15" step="0.5" value="${secsOf(s)}"><output>${secsOf(s).toFixed(1)} s${s.secs == null ? ' (auto)' : ''}</output></div>
+    <div class="row"><span>on screen</span><input id="secs" type="range" min="0.5" max="15" step="0.1" value="${secsOf(s)}"><output>${secsOf(s).toFixed(1)} s${s.secs == null ? ' (auto)' : ''}</output></div>
     <div class="buttons"><button id="autoSecs" style="grid-column: span 2" ${s.secs == null ? 'disabled' : ''} title="time from the length of the text">Time from the text</button></div>
     <div class="buttons"><button id="moveL" ${sel ? '' : 'disabled'}>◀ Move</button><button id="moveR" ${sel < deck.slides.length - 1 ? '' : 'disabled'}>Move ▶</button><button id="dupSlide">Duplicate</button><button id="delSlide" ${deck.slides.length > 1 ? '' : 'disabled'}>Delete</button><button id="noPic" style="grid-column: span 2" ${s.image || s.live ? '' : 'disabled'}>Remove picture</button></div>
     ${s.live ? `<div class="row"><span>room lights</span><input id="lightsOut" type="range" min="0" max="4" step="0.5" value="${s.live.lightsOut || 0}"><output>${s.live.lightsOut ? `out from ${s.live.lightsOut.toFixed(1)} s before the end` : 'stay on'}</output></div>` : ''}
@@ -228,8 +232,33 @@ async function exportVideo() {
   const stills = []; for (const s of deck.slides) { if (plays(s)) { stills.push(null); continue; } const f = document.createElement('canvas'); f.width = W; f.height = H; await drawSlide(f.getContext('2d'), s); stills.push(f); }
   const codec = (await Promise.all(['avc1.640033', 'avc1.4d0033', 'avc1.42E033'].map(async (c2) => ((await VideoEncoder.isConfigSupported({ codec: c2, width: W, height: H })).supported ? c2 : null)))).find(Boolean);
   if (!codec) { status('this browser cannot encode H.264 video at 1080×1920'); return; }
-  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: W, height: H, frameRate: FPS }, fastStart: 'in-memory' });
+  // the deck's soundtrack (deck.soundtrack: a url), cut to the slides' total and encoded to AAC beside the video
+  const total0 = deck.slides.reduce((a, s) => a + secsOf(s), 0);
+  let audio = null;
+  if (deck.soundtrack && window.AudioEncoder) {
+    try {
+      status('reading the soundtrack…');
+      const ctx = new OfflineAudioContext(1, 1, 48000), buf = await ctx.decodeAudioData(await (await fetch(deck.soundtrack)).arrayBuffer());
+      const sr = buf.sampleRate, ch = Math.min(2, buf.numberOfChannels), len = Math.round(total0 * sr);
+      const cfg = { codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: ch, bitrate: 160000 };
+      if ((await AudioEncoder.isConfigSupported(cfg)).supported) audio = { buf, sr, ch, len, cfg };
+      else status('this browser cannot encode AAC: the video will be silent');
+    } catch (e) { status(`couldn't read the soundtrack (${e.message}): the video will be silent`); }
+  }
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: W, height: H, frameRate: FPS }, ...(audio ? { audio: { codec: 'aac', sampleRate: audio.sr, numberOfChannels: audio.ch } } : {}), fastStart: 'in-memory' });
   let failed = null;
+  if (audio) {
+    const aenc = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: (e) => { failed = e; } });
+    aenc.configure(audio.cfg);
+    const { buf, sr, ch, len } = audio, B = 1024 * 8;
+    for (let at = 0; at < len; at += B) {
+      const n = Math.min(B, len - at), data = new Float32Array(n * ch);
+      for (let c = 0; c < ch; c++) { const src = buf.getChannelData(c); for (let i = 0; i < n; i++) data[c * n + i] = at + i < src.length ? src[at + i] : 0; }
+      const ad = new AudioData({ format: 'f32-planar', sampleRate: sr, numberOfFrames: n, numberOfChannels: ch, timestamp: Math.round((at / sr) * 1e6), data });
+      aenc.encode(ad); ad.close();
+    }
+    await aenc.flush(); aenc.close();
+  }
   const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { failed = e; } });
   enc.configure({ codec, width: W, height: H, bitrate: 8e6, framerate: FPS });
   const anyLive = deck.slides.some(plays), P = anyLive ? await player() : null;
@@ -256,7 +285,7 @@ async function exportVideo() {
   muxer.finalize();
   const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' }), file = `${slug(deck.name)}-slides.mp4`;
   download(blob, file);
-  status(`exported a ${(frame / FPS).toFixed(1)} s slideshow (1080×1920, ${(blob.size / 1e6).toFixed(1)} MB) as ${file}`);
+  status(`exported a ${(frame / FPS).toFixed(1)} s slideshow (1080×1920, ${(blob.size / 1e6).toFixed(1)} MB${audio ? ', with its soundtrack' : ''}) as ${file}`);
   syncLive();
 }
 $('#exportVideo').onclick = () => exportVideo();
@@ -293,7 +322,7 @@ async function deckFiles() {
       s.style = o.style || s.style;
       if (o.live && s.live && o.live.scene === s.live.scene && o.live.shot === s.live.shot) { s.live.frozen = o.live.frozen; s.live.poster = o.live.poster; s.live.lightsOut ??= o.live.lightsOut; }
     }
-    if (have?.autoTimed) d.autoTimed = true;
+    d.autoTimed = true; // (a file's slide times are what it says: the old one-time switch to text timing isn't for it)
     d.fileVersion = e.version; d.updated = Date.now();
     await put('decks', d.id, d); last = d;
   }
@@ -309,8 +338,8 @@ const imported = await deckFiles();
 if (imported) await put('meta', 'deck', imported.id);
 // (once: decks that came from files switch to text-based timing; their texts and snaps are kept)
 for (const d of await all('decks')) if (d.fileVersion && !d.autoTimed) { d.slides.forEach((sl) => { sl.secs = null; }); d.autoTimed = true; await put('decks', d.id, d); }
-// (once: every hand-set time 50% longer, like the text-based ones)
-if (!(await get('meta', 'secsX1.5'))) { for (const d of await all('decks')) if (d.slides.some((sl) => sl.secs != null)) { d.slides.forEach((sl) => { if (sl.secs != null) sl.secs = Math.min(15, Math.round(sl.secs * 1.5 * 2) / 2); }); await put('decks', d.id, d); } await put('meta', 'secsX1.5', true); }
+// (once: every hand-set time 50% longer, like the text-based ones; not decks from files: their times are what the file says)
+if (!(await get('meta', 'secsX1.5'))) { for (const d of await all('decks')) if (!d.fileVersion && d.slides.some((sl) => sl.secs != null)) { d.slides.forEach((sl) => { if (sl.secs != null) sl.secs = Math.min(15, Math.round(sl.secs * 1.5 * 2) / 2); }); await put('decks', d.id, d); } await put('meta', 'secsX1.5', true); }
 const lastId = await get('meta', 'deck');
 await openDeck((lastId && (await get('decks', lastId))) || emptyDeck());
 renderShots(); renderDecks(); renderScenesList();

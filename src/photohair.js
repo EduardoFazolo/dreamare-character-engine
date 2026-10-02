@@ -92,6 +92,12 @@ export function photoHair(hull, hair, p, { hatY = Infinity } = {}) {
       const o = side(i) === iL ? iR : iL, src = band[side(i)].has ? side(i) : band[o].has ? o : nearestHas(side(i));
       if (band[src].has) { s0 = c.cum[3]; bi = src; nape = true; }
     }
+    if (lower[i]) { // below the ears only the sides grow hair early: toward the chin it starts further back, so the
+      // underside of the jaw stays bare (the columns under the chin run beneath the jaw: hair there made a beard)
+      const xm = Math.max(Math.abs(at(loop[iL])[0]), Math.abs(at(loop[iR])[0])) || 1, sx = Math.abs(at(loop[i])[0]) / xm;
+      const k = clamp((sx - 0.45) / 0.4, 0, 1), sideness = k * k * (3 - 2 * k);
+      s0 = c.S * 0.97 + (s0 - c.S * 0.97) * sideness;
+    }
     f0.push(Math.min(1, s0 / c.S)); bandOf.push(bi);
     const b = band[bi];
     thick.push(b.has ? clamp(b.b - cols[bi].ext, 0.015, 0.5) * vol * (nape ? 0.5 : 1) : 0);
@@ -231,11 +237,18 @@ export function photoHair(hull, hair, p, { hatY = Infinity } = {}) {
   return { positions: new Float32Array(P), uv, index, canvas };
 }
 
-// unknown pixels take the mean of their known neighbours, ring by ring outward (all of them, eventually)
+// unknown pixels take the mean of their known neighbours, ring by ring outward (all of them, eventually),
+// fading into the hair's own median colour within a few rings: past the hair's edge, the light pixels that
+// border a pale background smeared outward into long streaks, and the long-hair curtain's back samples those
+// areas (a pale band showed through behind the neck)
 function fill(rgb, known, w, h) {
   let todo = known.length - known.reduce((s, k) => s + k, 0);
   if (todo === known.length) return;
+  const ks = []; for (let o = 0; o < known.length; o++) if (known[o]) ks.push([rgb[o * 3] + rgb[o * 3 + 1] + rgb[o * 3 + 2], o]);
+  ks.sort((a, b) => a[0] - b[0]); const mo = ks[ks.length >> 1][1], med = [rgb[mo * 3], rgb[mo * 3 + 1], rgb[mo * 3 + 2]];
+  let ring = 0;
   while (todo > 0) {
+    ring++; const k = Math.min(1, ring / 4);
     const add = [];
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const o = y * w + x; if (known[o]) continue;
@@ -247,7 +260,7 @@ function fill(rgb, known, w, h) {
       if (n) add.push([o, r / n, g / n, b / n]);
     }
     if (!add.length) break;
-    for (const [o, r, g, b] of add) { rgb[o * 3] = r; rgb[o * 3 + 1] = g; rgb[o * 3 + 2] = b; known[o] = 1; }
+    for (const [o, r, g, b] of add) { rgb[o * 3] = r + (med[0] - r) * k; rgb[o * 3 + 1] = g + (med[1] - g) * k; rgb[o * 3 + 2] = b + (med[2] - b) * k; known[o] = 1; }
     todo -= add.length;
   }
 }

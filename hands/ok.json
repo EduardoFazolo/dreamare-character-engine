@@ -1,0 +1,1 @@
+{ "label": "OK sign", "fingers": { "Index": { "mode": "pinch" }, "Middle": { "mode": "curl", "t": 0.08 }, "Ring": { "mode": "curl", "t": 0.12 }, "Pinky": { "mode": "curl", "t": 0.16 } }, "thumb": { "mode": "pinch" }, "spread": 0.55 }

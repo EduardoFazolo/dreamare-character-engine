@@ -33,7 +33,7 @@ export function loadVoice(src) {
   })());
   return cache.get(src);
 }
-function analyse(buffer) {
+export function analyse(buffer) {
   const sr = buffer.sampleRate, hop = Math.round(sr * 0.01), win = hop * 2, n = Math.floor(buffer.length / hop);
   const ch = [...Array(buffer.numberOfChannels)].map((_, c) => buffer.getChannelData(c));
   const rms = new Float32Array(n), zcr = new Float32Array(n);

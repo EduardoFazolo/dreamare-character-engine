@@ -32,7 +32,7 @@ export function faceKeys(name, duration) {
   return keys;
 }
 
-export const MORPHS = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'eyeLookUp', 'eyeLookDown', 'eyeLookLeft', 'eyeLookRight', 'browUp', 'browDown', 'browInnerUp'];
+export const MORPHS = ['jawOpen', 'mouthSmile', 'mouthPucker', 'mouthWide', 'eyeBlinkLeft', 'eyeBlinkRight', 'eyeLookUp', 'eyeLookDown', 'eyeLookLeft', 'eyeLookRight', 'browUp', 'browDown', 'browInnerUp', 'mouthClose', 'mouthFunnel']; // (mouthClose: the lips pressed together, M / B / P; mouthFunnel: rounded and pushed out, OO / W)
 
 // brows (subject's right at -x, left at +x): upper row, lower row, and their inner/outer ends
 const BROWS = [
@@ -300,6 +300,15 @@ function deltas(P, F, pts, kinds, jawW, eyes) {
       // pucker: lips gathered toward the middle and pushed forward
       const dx = p[0] - F.cx, dy = p[1] - cy, f = Math.exp(-((dx / (F.cornerX * 1.25)) ** 2 + (dy / 0.075) ** 2));
       set('mouthPucker', [-dx * 0.4, -dy * 0.15, 0.035], f);
+      // funnel: OO, the lips rounded hard into a small ring and pushed well out
+      set('mouthFunnel', [-dx * 0.55, -dy * 0.3, 0.06], f);
+      // close: the lips meet across the opening (each lip travels half the gap between them at rest), falling off
+      // across the width of the mouth and away from each lip line, so a gaping resting mouth can still say M
+      const gap = Math.max(0, P[13][1] - P[14][1]), wx = Math.exp(-((dx / (F.cornerX * 1.05)) ** 2));
+      if (gap > 0 && wx > 1e-3) {
+        if (p[1] >= cy) set('mouthClose', [0, -gap * 0.55, 0.004], wx * Math.exp(-(((p[1] - P[13][1]) / 0.05) ** 2)));
+        else set('mouthClose', [0, gap * 0.55, 0.004], wx * Math.exp(-(((p[1] - P[14][1]) / 0.05) ** 2)));
+      }
       // brows: the photo's own brows move with the skin around them, falling off softly into the forehead
       // above and fast below (the eyelids stay put). browUp raises both; browDown lowers them and pulls
       // them together; browInnerUp raises only the inner ends (worried).
@@ -417,14 +426,14 @@ export function buildFaceRig(P, uv0, index, headPos) {
 // redness (bloodshot, heaviest at the corners), veins (branching vessels from the edges), yellowing, pupil
 // size. Drawn into a square of side h at x0 (one eye). PS2-ish, deterministic in `seed`.
 export const IRIS_UV = 0.2;
-export function drawEye(g, x0, h, { sclera = [0.92, 0.88, 0.84], iris = [0.35, 0.25, 0.18], pupil = 0.42, voidEye = 0, red = 0, veins = 0, yellow = 0, seed = 1 } = {}) {
+export function drawEye(g, x0, h, { sclera = [0.92, 0.88, 0.84], iris = [0.35, 0.25, 0.18], pupil = 0.42, voidEye = 0, red = 0, veins = 0, yellow = 0, stare = 0, seed = 1 } = {}) {
   let st = (seed * 2654435761) >>> 0;
   const rand = () => { st = (st + 0x6d2b79f5) >>> 0; let t = st; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const C = (c, k = 1, a = 1) => `rgba(${c.map((v) => Math.max(0, Math.min(255, v * 255 * k)) | 0).join(',')},${a})`;
-  const w = h, cx = x0 + w / 2, cy = h / 2, R = IRIS_UV * w;
+  const w = h, cx = x0 + w / 2, cy = h / 2, R = IRIS_UV * w * (1 - 0.62 * stare); // (a stare: a smaller iris, the white showing all round it)
   g.save(); g.beginPath(); g.rect(x0, 0, w, h); g.clip();
   // sclera: yellowing, then redness pooling at the corners
-  const sc = sclera.map((v, k) => v * (1 - yellow * [0.02, 0.1, 0.45][k]));
+  const sc = sclera.map((v, k) => (v + ([0.78, 0.77, 0.74][k] - v) * stare * 0.8) * (1 - yellow * [0.02, 0.1, 0.45][k])); // (a stare: a paler, greyed white)
   const bg = g.createRadialGradient(cx, cy, R, cx, cy, w * 0.55);
   bg.addColorStop(0, C(sc)); bg.addColorStop(0.7, C(sc, 0.93)); bg.addColorStop(1, C([sc[0], sc[1] * 0.8, sc[2] * 0.8], 0.8));
   g.fillStyle = bg; g.fillRect(x0, 0, w, h);
@@ -460,9 +469,16 @@ export function drawEye(g, x0, h, { sclera = [0.92, 0.88, 0.84], iris = [0.35, 0
     g.strokeStyle = C(iris, k % 2 ? 1.4 : 0.6); g.lineWidth = 1;
     g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); g.stroke();
   }
-  g.fillStyle = '#060405'; g.beginPath(); g.arc(cx, cy, R * pupil, 0, Math.PI * 2); g.fill();
-  g.fillStyle = 'rgba(255,255,255,0.55)'; g.beginPath(); g.arc(cx - R * 0.32, cy - R * 0.3, R * 0.09, 0, Math.PI * 2); g.fill();
-  lidShade(g, x0, w, h);
+  if (stare > 0) { // the stare: a dark limbal ring round the iris (what makes eyes look like they're looking into you)
+    const lr = g.createRadialGradient(cx, cy, R * 0.72, cx, cy, R * 1.12);
+    lr.addColorStop(0, 'rgba(10,8,8,0)'); lr.addColorStop(0.45, `rgba(10,8,8,${0.85 * stare})`); lr.addColorStop(1, 'rgba(10,8,8,0)');
+    g.fillStyle = lr; g.beginPath(); g.arc(cx, cy, R * 1.15, 0, Math.PI * 2); g.fill();
+  }
+  const pg = g.createRadialGradient(cx, cy, R * pupil * 0.7, cx, cy, R * pupil * 1.15); // (a soft-edged pupil, not a sticker)
+  pg.addColorStop(0, '#050304'); pg.addColorStop(1, 'rgba(5,3,4,0)');
+  g.fillStyle = pg; g.beginPath(); g.arc(cx, cy, R * pupil * 1.15, 0, Math.PI * 2); g.fill();
+  if (!stare) { g.fillStyle = 'rgba(255,255,255,0.55)'; g.beginPath(); g.arc(cx - R * 0.32, cy - R * 0.3, R * 0.09, 0, Math.PI * 2); g.fill(); } // (a stare's highlight is the real one: the eye is glossy in the lit looks)
+  if (!stare) lidShade(g, x0, w, h); // (a stare: the lids are pulled wide open, nothing shades the eye)
   g.restore();
 }
 
