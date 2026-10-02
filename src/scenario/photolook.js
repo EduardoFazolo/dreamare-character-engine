@@ -67,19 +67,27 @@ function drawnUV(geo) {
 
 // Source: a standard lit material in place of a PS2 one (one per original, shared like the original was)
 const converted = new WeakMap();
+// in the Source look every texture is filtered like the scenery's: characters and drawn props were point-sampled
+// (the PS1 look) and read as crunchy, over-sharp pixels beside the smooth ground. A filtered copy, shared per source
+const smoothed = new WeakMap();
+function smoothTex(t) {
+  if (!t?.isTexture || t.magFilter !== THREE.NearestFilter) return t;
+  if (!smoothed.has(t)) { const c = t.clone(); c.magFilter = THREE.LinearFilter; c.minFilter = THREE.LinearMipmapLinearFilter; c.generateMipmaps = true; c.anisotropy = 8; c.needsUpdate = true; smoothed.set(t, c); }
+  return smoothed.get(t);
+}
 function sourceMat(src) {
   if (converted.has(src)) return converted.get(src);
   const u = src.uniforms, kind = u.map.value?.name, hd = HD?.get(kind), glow = !!src.defines?.GLOW, op = u.opacity?.value ?? 1;
   const opts = { color: u.color.value.clone(), side: src.side, vertexColors: src.vertexColors, alphaTest: u.alphaTest?.value || 0 };
   if (op < 1) Object.assign(opts, { transparent: true, opacity: op, depthWrite: false });
-  const m = glow ? new THREE.MeshBasicMaterial({ ...opts, map: u.map.value })
-    : new THREE.MeshStandardMaterial({ ...opts, map: hd ? hd.map : u.map.value, normalMap: hd?.normal || null, roughnessMap: hd?.rough || null, roughness: GLASS.has(kind) ? 0.15 : kind === 'ceramic' ? 0.22 : kind === 'metal' ? 0.55 : kind === 'leather' ? 0.6 : hd?.rough ? 1 : 0.9, metalness: GLASS.has(kind) ? 0.4 : kind === 'metal' ? 0.35 : 0 });
+  const m = glow ? new THREE.MeshBasicMaterial({ ...opts, map: smoothTex(u.map.value) })
+    : new THREE.MeshStandardMaterial({ ...opts, map: hd ? hd.map : smoothTex(u.map.value), normalMap: hd?.normal || null, roughnessMap: hd?.rough || null, roughness: GLASS.has(kind) ? 0.15 : kind === 'ceramic' ? 0.22 : kind === 'metal' ? 0.55 : kind === 'leather' ? 0.6 : hd?.rough ? 1 : 0.9, metalness: GLASS.has(kind) ? 0.4 : kind === 'metal' ? 0.35 : 0 });
   if (hd?.normal) m.normalScale.set(1.4, 1.4); // (a little deeper: the bricks' mortar should catch the light)
   if (src.name === 'eye') { // eyes: wet, glossy spheres with a real highlight; eyeGlow: a faint light of their own
     m.roughness = 0.12; m.metalness = 0; m.normalMap = null;
-    if (src.userData.eyeGlow) { m.emissiveMap = u.map.value; m.emissive = new THREE.Color(1, 1, 1); m.emissiveIntensity = src.userData.eyeGlow; }
+    if (src.userData.eyeGlow) { m.emissiveMap = smoothTex(u.map.value); m.emissive = new THREE.Color(1, 1, 1); m.emissiveIntensity = src.userData.eyeGlow; }
   }
-  if (src.userData.faceGlow) { m.emissiveMap = u.map.value; m.emissive = new THREE.Color(...(src.userData.glowColor || [1, 0.96, 0.86])); m.emissiveIntensity = src.userData.faceGlow; if (src.userData.glowColor) m.color.setRGB(...src.userData.glowColor); m.color.multiplyScalar(Math.max(0.1, 1 - src.userData.faceGlow * 0.85)); } // (mostly its own light: the scene's sun only shapes it a little, or the top of a ball reads as a pale cap) // (a face that shines: the sun in a children's-TV sky)
+  if (src.userData.faceGlow) { m.emissiveMap = smoothTex(u.map.value); m.emissive = new THREE.Color(...(src.userData.glowColor || [1, 0.96, 0.86])); m.emissiveIntensity = src.userData.faceGlow; if (src.userData.glowColor) m.color.setRGB(...src.userData.glowColor); m.color.multiplyScalar(Math.max(0.1, 1 - src.userData.faceGlow * 0.85)); } // (mostly its own light: the scene's sun only shapes it a little, or the top of a ball reads as a pale cap) // (a face that shines: the sun in a children's-TV sky)
   if (src.userData.shade) { m.color.multiplyScalar(1 - src.userData.shade); if (src.name === 'eye') m.color.setScalar(Math.max(0.35, 1 - src.userData.shade)); }
   m.userData = { src, kind, glow, hd: !!hd };
   converted.set(src, m);
@@ -117,7 +125,7 @@ export function syncLook(root) {
   root?.traverse((o) => {
     const src = o.userData.drawnMaterial; if (!src) return;
     o.material.color.copy(src.uniforms.color.value);
-    if (o.material.map !== src.uniforms.map.value && !o.material.userData.hd) o.material.map = src.uniforms.map.value; // (a TV's static)
+    if (o.material.map !== smoothTex(src.uniforms.map.value) && !o.material.userData.hd) o.material.map = smoothTex(src.uniforms.map.value); // (a TV's static)
   });
 }
 

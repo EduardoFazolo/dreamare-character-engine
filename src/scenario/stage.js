@@ -43,7 +43,7 @@ export function createStage(canvas) {
           // punch (terrain.punch, 0 = off): the oversaturated, oversharpened look of a dubbed kids' tape. Edges
           // ring (unsharp mask), the midtones get an S-curve, strong colours push past natural, the corners sink
           vec3 soft = (texture2D(tex, uv + vec2(px.x, 0)).rgb + texture2D(tex, uv - vec2(px.x, 0)).rgb + texture2D(tex, uv + vec2(0, px.y)).rgb + texture2D(tex, uv - vec2(0, px.y)).rgb) * .25;
-          vec3 hard = col + (c - soft) * 1.6;
+          vec3 hard = col + (c - soft) * 0.45; // (a light edge lift: stronger rang into halos round everything and smeared the faces)
           float Yh = clamp(dot(hard, vec3(.299, .587, .114)), .001, 1.); hard *= mix(Yh, Yh * Yh * (3. - 2. * Yh), .55) / Yh; // (the S-curve on brightness only, so hues don't shift)
           float mx = max(hard.r, max(hard.g, hard.b)), mn = min(hard.r, min(hard.g, hard.b)), chroma0 = (mx - mn) / max(mx, .001);
           hard = mix(vec3(dot(hard, vec3(.299, .587, .114))), hard, 1. + .6 * smoothstep(.3, .65, chroma0)); // (only colours already strong: sky, grass, paint; skin keeps its tone)

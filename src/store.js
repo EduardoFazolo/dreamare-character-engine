@@ -98,10 +98,19 @@ export const onSceneChange = (fn) => channel?.addEventListener('message', (e) =>
 // ---- from other tabs ----
 // Scenarios "Set scene": the terrain is the generator's inputs (seed, biome, neighbours, mood), rebuilt on load
 export async function setSceneTerrain(terrain) { const s = await currentScene(); s.terrain = terrain; return setCurrentScene(s); }
+// a character as a file (public/characters, through the dev server): { id: 'file:<slug>' } or null without the server
+const b64 = (buf) => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+export async function saveCharacterFile({ name, glb, thumb, params, face }) {
+  try {
+    const r = await fetch('/__character', { method: 'PUT', body: JSON.stringify({ name, glb: b64(glb), thumb: typeof thumb === 'string' && thumb.startsWith('data:') ? thumb : null, params, face }) });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
 // Characters "Send to scene": store the character, then add one more of it to the current scene
 export async function sendCharacter({ name, glb, thumb, params }) {
-  const id = uid();
-  await put('characters', id, { id, name, glb, thumb, params, created: Date.now() });
+  const file = await saveCharacterFile({ name, glb, thumb, params }); // (a file first: then every page and browser has it)
+  const id = file?.id || uid();
+  await put('characters', id, { id, name, glb, thumb, params, version: file?.version, created: Date.now() });
   const s = await currentScene();
   s.actors.push(newActor(id, name, s.actors.length));
   await setCurrentScene(s);

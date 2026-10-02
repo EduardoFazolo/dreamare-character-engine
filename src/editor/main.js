@@ -21,7 +21,7 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { assetList, importedList, importFile, loadVoice, playVoice, setListener, audioCtx, rawBytes, voiceStream, outputBus } from './voice.js';
 import { align, segments as speechSegments, loadCaptions, saveCaptions, cueAt } from './captions.js';
 import { AMBIENCES, startBed, stopBed, setVolume as bedVolume, playing as bedPlaying, stopAll as stopBeds } from './ambience.js';
-import { currentScene, setCurrentScene, emptyScene, onSceneChange, get, put, del, all, uid, newActor, listScenes, removeScene, freeSceneId, openScene, writtenText, sceneFiles } from '../store.js';
+import { currentScene, setCurrentScene, emptyScene, onSceneChange, get, put, del, all, uid, newActor, listScenes, removeScene, freeSceneId, openScene, writtenText, sceneFiles, saveCharacterFile } from '../store.js';
 
 const $ = (s) => document.querySelector(s);
 // Player mode (editor.html?player): the Slides tab's live view of a scene. Same scene, same breathing and
@@ -331,10 +331,28 @@ function resolvePlace(d) { // fills d.x / d.z from d.place (kept in the file, so
   d.x = p.x; d.z = p.z;
 }
 function resolveFace(d) { if (d.face == null) return; const t = d.face === 'camera' ? camera.position : resolvePoint(d.face); if (t) d.rotY = Math.atan2(t.x - d.x, t.z - d.z); }
-function resolveCharacter(a) { if (!a.charId && a.character) { const c = library.find((l) => l.name.toLowerCase() === String(a.character).toLowerCase()); if (c) { a.charId = c.id; if (!a.name) a.name = c.name; } } a.name ||= a.character || 'someone'; }
+function resolveCharacter(a) {
+  if (a.charId && moved[a.charId]) a.charId = moved[a.charId]; // (a character moved from this browser into a file)
+  if (a.charId && !library.some((l) => l.id === a.charId) && (a.character || a.name)) a.charId = null; // (an id this browser doesn't have: find it by name)
+  if (!a.charId && (a.character || a.name)) { const want = String(a.character || a.name).toLowerCase(), c = library.find((l) => l.id.startsWith('file:') && l.name.toLowerCase() === want) || library.find((l) => l.name.toLowerCase() === want); if (c) { a.charId = c.id; if (!a.name) a.name = c.name; } } a.name ||= a.character || 'someone'; }
 // the character library, written to library/characters.json so scenes can be written by hand (names -> ids)
+// Characters made in the Characters tab before they were saved as files live only in this browser: each is written
+// out as a file once (public/characters), then scenes find it there, in any browser
+const moved = {}; // old browser id -> 'file:<slug>'
+async function moveToFiles(recs) {
+  if (PLAYER || !(await sceneFiles())) return;
+  for (const c of recs) {
+    if (c.id.startsWith('file:') || !c.glb) continue;
+    if (c.movedTo) { moved[c.id] = c.movedTo; continue; }
+    const f = await saveCharacterFile({ name: c.name, glb: c.glb, thumb: c.thumb, params: c.params });
+    if (f?.id) { moved[c.id] = f.id; await put('characters', c.id, { ...c, movedTo: f.id }); }
+  }
+}
 async function refreshLibrary() {
-  library = (await all('characters')).map((c) => ({ id: c.id, name: c.name, created: c.created }));
+  const recs = await all('characters');
+  await moveToFiles(recs);
+  for (const c of recs) if (c.movedTo) moved[c.id] = c.movedTo;
+  library = recs.filter((c) => !moved[c.id]).map((c) => ({ id: c.id, name: c.name, created: c.created }));
   await characterFiles();
   if (!PLAYER && await sceneFiles()) fetch('/__library/characters', { method: 'PUT', body: JSON.stringify({ note: 'written by the scene editor: characters you can put in scenes (by name or id)', characters: library }, null, 2) }).catch(() => {});
 }
