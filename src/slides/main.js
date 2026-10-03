@@ -1,6 +1,9 @@
 // Slides tab: vertical slideshow decks for TikTok. Each slide is a 1080x1920 picture (an editor snapshot or an
 // upload) with your own text on it, a look, a position and a duration. Decks live in this browser; export as a
 // slideshow video (or as numbered PNGs).
+// A slide can have a voice line ({ voice: { src, at } }: an audio url, starting `at` s into the slide): its time on
+// screen follows the line, it's mixed into the export, and with style.caption 'spoken' its text appears as it is
+// said, a phrase at a time, word by word (speech.js times the words from the audio and the known text).
 // A slide can also be a live scene: a reference to a scene file and one of its shots ({ live: { scene, shot,
 // frozen, poster } }), played by the editor in player mode (editor.html?player) so its breathing and atmosphere
 // stay. Snap stops time: the frame on screen becomes the slide's picture and nothing renders any more.
@@ -10,6 +13,7 @@ import { zipSync } from 'fflate';
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { get, put, del, all, uid } from '../store.js';
 import { menubar } from '../menubar.js';
+import { loadVoice, chunks } from './speech.js';
 menubar();
 
 const $ = (s) => document.querySelector(s);
@@ -20,7 +24,8 @@ const LOOKS = { tiktok: 'TikTok box', outline: 'outlined', serif: 'dreamy serif'
 const POS = { top: 0.2, middle: 0.44, low: 0.64 }; // centre of the text block; "low" still clears TikTok's bottom fifth
 // time on screen: set by hand, or (null) from the text: ~2.4 s + 0.18 s a word, 3 s at least
 export const autoSecs = (text) => { const w = text.trim().split(/\s+/).filter(Boolean).length; return Math.min(15, Math.max(4.5, Math.round((1.9 + 0.14 * w) * 1.875 * 2) / 2)); }; // (fitted to the deck's hand-set times the user liked, then x1.25, then x1.5)
-const secsOf = (s) => s.secs ?? autoSecs(s.text || '');
+const VOICE_AT = 0.35, VOICE_TAIL = 0.9; // (a voice starts a beat into its slide, and the slide holds a beat after it)
+const secsOf = (s) => s.secs ?? (s.voice?.dur ? (s.voice.at ?? VOICE_AT) + s.voice.dur + VOICE_TAIL : autoSecs(s.text || ''));
 const newSlide = (image = null, text = '') => ({ id: uid(), image, text, secs: null, style: { look: 'tiktok', pos: 'top', size: 1 } });
 const emptyDeck = () => ({ id: uid(), name: 'Untitled deck', slides: [newSlide()], created: Date.now(), updated: Date.now() });
 
@@ -39,23 +44,37 @@ function wrap(g, text, max) {
   return out;
 }
 // background: the picture, a live scene's poster, or (frame) the player's canvas; transparent: text only (over the player)
-export async function drawSlide(g, slide, { frame = null, transparent = false } = {}) {
+export async function drawSlide(g, slide, { frame = null, transparent = false, t = null, noText = false } = {}) {
   if (transparent) g.clearRect(0, 0, W, H);
   else {
     g.fillStyle = '#0d0b10'; g.fillRect(0, 0, W, H);
     const im = frame || (await imgOf(slide.live ? slide.live.poster : slide.image));
     if (im) { const iw = im.width, ih = im.height, k = Math.max(W / iw, H / ih), w = iw * k, h = ih * k; g.drawImage(im, (W - w) / 2, (H - h) / 2, w, h); } // cover
   }
-  drawText(g, slide);
+  if (!noText) drawText(g, slide, t);
 }
-function drawText(g, slide) {
-  const text = slide.text.trim(); if (!text) return;
+// the spoken caption at time t (s into the slide): the phrase being said, its words up to the one being said;
+// null t (a still, a thumbnail): the whole text
+const voiceWords = new Map(); // slide id -> words (filled when its voice loads)
+function spokenAt(slide, t) {
+  const words = voiceWords.get(slide.id); if (!words?.length || t == null) return null;
+  const tt = t - (slide.voice.at ?? VOICE_AT); let cur = -1; words.forEach((w, i) => { if (w.t0 <= tt) cur = i; });
+  if (cur < 0) return { text: '', shown: 0 };
+  const ch = chunks(words).find((c) => c.includes(cur)); return { text: ch.map((i) => words[i].w).join(' '), shown: ch.indexOf(cur) + 1 };
+}
+function drawText(g, slide, t = null) {
+  const spoken = slide.style.caption === 'spoken' && slide.voice ? spokenAt(slide, t) : null;
+  const text = (spoken ? spoken.text : slide.text).trim(); if (!text) return;
   const { look, pos, size } = slide.style, px = Math.round((look === 'serif' ? 54 : look === 'caps' ? 58 : 48) * size);
   g.font = look === 'serif' ? `italic ${px}px Georgia, "Times New Roman", serif` : look === 'caps' ? `bold ${px}px Georgia, "Times New Roman", serif` : `bold ${px}px "Helvetica Neue", Arial, sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const lines = wrap(g, look === 'caps' ? text.toUpperCase() : text, W * (look === 'caps' ? 0.76 : 0.8)), lh = px * (look === 'tiktok' ? 1.38 : 1.25), y0 = H * POS[pos] - ((lines.length - 1) * lh) / 2;
-  lines.forEach((line, k) => {
-    const y = y0 + k * lh;
+  let left = spoken ? spoken.shown : Infinity; // (spoken: only the words said so far, each line laid out as in full so nothing jumps)
+  lines.forEach((full, k) => {
+    const y = y0 + k * lh, ws = full.split(' '), take = Math.max(0, Math.min(ws.length, left)); left -= ws.length;
+    if (!take) return;
+    const line = ws.slice(0, take).join(' ');
+    if (take < ws.length) { g.save(); g.translate((g.measureText(line).width - g.measureText(full).width) / 2, 0); } // (centred where it will sit once the line is complete)
     if (look === 'tiktok') { // white text on a rounded black box per line
       const w = g.measureText(line).width + px * 0.7, h = px * 1.3, r = px * 0.28, x = W / 2 - w / 2;
       g.fillStyle = 'rgba(0,0,0,.92)'; g.beginPath(); g.roundRect(x, y - h / 2, w, h, r); g.fill();
@@ -69,10 +88,11 @@ function drawText(g, slide) {
     } else {
       g.shadowColor = 'rgba(0,0,0,.95)'; g.shadowBlur = px * 0.35; g.shadowOffsetY = px * 0.06; g.fillStyle = '#ece6d6'; g.fillText(line, W / 2, y); g.shadowBlur = 0; g.shadowOffsetY = 0;
     }
+    if (take < ws.length) g.restore();
   });
 }
 let drawing = 0;
-async function redraw() { const n = ++drawing, c = $('#slideView'), g = c.getContext('2d'), s = deck.slides[sel]; await drawSlide(g, s, { transparent: plays(s) }); if (n !== drawing) return; renderStripThumb(sel); }
+async function redraw(t = null) { const n = ++drawing, c = $('#slideView'), g = c.getContext('2d'), s = deck.slides[sel]; await drawSlide(g, s, { transparent: plays(s), t }); if (n !== drawing) return; renderStripThumb(sel); }
 const isLive = (s) => !!(s?.live && s.live.frozen == null);
 // live.lightsOut: the room's lights (props with setLight) fade out over a second, starting that many seconds
 // before the slide ends (snapped slides too: time stays stopped, only the light goes)
@@ -119,10 +139,33 @@ async function snap() {
   imgCache.delete(s.live.poster); save(); await syncLive(); renderSlideBox(); redraw();
 }
 
+// ---------------- voices ----------------
+// each slide's voice line: decoded once, its words timed (speech.js); its length sets the slide's time
+async function loadVoices() {
+  for (const sl of deck.slides) {
+    if (!sl.voice?.src) continue;
+    try {
+      const v = await loadVoice(sl.voice.src, sl.text);
+      voiceWords.set(sl.id, v.words);
+      if (Math.abs((sl.voice.dur || 0) - v.dur) > 0.01) { sl.voice.dur = +v.dur.toFixed(2); save(); renderMeta(); renderStripTime(deck.slides.indexOf(sl)); }
+    } catch (e) { status(`couldn't read the voice for a slide (${e.message})`); }
+  }
+}
+let hearing = null;
+async function hear() { // plays the selected slide's voice with its caption, as it will be in the video
+  if (hearing) { hearing.stop(); return; }
+  const sl = deck.slides[sel]; if (!sl.voice?.src) return;
+  const v = await loadVoice(sl.voice.src, sl.text), ctx = new AudioContext(), src = ctx.createBufferSource();
+  src.buffer = v.buf; src.connect(ctx.destination); const t0 = ctx.currentTime + 0.05; src.start(t0 + (sl.voice.at ?? VOICE_AT));
+  let on = true; const tick = () => { if (!on) return; const t = ctx.currentTime - t0; redraw(t); if (t < secsOf(sl)) requestAnimationFrame(tick); else hearing.stop(); };
+  hearing = { stop: () => { on = false; try { src.stop(); } catch { /* not started */ } ctx.close(); hearing = null; redraw(); renderSlideBox(); } };
+  renderSlideBox(); tick();
+}
+
 // ---------------- persistence ----------------
 let saveT = 0;
 const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { deck.updated = Date.now(); put('decks', deck.id, deck); put('meta', 'deck', deck.id); renderDecks(); }, 250); };
-async function openDeck(d) { deck = d; sel = 0; $('#deckName').value = deck.name; renderAll(); }
+async function openDeck(d) { deck = d; sel = 0; $('#deckName').value = deck.name; renderAll(); loadVoices(); }
 
 // ---------------- panels ----------------
 function renderAll() { renderStrip(); renderSlideBox(); redraw(); renderMeta(); syncLive(); }
@@ -140,6 +183,7 @@ function renderStrip() {
 }
 function renderStripTime(k) { const el = $(`#strip .thumb[data-k="${k}"] .secs`); if (el) el.textContent = `${secsOf(deck.slides[k]).toFixed(1)}s`; }
 async function renderStripThumb(k) { const el = $(`#strip .thumb[data-k="${k}"] img`); if (el) el.src = await thumb(deck.slides[k]); }
+let retime = 0;
 function renderSlideBox() {
   const s = deck.slides[sel], box = $('#slideBox');
   box.innerHTML = `
@@ -148,12 +192,18 @@ function renderSlideBox() {
     <div class="row"><span>position</span><select id="pos">${Object.keys(POS).map((k) => `<option ${k === s.style.pos ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
     <div class="row"><span>text size</span><input id="size" type="range" min="0.6" max="1.6" step="0.01" value="${s.style.size}"><output>${s.style.size.toFixed(2)}</output></div>
     <div class="row"><span>on screen</span><input id="secs" type="range" min="0.5" max="15" step="0.1" value="${secsOf(s)}"><output>${secsOf(s).toFixed(1)} s${s.secs == null ? ' (auto)' : ''}</output></div>
-    <div class="buttons"><button id="autoSecs" style="grid-column: span 2" ${s.secs == null ? 'disabled' : ''} title="time from the length of the text">Time from the text</button></div>
+    <div class="buttons"><button id="autoSecs" style="grid-column: span 2" ${s.secs == null ? 'disabled' : ''} title="time from the length of the text, or of its voice line">${s.voice ? 'Time from the voice' : 'Time from the text'}</button></div>
+    <div class="row"><span>voice</span><input id="voiceSrc" class="text" placeholder="audio url, e.g. /decks/audio/line.wav" value="${esc(s.voice?.src || '')}"></div>
+    <div class="row"><span>caption</span><select id="caption"><option value="">whole text</option><option value="spoken" ${s.style.caption === 'spoken' ? 'selected' : ''}>as it is spoken</option></select></div>
+    <div class="buttons"><button id="hear" style="grid-column: span 2" ${s.voice?.src ? '' : 'disabled'}>${hearing ? '■ Stop' : '▶ Hear with captions'}</button></div>
     <div class="buttons"><button id="moveL" ${sel ? '' : 'disabled'}>◀ Move</button><button id="moveR" ${sel < deck.slides.length - 1 ? '' : 'disabled'}>Move ▶</button><button id="dupSlide">Duplicate</button><button id="delSlide" ${deck.slides.length > 1 ? '' : 'disabled'}>Delete</button><button id="noPic" style="grid-column: span 2" ${s.image || s.live ? '' : 'disabled'}>Remove picture</button></div>
     ${s.live ? `<div class="row"><span>room lights</span><input id="lightsOut" type="range" min="0" max="4" step="0.5" value="${s.live.lightsOut || 0}"><output>${s.live.lightsOut ? `out from ${s.live.lightsOut.toFixed(1)} s before the end` : 'stay on'}</output></div>` : ''}
     ${s.live ? `<p class="meta">scene: <b>${esc(s.live.sceneName || s.live.scene)}</b> · ${esc(s.live.shot || 'first shot')}</p><div class="buttons"><button id="snap" class="primary" style="grid-column: span 2" title="${s.live.frozen == null ? 'stop time on the frame you see: it becomes this slide\'s picture' : 'let the scene breathe again'}">${s.live.frozen == null ? '❄ Snap (stop time)' : '▶ Unsnap (live)'}</button></div>` : ''}`;
-  $('#slideText').oninput = (e) => { s.text = e.target.value; save(); redraw(); };
+  $('#slideText').oninput = (e) => { s.text = e.target.value; save(); redraw(); if (s.voice) { clearTimeout(retime); retime = setTimeout(() => loadVoices(), 600); } }; // (new words: timed again)
   $('#look').onchange = (e) => { s.style.look = e.target.value; save(); redraw(); };
+  $('#voiceSrc').onchange = (e) => { const v = e.target.value.trim(); s.voice = v ? { src: v, at: s.voice?.at } : null; voiceWords.delete(s.id); save(); renderSlideBox(); loadVoices().then(renderAll); };
+  $('#caption').onchange = (e) => { s.style.caption = e.target.value || undefined; save(); redraw(); };
+  $('#hear').onclick = hear;
   $('#pos').onchange = (e) => { s.style.pos = e.target.value; save(); redraw(); };
   $('#size').oninput = (e) => { s.style.size = +e.target.value; box.querySelectorAll('output')[0].textContent = s.style.size.toFixed(2); save(); redraw(); };
   $('#secs').oninput = (e) => { s.secs = +e.target.value; box.querySelectorAll('output')[1].textContent = `${s.secs.toFixed(1)} s`; $('#autoSecs').disabled = false; save(); renderMeta(); renderStripTime(sel); };
@@ -229,21 +279,31 @@ async function exportVideo() {
   if (!window.VideoEncoder) { status('video export needs a browser with WebCodecs (Chrome, Edge, Safari 16.4+)'); return; }
   const FPS = 30, fade = 0.4, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
   const prev = document.createElement('canvas'); prev.width = W; prev.height = H; const pg = prev.getContext('2d');
-  const stills = []; for (const s of deck.slides) { if (plays(s)) { stills.push(null); continue; } const f = document.createElement('canvas'); f.width = W; f.height = H; await drawSlide(f.getContext('2d'), s); stills.push(f); }
+  await loadVoices();
+  const spokenK = (s) => s.style.caption === 'spoken' && s.voice && voiceWords.get(s.id)?.length;
+  const stills = []; for (const s of deck.slides) { if (plays(s)) { stills.push(null); continue; } const f = document.createElement('canvas'); f.width = W; f.height = H; await drawSlide(f.getContext('2d'), s, { noText: spokenK(s) }); stills.push(f); }
   const codec = (await Promise.all(['avc1.640033', 'avc1.4d0033', 'avc1.42E033'].map(async (c2) => ((await VideoEncoder.isConfigSupported({ codec: c2, width: W, height: H })).supported ? c2 : null)))).find(Boolean);
   if (!codec) { status('this browser cannot encode H.264 video at 1080×1920'); return; }
   // the deck's soundtrack (deck.soundtrack: a url), cut to the slides' total and encoded to AAC beside the video
   const total0 = deck.slides.reduce((a, s) => a + secsOf(s), 0);
+  // the sound: each slide's voice line at its place, over the deck's soundtrack (deck.soundtrack, cut to the total,
+  // deck.soundtrackGain), mixed offline and encoded to AAC beside the video
   let audio = null;
-  if (deck.soundtrack && window.AudioEncoder) {
+  const voiced = deck.slides.some((sl) => sl.voice?.src);
+  if ((deck.soundtrack || voiced) && window.AudioEncoder) {
     try {
-      status('reading the soundtrack…');
-      const ctx = new OfflineAudioContext(1, 1, 48000), buf = await ctx.decodeAudioData(await (await fetch(deck.soundtrack)).arrayBuffer());
-      const sr = buf.sampleRate, ch = Math.min(2, buf.numberOfChannels), len = Math.round(total0 * sr);
-      const cfg = { codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: ch, bitrate: 160000 };
-      if ((await AudioEncoder.isConfigSupported(cfg)).supported) audio = { buf, sr, ch, len, cfg };
+      status('mixing the sound…');
+      const sr = 48000, len = Math.round(total0 * sr), mix = new OfflineAudioContext(2, len, sr), dec = new OfflineAudioContext(1, 1, sr);
+      if (deck.soundtrack) { const b = await dec.decodeAudioData(await (await fetch(deck.soundtrack)).arrayBuffer()), n = mix.createBufferSource(), gn = mix.createGain(); gn.gain.value = deck.soundtrackGain ?? 1; n.buffer = b; n.connect(gn).connect(mix.destination); n.start(0); }
+      let at = 0;
+      for (const sl of deck.slides) {
+        if (sl.voice?.src) { const v = await loadVoice(sl.voice.src, sl.text), n = mix.createBufferSource(), gn = mix.createGain(); gn.gain.value = sl.voice.gain ?? 1; n.buffer = v.buf; n.connect(gn).connect(mix.destination); n.start(at + (sl.voice.at ?? VOICE_AT)); }
+        at += secsOf(sl);
+      }
+      const buf = await mix.startRendering(), cfg = { codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: 2, bitrate: 160000 };
+      if ((await AudioEncoder.isConfigSupported(cfg)).supported) audio = { buf, sr, ch: 2, len, cfg };
       else status('this browser cannot encode AAC: the video will be silent');
-    } catch (e) { status(`couldn't read the soundtrack (${e.message}): the video will be silent`); }
+    } catch (e) { status(`couldn't mix the sound (${e.message}): the video will be silent`); }
   }
   const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: W, height: H, frameRate: FPS }, ...(audio ? { audio: { codec: 'aac', sampleRate: audio.sr, numberOfChannels: audio.ch } } : {}), fastStart: 'in-memory' });
   let failed = null;
@@ -270,7 +330,7 @@ async function exportVideo() {
     for (let i = 0; i < n && !failed; i++) {
       const t = i / FPS;
       g.globalAlpha = 1;
-      if (stills[k]) g.drawImage(stills[k], 0, 0); else { P.light(lightAt(s, t)); P.render(s.live.frozen ?? base + total + t); await drawSlide(g, s, { frame: P.canvas }); }
+      if (stills[k]) { g.drawImage(stills[k], 0, 0); if (spokenK(s)) drawText(g, s, t); } else { P.light(lightAt(s, t)); P.render(s.live.frozen ?? base + total + t); await drawSlide(g, s, { frame: P.canvas, t }); }
       if (t < fade && k > 0) { g.globalAlpha = 1 - t / fade; g.drawImage(prev, 0, 0); g.globalAlpha = 1; } // soft cut
       const vf = new VideoFrame(c, { timestamp: Math.round((frame * 1e6) / FPS), duration: Math.round(1e6 / FPS) });
       enc.encode(vf, { keyFrame: frame % (FPS * 2) === 0 }); vf.close(); frame++;
@@ -285,7 +345,7 @@ async function exportVideo() {
   muxer.finalize();
   const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' }), file = `${slug(deck.name)}-slides.mp4`;
   download(blob, file);
-  status(`exported a ${(frame / FPS).toFixed(1)} s slideshow (1080×1920, ${(blob.size / 1e6).toFixed(1)} MB${audio ? ', with its soundtrack' : ''}) as ${file}`);
+  status(`exported a ${(frame / FPS).toFixed(1)} s slideshow (1080×1920, ${(blob.size / 1e6).toFixed(1)} MB${audio ? ', with sound' : ''}) as ${file}`);
   syncLive();
 }
 $('#exportVideo').onclick = () => exportVideo();
@@ -305,7 +365,7 @@ $('#uploadInput').onchange = async (e) => {
 };
 addEventListener('focus', renderShots); // snapshots taken in the editor tab show up when you come back
 
-window.__slides = { get deck() { return deck; }, drawSlide, renderShots, openDeck };
+window.__slides = { get deck() { return deck; }, drawSlide, renderShots, openDeck, exportVideo, loadVoices };
 // Deck files: public/decks/*.json (index.json lists them), decks made outside this browser (e.g. by Claude),
 // copied into this browser's decks once per version; their live slides get posters made on the way in.
 async function deckFiles() {

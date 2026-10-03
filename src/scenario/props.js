@@ -671,8 +671,8 @@ export const PROPS = {
       rock.add(new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.12).translate(0, 0.06, 0.4), red), new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.12).translate(0, 0.06, -0.4), red));
       for (const [x, z] of [[-0.12, 0.3], [0.12, 0.3], [-0.12, -0.3], [0.12, -0.3]]) rock.add(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.42, 6).translate(x, 0.3, z), body));
       rock.add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8).scale(1, 0.85, 2.1).translate(0, 0.62, 0), body));
-      for (let i = 0; i < 9; i++) rock.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.05).translate(0, 0.92 + (i % 3) * 0.02, 0.3 - i * 0.03), dark)); // (a mane)
-      rock.add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.4, 8).rotateX(-0.6).translate(0, 0.85, 0.36), body));
+      rock.add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.4, 8).rotateX(0.6).translate(0, 0.85, 0.36), body)); // (the neck leans forward, up to the head)
+      for (let i = 0; i < 9; i++) { const t = i / 8; rock.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, 0.05).rotateX(0.6).translate(0, 0.75 + t * 0.26 + (i % 3) * 0.015, 0.2 + t * 0.18), dark)); } // (a mane down the back of the neck)
       const head = new THREE.Group(); head.position.set(0, 1.05, 0.5); rock.add(head);
       return { group: g, seats: [], radius: 0.6, anchors: { head }, update: (t) => { rock.rotation.x = Math.sin(t * 1.6) * 0.12; } };
     },
